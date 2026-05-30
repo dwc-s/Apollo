@@ -195,6 +195,11 @@
     {% endif %}
 </nav>
 <h1 class="title">Zones — {{ target.name }}</h1>
+{% if next_url %}
+<div style="text-align:center;font-family:Quantico,sans-serif;font-size:0.9rem;color:#1a3a5c;margin:0 auto 10px auto;max-width:720px;padding:0 14px;">
+    Final step — add scoring zones for this target, or skip to continue.
+</div>
+{% endif %}
 <script>
 (function fitTitleInit() {
     function fitTitle() {
@@ -245,9 +250,15 @@
         </div>
 
         <div class="zones-actions">
+            {% if next_url %}
+            <a href="{{ next_url }}" style="text-decoration:none;">
+                <button type="button">Skip →</button>
+            </a>
+            {% else %}
             <a href="/edit_targets" style="text-decoration:none;">
                 <button type="button">← Back</button>
             </a>
+            {% endif %}
             <button type="button" id="btn-clear">Clear all</button>
             <button type="button" id="btn-save">Save zones</button>
         </div>
@@ -262,6 +273,7 @@ const MM_PER_IN = 25.4;
 const CSRF_TOKEN = "{{ csrf_token() }}";
 
 const TARGET_ID         = {{ target.target_id }};
+const NEXT_URL          = {{ next_url | tojson }};
 const TARGET_SIZE_MM    = parseFloat("{{ target.target_width_mm }}");
 // Targets are square and the saved file is cropped so the calibrated
 // target center sits at the geometric center of the image. That lets us
@@ -546,6 +558,13 @@ btnSave.addEventListener('click', async () => {
         const data = await resp.json().catch(() => ({}));
         if (resp.ok && data.ok) {
             setMsg(`Saved ${data.count} zone${data.count === 1 ? '' : 's'}.`, 'ok');
+            // Wizard mode: hop to the post-add destination so saving doubles
+            // as the wizard's finish button. The brief pause lets the user
+            // see the success message before the page changes.
+            if (NEXT_URL) {
+                setTimeout(() => { window.location.href = NEXT_URL; }, 600);
+                return;
+            }
         } else {
             setMsg(data.error || 'Save failed.', 'err');
         }

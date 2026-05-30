@@ -1564,7 +1564,7 @@ def _set_security_headers(response):
             "https://cdnjs.buymeacoffee.com https://cdn.jsdelivr.net; "
         "style-src 'self' 'unsafe-inline' "
             "https://fonts.googleapis.com https://cdn.jsdelivr.net; "
-        "img-src 'self' data: https:; "
+        "img-src 'self' data: blob: https:; "
         "font-src 'self' data: https://fonts.gstatic.com; "
         "connect-src 'self'; "
         "frame-ancestors 'none'; "
@@ -4117,6 +4117,16 @@ def add_target():
                 "VALUES (%s, %s, %s, %s, %s, 1, %s)",
                 (user_id, name, rel_path, physical_size_mm, image_size_px, make_def)
             )
+            # lastrowid is the canonical post-INSERT id on both SQLite and
+            # MySQL. Fall back to a name lookup if the driver doesn't expose
+            # it (vanishingly rare here, but cheaper than aborting the wizard).
+            new_target_id = cur.lastrowid
+            if not new_target_id:
+                row = cur.execute(
+                    "SELECT id FROM targets WHERE user_id = %s AND name = %s LIMIT 1",
+                    (user_id, name)
+                ).fetchone()
+                new_target_id = int(row[0]) if row is not None else None
             con.commit()
     except DBIntegrityError:
         # Legacy global UNIQUE on targets.name (pre-multi-user DBs) can
@@ -4131,9 +4141,14 @@ def add_target():
         except OSError: pass
         return "Error saving target", 500
 
-    if session.get('session_id') is None:
-        return redirect(url_for('index'))
-    return redirect(url_for('sesh'))
+    # Final step of the add-target wizard is scoring-zone setup. Carry the
+    # post-wizard destination through as ?next= so the zones page can return
+    # the user where they were headed once they Save or Skip.
+    next_dest = 'index' if session.get('session_id') is None else 'sesh'
+    if new_target_id is None:
+        return redirect(url_for(next_dest))
+    return redirect(url_for('target_zones',
+                            target_id=new_target_id, next=next_dest))
 
 
 @app.route('/edit_targets', methods=['GET', 'POST'])
@@ -4467,10 +4482,17 @@ def target_zones(target_id):
 
     if request.method == 'GET':
         zones = _fetch_target_zones(target_id, user_id)
+        # ?next= is set by the add-target wizard so we can route the user
+        # back to where they were going after Save/Skip. Whitelist the
+        # accepted values — never trust a free-form redirect target.
+        raw_next = (request.args.get('next') or '').strip()
+        next_dest = raw_next if raw_next in ('sesh', 'index') else None
+        next_url = url_for(next_dest) if next_dest else None
         return render_template(
             'target_zones.html',
             target=target_to_config(target),
             zones=zones,
+            next_url=next_url,
         )
 
     payload = request.get_json(silent=True) or {}
