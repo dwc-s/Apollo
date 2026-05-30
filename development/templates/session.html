@@ -29,8 +29,9 @@
         }
     </style>
     <script>
-        window.APOLLO      = {{ target_config | tojson }};
-        window.PAST_SHOTS  = {{ past_shots | tojson }};
+        window.APOLLO         = {{ target_config | tojson }};
+        window.PAST_SHOTS     = {{ past_shots | tojson }};
+        window.ARROW_SHAFT_MM = {{ arrow_shaft_diameters | tojson }};
     </script>
     <meta charset="UTF-8">
     <title>Apollo::session</title>
@@ -397,6 +398,40 @@ window.addEventListener('load', () => {
     }
 });
 
+// ── Off-target classifier ────────────────────────────────────────────────
+// Mirrors the server-side _classify_shot: returns true when the shot
+// lands outside the outermost zone with line-cutter slack applied. With
+// no zones configured we can't classify, so every click is treated as on
+// target (server fall-back is the same).
+const ZONE_RADII   = Array.isArray(window.APOLLO.zone_radii_mm)
+                        ? window.APOLLO.zone_radii_mm.map(parseFloat).filter(n => !isNaN(n))
+                        : [];
+const DEFAULT_SHAFT = parseFloat(window.APOLLO.default_shaft_diameter_mm) || 6.0;
+
+function currentShaftDiameterMm() {
+    const arrowSel = document.getElementById('arrow_type');
+    const name = arrowSel ? arrowSel.value : '';
+    const map = window.ARROW_SHAFT_MM || {};
+    const d = parseFloat(map[name]);
+    return (d && d > 0) ? d : DEFAULT_SHAFT;
+}
+
+function isOffTarget(x, y) {
+    if (!ZONE_RADII.length) return false;
+    const shaftR = currentShaftDiameterMm() / 2;
+    const dist = Math.max(0, Math.hypot(x, y) - shaftR);
+    const outer = ZONE_RADII[ZONE_RADII.length - 1];
+    return dist > outer;
+}
+
+function recordMiss() {
+    xInput.value = 100000;
+    yInput.value = 100000;
+    clearMarker();
+    readout.innerHTML = '<span style="color:#c97a4a;font-weight:700;">MISSED TARGET</span>';
+    form.submit();
+}
+
 // ── Click handler ────────────────────────────────────────────────────────
 stage.addEventListener('click', e => {
     const r      = img.getBoundingClientRect();
@@ -409,6 +444,14 @@ stage.addEventListener('click', e => {
     const scaleY = window.APOLLO.target_height_mm / r.height;
     const cartX  = Math.round((dx - r.width  / 2) * scaleX * 10) / 10;
     const cartY  = Math.round(-(dy - r.height / 2) * scaleY * 10) / 10;
+
+    // A click outside the outermost scoring zone scores zero — mirror the
+    // server's classification by treating it as a miss so the visual
+    // matches the "Missed target" button.
+    if (isOffTarget(cartX, cartY)) {
+        recordMiss();
+        return;
+    }
 
     xInput.value = cartX;
     yInput.value = cartY;
@@ -490,13 +533,7 @@ document.getElementById('units-toggle').addEventListener('click', () => {
 applyUnits();
 
 // ── Missed target button ─────────────────────────────────────────────────
-document.getElementById('miss-btn').addEventListener('click', () => {
-    xInput.value = 100000;
-    yInput.value = 100000;
-    clearMarker();
-    readout.innerHTML = '<span style="color:#c97a4a;font-weight:700;">MISSED TARGET</span>';
-    form.submit();
-});
+document.getElementById('miss-btn').addEventListener('click', recordMiss);
 
 // ── Leave-session warning ────────────────────────────────────────────────
 // Intercept clicks on any in-page link and offer to either stay or end the

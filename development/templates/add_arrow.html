@@ -6,7 +6,7 @@
     <link href="https://fonts.googleapis.com/css2?family=Bungee+Shade&family=Quantico:ital,wght@0,400;0,700;1,400;1,700&family=Rubik+Iso&display=swap" rel="stylesheet">
     <link rel="stylesheet" type="text/css" href="{{ url_for('static', filename='style.css') }}">
     <meta charset="UTF-8">
-    <title>Apollo::add_bow</title>
+    <title>Apollo::add_arrow</title>
     <script defer src="{{ url_for('static', filename='apollo-nav.js') }}"></script>
 </head>
 <body>
@@ -44,7 +44,7 @@
     </div>
     {% endif %}
 </nav>
-<h1 class="title">Add Bow</h1>
+<h1 class="title">Add Arrow</h1>
 <script>
 (function fitTitleInit() {
     function fitTitle() {
@@ -61,33 +61,40 @@
     window.addEventListener('resize', fitTitle);
 })();
 </script>
-<form action="/add_bow" method="POST">
+<p class="form-intro">
+    Fields marked <span class="required-marker">*</span> are required.
+    The more information you enter, the better Apollo can analyze your shots.
+</p>
+<form action="/add_arrow" method="POST">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <div class="form-panel">
 
-        <span class="form-label">New bow model</span>
-        <input type="text" name="new_bow_model" id="new_bow_model">
+        <span class="form-label">New arrow name<span class="required-marker">*</span></span>
+        <input type="text" name="new_arrow" id="new_arrow" required>
 
-        <span class="form-label">Bow type</span>
-        <select id="new_bow_type" name="new_bow_type">
-            <option value="longbow">Longbow</option>
-            <option value="recurve">Recurve</option>
-            <option value="compound">Compound</option>
-        </select>
+        <span class="form-label">Spine</span>
+        <input type="text" name="new_spine" id="new_spine">
 
-        <span class="form-label">Bow draw weight</span>
-        <input type="text" name="new_bow_draw_weight" id="new_bow_draw_weight">
+        <span class="form-label" id="length-label">Length (inches)</span>
+        <input type="text" name="new_length" id="new_length">
 
-        <span class="form-label has-tooltip"
-              data-tooltip="Actual draw weight as opposed to rated draw weight. Effective draw weight can either be measured or estimated (add or subtract 2.5 pounds for each inch of draw length over or below the standard 28 inches).">Effective draw weight (optional)</span>
-        <input type="text" name="new_effective_draw_weight" id="new_effective_draw_weight"
-               placeholder="leave blank if same as bow draw weight">
+        <span class="form-label">Shaft weight (grams)</span>
+        <input type="text" name="new_shaft_weight" id="new_shaft_weight">
 
-        <span class="form-label" id="amo-label">Bow length (AMO) in inches</span>
-        <input type="text" name="new_bow_amo" id="new_bow_amo">
+        <span class="form-label">Shaft diameter (mm)</span>
+        <input type="text" name="new_shaft_diameter" id="new_shaft_diameter">
 
-        <span class="form-label">Nock height (mm)</span>
-        <input type="text" name="new_nock_height" id="new_nock_height">
+        <span class="form-label">Shaft material</span>
+        <input type="text" name="new_shaft_material" id="new_shaft_material">
+
+        <span class="form-label">Tip type</span>
+        <input type="text" name="new_tip" id="new_tip">
+
+        <span class="form-label">Tip weight (grams)</span>
+        <input type="text" name="new_tip_weight" id="new_tip_weight">
+
+        <span class="form-label">Nock weight (grams)</span>
+        <input type="text" name="new_nock_weight" id="new_nock_weight">
 
         <div class="submit-row">
             <input type="submit" value="Submit">
@@ -96,13 +103,13 @@
     </div>
 </form>
 <script>
-const UNITS_KEY = 'apollo_units';
-const CM_PER_IN = 2.54;
+const UNITS_KEY  = 'apollo_units';
+const CM_PER_IN  = 2.54;
 
 function applyUnits() {
-    const imperial = localStorage.getItem(UNITS_KEY) === 'imperial';
-    document.getElementById('amo-label').textContent =
-        imperial ? 'Bow length (AMO) in inches' : 'Bow length (AMO) in cm';
+    const imperial   = localStorage.getItem(UNITS_KEY) === 'imperial';
+    document.getElementById('length-label').textContent =
+        imperial ? 'Length (inches)' : 'Length (cm)';
     document.getElementById('units-toggle').textContent =
         imperial ? '⇄ Metric' : '⇄ Imperial';
 }
@@ -115,7 +122,7 @@ document.getElementById('units-toggle').addEventListener('click', () => {
 
 document.querySelector('form').addEventListener('submit', () => {
     if (localStorage.getItem(UNITS_KEY) !== 'imperial') {
-        const field = document.getElementById('new_bow_amo');
+        const field = document.getElementById('new_length');
         const val   = parseFloat(field.value);
         if (!isNaN(val)) field.value = Math.round(val / CM_PER_IN * 100) / 100;
     }

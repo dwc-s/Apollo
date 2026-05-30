@@ -54,13 +54,25 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 # Chosen to be far outside any plausible mm-from-center value.
 MISS_SENTINEL = '100000'
 
-# Legacy target — values previously hardcoded at module scope. Used as the
-# seed row in the targets table so existing apollo rows (which never had a
-# target_id) can be backfilled with a valid reference and replay correctly.
-LEGACY_TARGET_NAME    = 'Legacy 24" face'
-LEGACY_TARGET_IMAGE   = 'target.jpg'
-LEGACY_TARGET_SIZE_MM = 609.6
-LEGACY_TARGET_SIZE_PX = 855
+# Bundled NASP 40cm target — seeded for every new user as their default
+# so /sesh works out of the box without forcing them through the upload
+# wizard first. Calibration values match the bundled image exactly
+# (40cm physical edge, 1197 px cropped square).
+DEFAULT_TARGET_NAME    = '40cm NASP target'
+DEFAULT_TARGET_IMAGE   = 'targets/nasp_40cm.jpg'
+DEFAULT_TARGET_SIZE_MM = 400.0
+DEFAULT_TARGET_SIZE_PX = 1197
+
+# Concentric scoring rings for the bundled NASP target, in mm of radius
+# from the calibrated center. Outer edge of each zone — inner edge is
+# implied by the next-smaller ring (innermost ring is a filled disc).
+DEFAULT_TARGET_ZONE_RADII_MM = (20, 40, 60, 80, 100, 120, 140, 160, 180, 200)
+
+# Line-cutter scoring assumes a finite shaft thickness: if any part of the
+# shaft crosses (or touches) a ring boundary the shot scores the higher
+# (inner) ring. Used as the fallback when an arrow record has no
+# shaft_diameter set — 6mm is a reasonable mid-weight target shaft.
+DEFAULT_SHAFT_DIAMETER_MM = 6.0
 
 # Where uploaded target images live. Served by Flask's static handler.
 TARGETS_SUBDIR        = 'targets'
@@ -71,23 +83,20 @@ MAX_UPLOAD_BYTES      = 5 * 1024 * 1024   # 5 MB cap on uploaded target images
 # OOM a small VPS. 25 MP is comfortably bigger than any phone-camera shot a
 # user would realistically upload of a target face.
 MAX_IMAGE_PIXELS      = 25_000_000
-# Per-target image_filename must match one of these on import. The active
-# layout is "targets/<8hex>_<stem>.<ext>" (see _safe_target_filename); the
-# bundled legacy seed is plain "target.jpg" at static/'s root. Anything
-# else — including '..' segments or absolute paths — is rejected so a
-# crafted SQL/CSV import can't talk a later delete into removing files
-# outside TARGETS_DIR.
-_SAFE_TARGET_FILENAME_RE   = re.compile(
+# Per-target image_filename must match this on import. The layout is
+# "targets/<stem>.<ext>" — both user uploads (8-hex prefix) and the
+# bundled NASP seed live under this prefix. Anything else — including
+# '..' segments or absolute paths — is rejected so a crafted SQL/CSV
+# import can't talk a later delete into removing files outside
+# TARGETS_DIR.
+_SAFE_TARGET_FILENAME_RE = re.compile(
     r'^targets/[A-Za-z0-9._-]+\.(?:jpg|jpeg|png|webp)$', re.IGNORECASE)
-_LEGACY_TARGET_FILENAME_RE = re.compile(
-    r'^[A-Za-z0-9._-]+\.(?:jpg|jpeg|png|webp)$', re.IGNORECASE)
 
 
 def _is_safe_target_image_filename(fn):
     if not fn or not isinstance(fn, str):
         return False
-    return bool(_SAFE_TARGET_FILENAME_RE.match(fn)
-                or _LEGACY_TARGET_FILENAME_RE.match(fn))
+    return bool(_SAFE_TARGET_FILENAME_RE.match(fn))
 
 CIRCLE_RADIUS   = 32   # in mm — not yet wired up (boundary logic TBD)
 BULLSEYE_RADIUS = 10   # in mm — not yet wired up (boundary logic TBD)
@@ -240,13 +249,35 @@ def get_stats(session_id, user_id):
         return "Num arrows shot error in get_stats()", 500
     try: # get percent on target
         with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
-            # Misses store the sentinel in *both* coords (see MISS_SENTINEL),
-            # so checking x_coord alone is sufficient.
-            res = cur.execute(
-                "SELECT COUNT(*) FROM apollo WHERE session_id = %s AND user_id = %s AND x_coord = %s",
-                (session_id, user_id, MISS_SENTINEL))
-            row = cur.fetchone()
-            missed_shots = row[0] if row else 0
+            # When the session's target has scored zones, a shot outside
+            # the most peripheral zone is treated as a miss — only shots
+            # whose shaft touches a ring count as hits. Without zones we
+            # fall back to "anything that isn't the miss sentinel is a hit"
+            # since we have no way to tell on-target from off-target.
+            shot_class_rows = cur.execute(
+                "SELECT x_coord, y_coord, target_id, arrow_shaft_diameter "
+                "FROM apollo WHERE session_id = %s AND user_id = %s "
+                "ORDER BY id ASC",
+                (session_id, user_id)
+            ).fetchall()
+            sw_target_id = None
+            for srow in shot_class_rows:
+                if srow['target_id'] is not None:
+                    sw_target_id = int(srow['target_id'])
+                    break
+            sw_zones = _fetch_target_zones(sw_target_id, user_id) \
+                if sw_target_id is not None else []
+            sw_scoring = _zones_define_scoring(sw_zones)
+            missed_shots = 0
+            for srow in shot_class_rows:
+                xraw = str(srow['x_coord']).strip() if srow['x_coord'] is not None else ''
+                yraw = str(srow['y_coord']).strip() if srow['y_coord'] is not None else ''
+                if sw_scoring:
+                    if _classify_shot(xraw, yraw, sw_zones,
+                                      _row_get(srow, 'arrow_shaft_diameter')) is None:
+                        missed_shots += 1
+                elif xraw == MISS_SENTINEL and yraw == MISS_SENTINEL:
+                    missed_shots += 1
             hit_shots = arrows_shot - missed_shots
             percent_missed = round((missed_shots / arrows_shot) * 100, 2) if arrows_shot else 0.0
             percent_hit = round((hit_shots / arrows_shot) * 100, 2) if arrows_shot else 0.0
@@ -270,7 +301,8 @@ def get_stats(session_id, user_id):
             # zones fetch (from the first row's target_id) covers every
             # quiver below.
             shot_rows = cur.execute(
-                "SELECT quiver_size, target_id, x_coord, y_coord, is_precise "
+                "SELECT quiver_size, target_id, x_coord, y_coord, is_precise, "
+                "       arrow_shaft_diameter "
                 "FROM apollo "
                 "WHERE session_id = %s AND user_id = %s "
                 "ORDER BY id ASC",
@@ -316,7 +348,22 @@ def get_stats(session_id, user_id):
                     number_hit = 0
                     number_missed = 0
                     for q in buf:
-                        if (str(q['x_coord']) != MISS_SENTINEL
+                        # When the target has scored zones, a shot that
+                        # lands outside the most peripheral zone is treated
+                        # as a miss (no scoring ring touched). Without zones
+                        # we fall back to the sentinel-only definition.
+                        if scoring_available:
+                            idx = _classify_shot(
+                                str(q['x_coord']).strip() if q['x_coord'] is not None else '',
+                                str(q['y_coord']).strip() if q['y_coord'] is not None else '',
+                                zones,
+                                _row_get(q, 'arrow_shaft_diameter'),
+                            )
+                            if idx is not None:
+                                number_hit += 1
+                            else:
+                                number_missed += 1
+                        elif (str(q['x_coord']) != MISS_SENTINEL
                                 and str(q['y_coord']) != MISS_SENTINEL):
                             number_hit += 1
                         else:
@@ -1131,7 +1178,7 @@ def _ensure_root_user():
             new_id = int(new_row[0])
         # Seed a legacy target outside the connection block so we don't nest
         # transactions on the same engine connection.
-        _seed_user_legacy_target(new_id)
+        _seed_user_default_target(new_id)
         print(f"🔑 Bootstrapped root account '{username}' (id={new_id})")
     except DBIntegrityError:
         # Email collision with a non-root account, or a parallel boot in a
@@ -1169,7 +1216,7 @@ def get_default_target(user_id):
     """Return the user's default target (is_default=1), or first active, or None.
 
     Targets are user-scoped; we never fall back to another user's targets,
-    even if the caller has none. New users get a seeded legacy target row
+    even if the caller has none. New users get a seeded NASP target row
     of their own at registration so this should always find a hit.
     """
     if user_id is None:
@@ -1211,18 +1258,20 @@ def get_target(target_id, user_id):
         return None
 
 
-def _seed_user_legacy_target(user_id):
-    """Insert the bundled legacy target for a brand-new user.
+def _seed_user_default_target(user_id):
+    """Insert the bundled NASP target + scoring zones for a brand-new user.
 
-    Every new account gets its own row pointing at the bundled target.jpg
-    image. The image file is shared on disk (read-only static asset), only
-    the DB row is per-user. Set as default so new sessions have a target
-    preselected without forcing the user to upload one first.
+    Every new account gets their own targets row pointing at the bundled
+    NASP 40cm image, plus the 10 concentric scoring rings calibrated
+    against that image. The image file itself is a shared read-only
+    static asset; only the DB rows are per-user. Marked default so new
+    sessions have a target preselected without forcing the user through
+    the upload wizard first.
 
     Skipped when the user already owns at least one target row — happens
     on the first-ever registration after _claim_orphan_data() has just
-    re-parented the pre-multi-user legacy target row to this user.
-    Avoids creating two indistinguishable "Legacy 24\" face" rows.
+    re-parented a pre-multi-user target row to this user. Avoids
+    duplicate seed rows.
     """
     try:
         with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
@@ -1236,12 +1285,31 @@ def _seed_user_legacy_target(user_id):
                 "(user_id, name, image_filename, physical_size_mm, image_size_px, "
                 "is_active, is_default) "
                 "VALUES (%s, %s, %s, %s, %s, 1, 1)",
-                (user_id, LEGACY_TARGET_NAME, LEGACY_TARGET_IMAGE,
-                 LEGACY_TARGET_SIZE_MM, LEGACY_TARGET_SIZE_PX)
+                (user_id, DEFAULT_TARGET_NAME, DEFAULT_TARGET_IMAGE,
+                 DEFAULT_TARGET_SIZE_MM, DEFAULT_TARGET_SIZE_PX)
             )
+            target_row = cur.execute(
+                "SELECT id FROM targets WHERE user_id = %s AND name = %s LIMIT 1",
+                (user_id, DEFAULT_TARGET_NAME)
+            ).fetchone()
+            if target_row is not None:
+                target_id = int(target_row[0])
+                # Highest point value is the innermost ring; radii list
+                # is in ascending order, so points = len - index.
+                radii = DEFAULT_TARGET_ZONE_RADII_MM
+                for idx, radius_mm in enumerate(radii):
+                    points = len(radii) - idx
+                    cur.execute(
+                        "INSERT INTO target_zones "
+                        "(user_id, target_id, name, point_value, shape_type, "
+                        "radius_mm, display_order) "
+                        "VALUES (%s, %s, %s, %s, 'circle', %s, %s)",
+                        (user_id, target_id, f"{points} points", points,
+                         float(radius_mm), idx)
+                    )
             con.commit()
     except SQLAlchemyError as e:
-        print(f"⚠️ Failed to seed legacy target for user {user_id}: {e}")
+        print(f"⚠️ Failed to seed default target for user {user_id}: {e}")
 
 
 def target_to_config(row):
@@ -1269,6 +1337,54 @@ def target_to_config(row):
 def get_db_connection():
     return CompatConnection(engine)
 
+
+def _zone_radii_for_target(target_id, user_id):
+    """Sorted (innermost→outermost) zone radii in mm for one target.
+
+    Returns an empty list when the target has no zones or any radius is
+    unparseable — callers treat that as "no scoring rings", which the JS
+    interprets as "every click is a valid hit".
+    """
+    if target_id is None:
+        return []
+    radii = []
+    for z in _fetch_target_zones(target_id, user_id):
+        try:
+            radii.append(float(z['radius_mm']))
+        except (TypeError, ValueError):
+            continue
+    return radii
+
+
+def _arrow_shaft_diameters_for_user(user_id):
+    """Map arrow name → shaft diameter (mm) for the user's arrows.
+
+    Arrows without a parseable diameter are omitted so the JS click handler
+    can fall through to its own ``DEFAULT_SHAFT_DIAMETER_MM`` constant.
+    Arrow names are unique per user in practice; if a name appears twice,
+    the first parseable diameter wins.
+    """
+    out = {}
+    try:
+        with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
+            rows = cur.execute(
+                "SELECT arrow, shaft_diameter FROM arrows WHERE user_id = %s",
+                (user_id,)
+            ).fetchall()
+    except SQLAlchemyError:
+        return out
+    for r in rows:
+        name = r['arrow']
+        if not name or name in out:
+            continue
+        try:
+            d = float(str(r['shaft_diameter']).strip())
+        except (TypeError, ValueError, AttributeError):
+            continue
+        if d > 0:
+            out[name] = d
+    return out
+
 def get_past_shots(session_id, quiver_size, arrows_remaining, user_id):
     """Return shots from the current in-progress quiver for display on the target.
 
@@ -1276,8 +1392,10 @@ def get_past_shots(session_id, quiver_size, arrows_remaining, user_id):
     So shots fired in this quiver = quiver_size - arrows_remaining.
     We grab that many rows from the tail of this session's shot log.
 
-    Misses (sentinel coords) are filtered out — they're recorded in the DB
-    but shouldn't be rendered as markers on the target image.
+    Misses (sentinel coords *or* hits that fell outside the target's
+    outermost zone) are filtered out — they're recorded in the DB but
+    shouldn't be rendered as markers on the target image; the visual
+    treatment matches the "Missed target" button.
 
     When a quiver has just completed, arrows_remaining has been reset to
     quiver_size, so shots_fired == 0 and the function returns [] — the
@@ -1292,17 +1410,30 @@ def get_past_shots(session_id, quiver_size, arrows_remaining, user_id):
     try:
         with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
             rows = cur.execute(
-                """SELECT x_coord, y_coord FROM apollo
+                """SELECT x_coord, y_coord, target_id, arrow_shaft_diameter FROM apollo
                    WHERE session_id = %s AND user_id = %s
                    ORDER BY id DESC
                    LIMIT %s""",
                 (session_id, user_id, shots_fired)
             ).fetchall()
-        return [
-            {"x": float(row["x_coord"]), "y": float(row["y_coord"])}
-            for row in reversed(rows)                       # ORDER BY DESC + reverse = chronological
-            if str(row["x_coord"]) != MISS_SENTINEL         # drop misses; only hits get markers
-        ]
+        rows = list(reversed(rows))    # ORDER BY DESC + reverse = chronological
+        # The session locks the target after the first shot, so a single
+        # zone fetch (from the first row's target_id) covers every shot
+        # in the buffer. No zones configured → fall through to the old
+        # sentinel-only filter, since we can't classify off-target.
+        target_id = rows[0]['target_id'] if rows else None
+        zones = _fetch_target_zones(target_id, user_id) if target_id is not None else []
+        out = []
+        for row in rows:
+            xraw = str(row['x_coord']).strip() if row['x_coord'] is not None else ''
+            yraw = str(row['y_coord']).strip() if row['y_coord'] is not None else ''
+            if xraw == MISS_SENTINEL and yraw == MISS_SENTINEL:
+                continue
+            if zones and _classify_shot(xraw, yraw, zones,
+                                        row['arrow_shaft_diameter']) is None:
+                continue
+            out.append({"x": float(row["x_coord"]), "y": float(row["y_coord"])})
+        return out
     except (SQLAlchemyError, ValueError):
         return []
 
@@ -1998,11 +2129,11 @@ def register():
                                form={'username': username, 'email': email})
 
     # Seed the new user's data. Claim orphans *first* so that if the
-    # pre-multi-user DB already has a legacy-target row, it gets adopted
-    # by this user and the subsequent seed call is a no-op (rather than
+    # pre-multi-user DB already has a target row, it gets adopted by
+    # this user and the subsequent seed call is a no-op (rather than
     # creating a confusing duplicate).
     _claim_orphan_data(new_user_id)
-    _seed_user_legacy_target(new_user_id)
+    _seed_user_default_target(new_user_id)
 
     # Log the new user in immediately — modern UX expectation, and skips
     # the awkward "now go to the login page" handoff.
@@ -3005,6 +3136,10 @@ def sesh():
             # in the response so the dropdown disables without a roundtrip.
             target_locked = True
             target_config = target_to_config(get_target(session.get('target_id'), user_id))
+            if target_config is not None:
+                target_config['zone_radii_mm'] = _zone_radii_for_target(
+                    session.get('target_id'), user_id)
+                target_config['default_shaft_diameter_mm'] = DEFAULT_SHAFT_DIAMETER_MM
             # Quiver-size input is locked whenever a quiver is in progress
             # (decremented at least once but not yet completed). The template
             # uses this to render the input ``readonly`` and show a hint.
@@ -3033,6 +3168,7 @@ def sesh():
                                    x_coord=x,
                                    y_coord=y,
                                    arrow_types=arrow_types,
+                                   arrow_shaft_diameters=_arrow_shaft_diameters_for_user(user_id),
                                    past_shots=past_shots,
                                    is_precise=is_precise,
                                    record_mode=record_mode,
@@ -3049,6 +3185,10 @@ def sesh():
         if default_row is not None:
             session['target_id'] = default_row['rowid']
     target_config = target_to_config(get_target(session.get('target_id'), user_id))
+    if target_config is not None:
+        target_config['zone_radii_mm'] = _zone_radii_for_target(
+            session.get('target_id'), user_id)
+        target_config['default_shaft_diameter_mm'] = DEFAULT_SHAFT_DIAMETER_MM
     # On GET (reload mid-session), repopulate quiver_size from the locked
     # value so the field doesn't go blank — and compute the same lock flag
     # the POST path emits, so the input stays readonly mid-quiver across
@@ -3076,6 +3216,7 @@ def sesh():
                            x_coord='',
                            y_coord='',
                            arrow_types=arrow_types,
+                           arrow_shaft_diameters=_arrow_shaft_diameters_for_user(user_id),
                            past_shots=[],
                            is_precise=0,
                            record_mode=record_mode,
@@ -3119,7 +3260,7 @@ def previous_sessions():
             all_rows = cur.execute(
                 "SELECT session_id, timestamp, bow, arrow_type, quiver_size, "
                 "arrows_remaining, session_notes, session_tags, x_coord, y_coord, "
-                "is_precise, target_id "
+                "is_precise, target_id, arrow_shaft_diameter "
                 "FROM apollo WHERE user_id = %s ORDER BY session_id, timestamp",
                 (user_id,)
             ).fetchall()
@@ -3139,6 +3280,15 @@ def previous_sessions():
             target_cache[tid] = target_to_config(get_target(tid, user_id))
         return target_cache[tid]
 
+    # Memoize zone lookups too — same justification, plus _classify_shot
+    # gets called once per shot in the replay payload.
+    zones_cache = {}
+    def _cached_zones(tid):
+        if tid not in zones_cache:
+            zones_cache[tid] = _fetch_target_zones(tid, user_id) \
+                if tid is not None else []
+        return zones_cache[tid]
+
     session_data = {}
     for session_id in session_ids:
         res = session_rows[session_id]
@@ -3152,10 +3302,25 @@ def previous_sessions():
         target_cfg = _cached_target(res[0]['target_id'])
         if not _session_matches_filters(res, target_cfg, filters):
             continue
+        # Pre-classify each shot for the replay canvas so the JS doesn't
+        # need to know about zones or line-cutter rules — it just reads
+        # the boolean. Out-of-zone hits then render with the miss marker.
+        session_zones = _cached_zones(res[0]['target_id'])
+        replay_shots = []
+        for r in res:
+            xraw = str(r['x_coord']).strip() if r['x_coord'] is not None else ''
+            yraw = str(r['y_coord']).strip() if r['y_coord'] is not None else ''
+            is_miss = (xraw == MISS_SENTINEL and yraw == MISS_SENTINEL)
+            if not is_miss and session_zones:
+                is_miss = _classify_shot(
+                    xraw, yraw, session_zones,
+                    _row_get(r, 'arrow_shaft_diameter')) is None
+            replay_shots.append({'x': xraw, 'y': yraw, 'miss': is_miss})
         session_data[session_id] = {
             'rows': res,
             'stats': stats,
             'target': target_cfg,
+            'replay_shots': replay_shots,
         }
 
     # Dropdown options for the filter bar — derived from every shot the
@@ -3522,26 +3687,26 @@ def add_arrow():
             tip_weight     = request.form.get('new_tip_weight')
             nock_weight    = request.form.get('new_nock_weight')
 
-            if not all([arrow_type, spine, length, tip]):
-                return "Error: All arrow fields required", 400
+            if not arrow_type:
+                return "Error: Arrow name is required", 400
 
             # Numeric fields are stored as text historically but downstream
             # analysis does float(...) on them — reject garbage at the door
             # so a typo doesn't corrupt later draw-weight / spine reports.
-            required_numeric = {
+            positive_numeric = {
                 'length': length,
                 'spine': spine,
                 'tip_weight': tip_weight,
             }
-            optional_numeric = {
+            nonneg_numeric = {
                 'shaft_weight': shaft_weight,
                 'shaft_diameter': shaft_diameter,
                 'nock_weight': nock_weight,
             }
-            for name, val in required_numeric.items():
-                if _parse_float(val) is None:
+            for name, val in positive_numeric.items():
+                if val not in (None, '') and _parse_float(val) is None:
                     return f"Error: {name} must be a positive number", 400
-            for name, val in optional_numeric.items():
+            for name, val in nonneg_numeric.items():
                 if val not in (None, '') and _parse_nonneg_float(val) is None:
                     return f"Error: {name} must be a number", 400
 
@@ -4159,21 +4324,45 @@ def _zones_define_scoring(zones):
     return any(v > 0 for v in values)
 
 
-def _score_one_shot(xraw, yraw, zones):
-    """Points for a single shot. Misses and out-of-zone hits score 0.
+def _parse_shaft_diameter_mm(raw):
+    """Return a usable shaft diameter (mm) from a stored snapshot value.
 
-    ``zones`` must be sorted innermost-out — the smallest enclosing ring
-    is the one whose value counts.
+    Falls back to ``DEFAULT_SHAFT_DIAMETER_MM`` when ``raw`` is missing,
+    blank, non-numeric, or non-positive — so a single arrow without a
+    diameter recorded doesn't silently disable line-cutter scoring.
+    """
+    try:
+        d = float(str(raw).strip())
+    except (TypeError, ValueError, AttributeError):
+        return DEFAULT_SHAFT_DIAMETER_MM
+    if d <= 0:
+        return DEFAULT_SHAFT_DIAMETER_MM
+    return d
+
+
+def _classify_shot(xraw, yraw, zones, shaft_diameter_mm=None):
+    """Return the zone index a shot lands in, or ``None`` for a miss.
+
+    Innermost zone is index 0. A return of ``None`` covers both the
+    sentinel miss and a hit that falls outside the outermost zone (with
+    line-cutter slack applied). Line-cutter rule: any part of the shaft
+    crossing or touching a ring counts the shot in that ring, so the
+    effective distance from center is ``hypot(x, y) - shaft_radius``.
+
+    ``zones`` must be sorted innermost-out.
     """
     if xraw == MISS_SENTINEL and yraw == MISS_SENTINEL:
-        return 0
+        return None
     try:
         x = float(xraw)
         y = float(yraw)
     except (TypeError, ValueError):
-        return 0
-    dist = math.sqrt(x * x + y * y)
-    for z in zones:
+        return None
+    shaft_radius = _parse_shaft_diameter_mm(shaft_diameter_mm) / 2.0
+    dist = math.sqrt(x * x + y * y) - shaft_radius
+    if dist < 0:
+        dist = 0.0
+    for i, z in enumerate(zones):
         # A malformed radius_mm (NULL, blank, or non-numeric) shouldn't
         # crash the entire quiver-score render — skip the bad zone and
         # keep scanning outward instead.
@@ -4182,11 +4371,19 @@ def _score_one_shot(xraw, yraw, zones):
         except (TypeError, ValueError):
             continue
         if dist <= r:
-            try:
-                return int(z['point_value'] or 0)
-            except (TypeError, ValueError):
-                return 0
-    return 0
+            return i
+    return None
+
+
+def _score_one_shot(xraw, yraw, zones, shaft_diameter_mm=None):
+    """Points for a single shot. Misses and out-of-zone hits score 0."""
+    idx = _classify_shot(xraw, yraw, zones, shaft_diameter_mm)
+    if idx is None:
+        return 0
+    try:
+        return int(zones[idx]['point_value'] or 0)
+    except (TypeError, ValueError):
+        return 0
 
 
 def _shot_effective_draw_weight(shot_row):
@@ -4228,13 +4425,28 @@ def _shot_effective_draw_weight(shot_row):
         return None
 
 
+def _row_get(row, key, default=None):
+    """Read a column from a sqlalchemy/sqlite3 Row or a plain dict."""
+    mapping = getattr(row, '_mapping', None)
+    if mapping is not None:
+        try:
+            return mapping[key]
+        except (KeyError, TypeError):
+            return default
+    try:
+        return row[key]
+    except (KeyError, IndexError, TypeError):
+        return default
+
+
 def _compute_quiver_score(shot_rows, zones):
     """Sum points across the shots in one quiver."""
     total = 0
     for r in shot_rows:
         xraw = str(r['x_coord']).strip() if r['x_coord'] is not None else ''
         yraw = str(r['y_coord']).strip() if r['y_coord'] is not None else ''
-        total += _score_one_shot(xraw, yraw, zones)
+        shaft = _row_get(r, 'arrow_shaft_diameter')
+        total += _score_one_shot(xraw, yraw, zones, shaft)
     return total
 
 
@@ -5017,7 +5229,8 @@ def _report_hits_by_boundaries(user_id):
 
         with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
             shots = cur.execute(
-                "SELECT x_coord, y_coord, record_mode FROM apollo "
+                "SELECT x_coord, y_coord, record_mode, arrow_shaft_diameter "
+                "FROM apollo "
                 "WHERE user_id = %s AND target_id = %s "
                 "ORDER BY id ASC",
                 (user_id, target_id)
@@ -5027,34 +5240,24 @@ def _report_hits_by_boundaries(user_id):
             continue
 
         # Zone names are not unique; index by row position so a duplicate
-        # label doesn't merge two distinct rings in the count.
+        # label doesn't merge two distinct rings in the count. Out-of-zone
+        # hits are folded into the miss bucket — touching no scoring ring
+        # is functionally the same as not hitting the target.
         zone_counts = [0] * len(zones)
-        outside = 0
         miss = 0
         replay_shots = []
         for s in shots:
             xraw = str(s['x_coord']).strip() if s['x_coord'] is not None else ''
             yraw = str(s['y_coord']).strip() if s['y_coord'] is not None else ''
-            replay_shots.append({'x': xraw, 'y': yraw})
-            if xraw == MISS_SENTINEL and yraw == MISS_SENTINEL:
+            idx = _classify_shot(xraw, yraw, zones,
+                                 _row_get(s, 'arrow_shaft_diameter'))
+            replay_shots.append({'x': xraw, 'y': yraw, 'miss': idx is None})
+            if idx is None:
                 miss += 1
-                continue
-            try:
-                x = float(xraw)
-                y = float(yraw)
-            except ValueError:
-                continue
-            dist = math.sqrt(x * x + y * y)
-            placed = False
-            for i, z in enumerate(zones):
-                if dist <= float(z['radius_mm']):
-                    zone_counts[i] += 1
-                    placed = True
-                    break
-            if not placed:
-                outside += 1
+            else:
+                zone_counts[idx] += 1
 
-        total = sum(zone_counts) + outside + miss
+        total = sum(zone_counts) + miss
         if total == 0:
             continue
 
@@ -5062,13 +5265,11 @@ def _report_hits_by_boundaries(user_id):
         # read left-to-right the way they sit on the target visually.
         labels = [z['name'] or f'Zone {i + 1}' for i, z in enumerate(zones)]
         counts = list(zone_counts)
-        labels.append('Outside zones')
-        counts.append(outside)
         labels.append('Miss')
         counts.append(miss)
 
-        # Color gradient: warm at the center, cool toward the edge, gray
-        # outside / red miss. Mirrors the convention on the target image.
+        # Color gradient: warm at the center, cool toward the edge, red
+        # miss. Mirrors the convention on the target image.
         colors = []
         n_rings = len(zones)
         for i in range(n_rings):
@@ -5077,7 +5278,6 @@ def _report_hits_by_boundaries(user_id):
             g = int(170 - 60 * t)
             b = int(40 + 150 * t)
             colors.append(f'#{r:02x}{g:02x}{b:02x}')
-        colors.append('#8a8a8a')   # outside zones
         colors.append('#e53935')   # miss
 
         fig, ax = plt.subplots(figsize=(7.5, 4.5))
@@ -5095,7 +5295,7 @@ def _report_hits_by_boundaries(user_id):
         fig.autofmt_xdate(rotation=20)
         png_b64 = _render_matplotlib_png(fig)
 
-        # Table: one row per ring, then outside/miss footers.
+        # Table: one row per ring, then miss footer.
         columns = ['Zone', 'Points', 'Radius (mm)', 'Hits', 'Percent']
         rows_out = []
         for i, z in enumerate(zones):
@@ -5107,8 +5307,6 @@ def _report_hits_by_boundaries(user_id):
                 zone_counts[i],
                 f'{pct}%',
             ])
-        rows_out.append(['Outside zones', 0, '—', outside,
-                         f'{round(outside / total * 100, 1)}%'])
         rows_out.append(['Miss', 0, '—', miss,
                          f'{round(miss / total * 100, 1)}%'])
 
@@ -5332,7 +5530,8 @@ def _report_score_per_quiver(user_id):
             # row's own quiver_size — the first row of each group sets
             # the size, and we close the group once it's that long.
             shot_rows = cur.execute(
-                "SELECT quiver_size, target_id, x_coord, y_coord, is_precise "
+                "SELECT quiver_size, target_id, x_coord, y_coord, is_precise, "
+                "       arrow_shaft_diameter "
                 "FROM apollo "
                 "WHERE session_id = %s AND user_id = %s "
                 "ORDER BY id ASC",

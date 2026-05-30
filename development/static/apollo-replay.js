@@ -5,9 +5,9 @@
  *   <canvas class="shot-replay"
  *           data-shots='[{"x":"-12.4","y":"40.0"}, ...]'
  *           data-record-mode="0"
- *           data-target-image="/static/target.jpg"
- *           data-target-width-mm="609.6"
- *           data-img-width="855">
+ *           data-target-image="/static/targets/nasp_40cm.jpg"
+ *           data-target-width-mm="400.0"
+ *           data-img-width="1197">
  *
  * Call window.ApolloReplay.initAll() once the canvases exist in the DOM
  * (templates that source this file from <head> via `defer` get this for
@@ -179,7 +179,12 @@
                 return;
             }
 
-            const isMiss     = (xVal === 100000 && yVal === 100000);
+            // The server may pre-flag a shot as a miss when it landed
+            // outside the outermost scoring zone (line-cutter rule
+            // applied). Fall back to the sentinel check when the flag
+            // isn't set so older payloads still behave.
+            const isMiss     = raw.miss === true
+                            || (xVal === 100000 && yVal === 100000);
             const { cx, cy } = isMiss
                 ? { cx: size / 2, cy: size / 2 }
                 : cartToCanvas(xVal, yVal, mmPerEdge, size);

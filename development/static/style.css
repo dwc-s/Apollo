@@ -92,6 +92,25 @@ h4 {
     margin: 0 0 14px 0;
 }
 
+/* ── Form intro blurb (shown above an add/edit form) ── */
+.form-intro {
+    max-width: 420px;
+    width: 50%;
+    margin: 0 auto 10px auto;
+    padding: 0 4px;
+    font-family: "Quantico", sans-serif;
+    font-size: 0.85rem;
+    color: #333;
+    text-align: center;
+}
+
+/* Red asterisk inside a .form-label to flag a required field. */
+.required-marker {
+    color: #b00020;
+    margin-left: 4px;
+    font-weight: 700;
+}
+
 /* ── Field label badge ────────────────────────────── */
 .form-label {
     display: inline-block;

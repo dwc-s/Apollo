@@ -6,7 +6,7 @@
     <link href="https://fonts.googleapis.com/css2?family=Bungee+Shade&family=Quantico:ital,wght@0,400;0,700;1,400;1,700&family=Rubik+Iso&display=swap" rel="stylesheet">
     <link rel="stylesheet" type="text/css" href="{{ url_for('static', filename='style.css') }}">
     <meta charset="UTF-8">
-    <title>Apollo::edit_arrows</title>
+    <title>Apollo::edit_bows</title>
     <script defer src="{{ url_for('static', filename='apollo-nav.js') }}"></script>
 </head>
 <body>
@@ -44,7 +44,7 @@
     </div>
     {% endif %}
 </nav>
-<h1 class="title">Edit Arrows</h1>
+<h1 class="title">Edit Bows</h1>
 <script>
 (function fitTitleInit() {
     function fitTitle() {
@@ -61,45 +61,51 @@
     window.addEventListener('resize', fitTitle);
 })();
 </script>
+<p class="form-intro">
+    Fields marked <span class="required-marker">*</span> are required.
+    The more information you enter, the better Apollo can analyze your shots.
+</p>
     <div class="grid">
 {% for i in range(num_records) %}
-<form action="/edit_arrows" method="POST">
+<form action="/edit_bows" method="POST">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 
       <div class="form-panel">
-            <input type="hidden" name="rowid" value="{{ arrow_data[i][0]['rowid'] }}">
+            <input type="hidden" name="rowid" value="{{ bow_data[i][0]['rowid'] }}">
 
-            <span class="form-label">Arrow</span>
-            <input type="text" name="arrow" value="{{ arrow_data[i][0]['arrow'] }}">
+            <span class="form-label">Bow model<span class="required-marker">*</span></span>
+            <input type="text" name="bow_model" value="{{ bow_data[i][0]['bow_model'] }}" required>
 
-            <span class="form-label length-label">Length</span>
-            <input type="text" name="length" value="{{ arrow_data[i][0]['length'] }}">
-
-            <span class="form-label">Spine</span>
-            {# Spine is an intrinsic property of the shaft — locked once
-               the arrow is created. Rendered read-only (and the server
+            <span class="form-label">Bow type</span>
+            {# bow_type is fixed once a bow is created — a recurve doesn't
+               become a compound. Rendered read-only here (and the server
                UPDATE intentionally omits it) so historical shots keep a
-               consistent spine attribution. #}
-            <input type="text" value="{{ arrow_data[i][0]['spine'] }}"
+               consistent type without us having to denormalize it. #}
+            <input type="text" value="{{ bow_data[i][0]['bow_type']|capitalize }}"
                    readonly disabled
                    style="background:#f5f5f5;color:#666;cursor:not-allowed;">
 
-            <span class="form-label">Shaft weight (grams)</span>
-            <input type="text" name="shaft_weight" value="{{ arrow_data[i][0]['shaft_weight'] }}">
+            <span class="form-label">Bow draw weight (lbs)</span>
+            <input type="text" name="bow_draw_weight" value="{{ bow_data[i][0]['bow_draw_weight'] }}">
 
-            <span class="form-label">Nock weight (grams)</span>
-            <input type="text" name="nock_weight" value="{{ arrow_data[i][0]['nock_weight'] }}">
+            <span class="form-label has-tooltip"
+                  data-tooltip="Actual draw weight as opposed to rated draw weight. Effective draw weight can either be measured or estimated (add or subtract 2.5 pounds for each inch of draw length over or below the standard 28 inches).">Effective draw weight (optional)</span>
+            <input type="text" name="effective_draw_weight"
+                   value="{{ bow_data[i][0]['effective_draw_weight'] or '' }}"
+                   placeholder="leave blank if same as bow draw weight">
 
-            <span class="form-label">Tip</span>
-            <input type="text" name="tip" value="{{ arrow_data[i][0]['tip'] }}">
+            <span class="form-label amo-label">Bow length (AMO, inches)</span>
+            <input type="text" name="bow_amo" value="{{ bow_data[i][0]['amo'] }}">
 
-            <span class="form-label">Tip weight (grams)</span>
-            <input type="text" name="tip_weight" value="{{ arrow_data[i][0]['tip_weight'] }}">
-            <div class="submit-row">
-                <input type="submit" value="Delete Arrow" name="delete">
-                <input type="submit" value="Submit Edit">
-            </div>
-      </div>
+            <span class="form-label">Nock height (mm)</span>
+            <input type="text" name="nock_height" value="{{ bow_data[i][0]['nock_height'] or '' }}">
+
+        <div class="submit-row">
+        <input type="submit" value="Delete bow" name="delete" class="button" formnovalidate>
+          <input type="submit" value="Submit Edit">
+        </div>
+
+  </div>
 </form>
 {% endfor %}
     </div>
@@ -113,11 +119,11 @@ function applyUnits() {
     const toggleText = imperial ? '⇄ Metric' : '⇄ Imperial';
 
     document.getElementById('units-toggle').textContent = toggleText;
-    document.querySelectorAll('.length-label').forEach(el => {
-        el.textContent = `Length (${unitLabel})`;
+    document.querySelectorAll('.amo-label').forEach(el => {
+        el.textContent = `Bow length (AMO, ${unitLabel})`;
     });
 
-    document.querySelectorAll('input[name="length"]').forEach(field => {
+    document.querySelectorAll('input[name="bow_amo"]').forEach(field => {
         if (field.dataset.inches === undefined) {
             field.dataset.inches = field.value;
         }
@@ -139,7 +145,7 @@ document.getElementById('units-toggle').addEventListener('click', () => {
 document.querySelectorAll('form').forEach(form => {
     form.addEventListener('submit', () => {
         if (localStorage.getItem(UNITS_KEY) !== 'imperial') {
-            const field = form.querySelector('input[name="length"]');
+            const field = form.querySelector('input[name="bow_amo"]');
             if (field) {
                 const cmVal = parseFloat(field.value);
                 if (!isNaN(cmVal)) field.value = Math.round(cmVal / CM_PER_IN * 100) / 100;

@@ -314,7 +314,7 @@
               <canvas
                 class="shot-replay"
                 width="360" height="360"
-                data-shots='[{% for r in rows %}{"x":"{{ r["x_coord"] or "" }}","y":"{{ r["y_coord"] or "" }}"}{% if not loop.last %},{% endif %}{% endfor %}]'
+                data-shots='{{ data["replay_shots"] | tojson }}'
                 data-record-mode="{{ stats['record_mode'] }}"
                 data-target-image="{{ url_for('static', filename=replay_target['target_image']) if replay_target else '' }}"
                 data-target-width-mm="{{ replay_target['target_width_mm'] if replay_target else 0 }}"
@@ -355,7 +355,7 @@
             <canvas
               class="shot-replay"
               width="360" height="360"
-              data-shots='[{% for r in rows %}{"x":"{{ r["x_coord"] or "" }}","y":"{{ r["y_coord"] or "" }}"}{% if not loop.last %},{% endif %}{% endfor %}]'
+              data-shots='{{ data["replay_shots"] | tojson }}'
               data-record-mode="{{ stats['record_mode'] }}"
               data-target-image="{{ url_for('static', filename=replay_target['target_image']) if replay_target else '' }}"
               data-target-width-mm="{{ replay_target['target_width_mm'] if replay_target else 0 }}"
