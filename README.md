@@ -5,12 +5,6 @@ target image, group shots into quivers and sessions, and review hit rate,
 session length, and per-quiver breakdowns over time. Supports multiple bows,
 arrows, and target faces.
 
-A *session* is one practice round. A *quiver* is a fixed batch of arrows
-within a session (e.g. 6 arrows → walk to the target → repeat). Shot
-coordinates are stored as physical millimeters from target center
-(+X right, +Y up); the sentinel value `100000` in both `x_coord` and
-`y_coord` marks a missed target.
-
 ---
 
 ## Quick start
