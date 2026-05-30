@@ -13,16 +13,25 @@ instance/
 .env
 .DS_Store
 
-# Conda / venv
+# Conda
 .conda/
+
+# IDE / agent
+.idea/
+.claude/
+
+# Local / personal data — never commit
+backup/
+backup_db.py
+production/
+apolloshoots.org-ssl-bundle/
+apolloshoots.org-ssl-bundle.zip
+
+# Apollo runtime data
+apollo.db
+static/targets/
+wsgi_snippet.py
 venv/
 
-# IDE
-.idea/
-.vscode/
-
-# Apollo runtime data — created on first run, never commit
-apollo.db
-apollo_legacy.db
-wsgi_snippet.py
-static/targets/
+# Legacy (old layout, kept for reference)
+development/
