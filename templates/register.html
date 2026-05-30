@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Bungee+Shade&family=Quantico:ital,wght@0,400;0,700;1,400;1,700&family=Rubik+Iso&display=swap" rel="stylesheet">
+    <link rel="stylesheet" type="text/css" href="{{ url_for('static', filename='style.css') }}">
+    <meta charset="UTF-8">
+    <title>Apollo::create account</title>
+</head>
+<body>
+<nav class="side-nav">
+    <a href="/" class="side-nav-brand">Apollo</a>
+    <a href="/login" class="side-nav-link"><span class="nav-badge">→</span>Sign in</a>
+    <a href="/register" class="side-nav-link"><span class="nav-badge">→</span>Create account</a>
+    <div class="side-nav-spacer"></div>
+</nav>
+<h1 class="title">Create account</h1>
+<script>
+(function fitTitleInit() {
+    function fitTitle() {
+        document.querySelectorAll('.title').forEach(el => {
+            el.style.fontSize = '200px';
+            let fs = 200;
+            while (el.scrollWidth > el.clientWidth && fs > 14) {
+                fs -= 2;
+                el.style.fontSize = fs + 'px';
+            }
+        });
+    }
+    window.addEventListener('load', fitTitle);
+    window.addEventListener('resize', fitTitle);
+})();
+</script>
+
+{% if error %}
+<div class="auth-message error">{{ error }}</div>
+{% endif %}
+
+<form action="/register" method="POST" autocomplete="on">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <div class="form-panel">
+
+        <span class="form-label">Username</span>
+        <input type="text" name="username" autocomplete="username"
+               value="{{ form.username or '' }}"
+               minlength="3" maxlength="32"
+               pattern="[A-Za-z0-9_.\-]{3,32}"
+               title="3–32 characters: letters, digits, _ . -"
+               autofocus required>
+
+        <span class="form-label">Email</span>
+        <input type="email" name="email" autocomplete="email"
+               value="{{ form.email or '' }}" maxlength="255" required>
+
+        <span class="form-label">Password (min 8 characters)</span>
+        <input type="password" name="password" autocomplete="new-password"
+               minlength="8" maxlength="128" required>
+
+        <span class="form-label">Confirm password</span>
+        <input type="password" name="confirm_password" autocomplete="new-password"
+               minlength="8" maxlength="128" required>
+
+        <div class="submit-row">
+            <input type="submit" value="Create account">
+        </div>
+    </div>
+</form>
+<p class="auth-meta">
+    Already have an account? <a href="/login">Sign in</a>.
+</p>
+</body>
+</html>

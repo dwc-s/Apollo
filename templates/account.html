@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Bungee+Shade&family=Quantico:ital,wght@0,400;0,700;1,400;1,700&family=Rubik+Iso&display=swap" rel="stylesheet">
+    <link rel="stylesheet" type="text/css" href="{{ url_for('static', filename='style.css') }}">
+    <meta charset="UTF-8">
+    <title>Apollo::account</title>
+    <script defer src="{{ url_for('static', filename='apollo-nav.js') }}"></script>
+</head>
+<body>
+<nav class="side-nav">
+    <a href="/" class="side-nav-brand">Apollo</a>
+    <a href="/sesh" class="side-nav-link"><span class="nav-badge">→</span>Start session</a>
+    <a href="/previous_sessions" class="side-nav-link"><span class="nav-badge">→</span>Previous sessions</a>
+    <hr class="side-nav-divider">
+    <a href="/analyze" class="side-nav-link"><span class="nav-badge">→</span>Analyze data</a>
+    <hr class="side-nav-divider">
+    <a href="/add_bow" class="side-nav-link"><span class="nav-badge">→</span>Add bow</a>
+    <a href="/add_arrow" class="side-nav-link"><span class="nav-badge">→</span>Add arrow</a>
+    <a href="/edit_bows" class="side-nav-link"><span class="nav-badge">→</span>Edit bows</a>
+    <a href="/edit_arrows" class="side-nav-link"><span class="nav-badge">→</span>Edit arrows</a>
+    <a href="/add_target" class="side-nav-link"><span class="nav-badge">→</span>Add target</a>
+    <a href="/edit_targets" class="side-nav-link"><span class="nav-badge">→</span>Edit targets</a>
+    <hr class="side-nav-divider">
+    <a href="#" id="export-link" class="side-nav-link"><span class="nav-badge">⬇</span>Export data</a>
+    <a href="#" id="import-link" class="side-nav-link"><span class="nav-badge">⬆</span>Import data</a>
+    {% if current_user and current_user.is_root %}
+    <hr class="side-nav-divider">
+    <a href="/admin" class="side-nav-link"><span class="nav-badge">★</span>Admin</a>
+    {% endif %}
+    <hr class="side-nav-divider">
+    <button type="button" id="units-toggle" class="side-nav-units-btn">⇄ Imperial</button>
+    <div class="side-nav-spacer"></div>
+    {% if current_user %}
+    <div class="side-nav-user">
+        <span class="username">{{ current_user.username }}</span>
+        <a href="/account">Account</a>
+        <form action="/logout" method="POST">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <button type="submit" class="logout-btn">Sign out</button>
+        </form>
+    </div>
+    {% endif %}
+</nav>
+<h1 class="title">Account</h1>
+<script>
+(function fitTitleInit() {
+    function fitTitle() {
+        document.querySelectorAll('.title').forEach(el => {
+            el.style.fontSize = '200px';
+            let fs = 200;
+            while (el.scrollWidth > el.clientWidth && fs > 14) {
+                fs -= 2;
+                el.style.fontSize = fs + 'px';
+            }
+        });
+    }
+    window.addEventListener('load', fitTitle);
+    window.addEventListener('resize', fitTitle);
+})();
+</script>
+
+{% if error %}
+<div class="auth-message error">{{ error }}</div>
+{% endif %}
+{% if success %}
+<div class="auth-message success">{{ success }}</div>
+{% endif %}
+
+<form action="/account" method="POST" autocomplete="off">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="action" value="change_password">
+    <div class="form-panel">
+        <h4>Change password</h4>
+        <span class="form-label">Current password</span>
+        <input type="password" name="current_password" autocomplete="current-password" required>
+
+        <span class="form-label">New password (min 8 characters)</span>
+        <input type="password" name="new_password" autocomplete="new-password"
+               minlength="8" maxlength="128" required>
+
+        <span class="form-label">Confirm new password</span>
+        <input type="password" name="confirm_new_password" autocomplete="new-password"
+               minlength="8" maxlength="128" required>
+
+        <div class="submit-row">
+            <input type="submit" value="Update password">
+        </div>
+    </div>
+</form>
+
+<form action="/account" method="POST" autocomplete="off">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="action" value="change_email">
+    <div class="form-panel">
+        <h4>Change email</h4>
+        <span class="form-label">Current email</span>
+        <input type="text" value="{{ current_user.email if current_user else '' }}" disabled>
+
+        <span class="form-label">Current password</span>
+        <input type="password" name="current_password" autocomplete="current-password" required>
+
+        <span class="form-label">New email</span>
+        <input type="email" name="new_email" maxlength="255" required>
+
+        <div class="submit-row">
+            <input type="submit" value="Update email">
+        </div>
+    </div>
+</form>
+
+<form action="/delete_account" method="POST" autocomplete="off"
+      onsubmit="return confirm('Permanently delete your account and ALL your data? This cannot be undone.');">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <div class="form-panel danger-zone">
+        <h4>Delete account</h4>
+        <p style="font-family:'Quantico',sans-serif;color:#1a3a5c;font-size:0.9rem;margin:0 0 10px 0;">
+            Permanently deletes your account and every session, shot, bow, arrow,
+            and target you've recorded. There is no undo.
+        </p>
+        <span class="form-label">Current password (to confirm)</span>
+        <input type="password" name="current_password" autocomplete="current-password" required>
+        <div class="submit-row">
+            <input type="submit" value="Delete my account">
+        </div>
+    </div>
+</form>
+
+<script>
+const UNITS_KEY = 'apollo_units';
+function applyUnits() {
+    const imperial = localStorage.getItem(UNITS_KEY) === 'imperial';
+    document.getElementById('units-toggle').textContent = imperial ? '⇄ Metric' : '⇄ Imperial';
+}
+document.getElementById('units-toggle').addEventListener('click', () => {
+    const current = localStorage.getItem(UNITS_KEY) || 'metric';
+    localStorage.setItem(UNITS_KEY, current === 'metric' ? 'imperial' : 'metric');
+    applyUnits();
+});
+applyUnits();
+</script>
+</body>
+</html>

@@ -1,0 +1,371 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Bungee+Shade&family=Quantico:ital,wght@0,400;0,700;1,400;1,700&family=Rubik+Iso&display=swap" rel="stylesheet">
+    <link rel="stylesheet" type="text/css" href="{{ url_for('static', filename='style.css') }}">
+
+    <!-- lightGallery (CDN) — gallery used to zoom report charts. -->
+    <link rel="stylesheet"
+          href="https://cdn.jsdelivr.net/npm/lightgallery@2.7.2/css/lightgallery-bundle.min.css">
+
+    <meta charset="UTF-8">
+    <title>Apollo::analyze</title>
+    <style>
+        .analyze-panel {
+            background-color: #b3c6e3;
+            border-radius: 25px;
+            padding: 22px 28px;
+            max-width: 880px;
+            margin: 0 auto 24px auto;
+        }
+        .analyze-panel h3 {
+            font-family: "Quantico", sans-serif;
+            color: #1a3a5c;
+            margin: 0 0 12px 0;
+        }
+        .analyze-error {
+            background: #f8d7da;
+            border: 1px solid #c0392b;
+            color: #6e1f17;
+            padding: 10px 14px;
+            border-radius: 6px;
+            font-family: "Quantico", sans-serif;
+            margin: 0 auto 16px auto;
+            max-width: 880px;
+        }
+        .report-options {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            margin: 12px 0 18px 0;
+        }
+        .report-options label {
+            display: flex;
+            align-items: flex-start;
+            gap: 10px;
+            font-family: "Quantico", sans-serif;
+            color: #1a3a5c;
+            background: rgba(255,255,255,0.35);
+            border: 1px solid #95abcf;
+            border-radius: 6px;
+            padding: 10px 14px;
+            cursor: pointer;
+        }
+        .report-options label:hover {
+            background: rgba(255,255,255,0.55);
+        }
+        .report-options input[type="checkbox"] {
+            margin-top: 3px;
+            transform: scale(1.2);
+        }
+        .report-options .label-text {
+            font-weight: 700;
+            font-size: 0.95rem;
+        }
+        .report-options .label-desc {
+            display: block;
+            font-weight: 400;
+            font-size: 0.85rem;
+            color: #2c4a6b;
+            margin-top: 2px;
+        }
+
+        .report-card {
+            background-color: #eef3fa;
+            border-radius: 16px;
+            padding: 18px;
+            margin: 0 auto 24px auto;
+            max-width: 1100px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+        }
+        .report-card h3 {
+            font-family: "Quantico", sans-serif;
+            color: #1a3a5c;
+            margin: 0 0 12px 0;
+        }
+        .report-empty {
+            font-family: "Quantico", sans-serif;
+            color: #6c7a93;
+            font-style: italic;
+        }
+
+        .gallery-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 14px;
+            margin-bottom: 16px;
+            align-items: flex-start;
+        }
+        .gallery-row a.chart-thumb {
+            display: inline-block;
+            border: 1px solid #95abcf;
+            border-radius: 8px;
+            overflow: hidden;
+            background: #fff;
+            flex: 1 1 480px;
+        }
+        .gallery-row a.chart-thumb img {
+            display: block;
+            width: 100%;
+            height: auto;
+        }
+        .replay-block {
+            flex: 0 0 auto;
+            text-align: center;
+        }
+        .replay-block .shot-replay {
+            display: block;
+            border-radius: 50%;
+            box-shadow: 0 0 0 2px #1e2d40, 0 0 16px rgba(28,90,160,0.35);
+            background: #000;
+        }
+        .replay-label {
+            font-family: 'Quantico', sans-serif;
+            font-size: 9px;
+            letter-spacing: 0.12em;
+            text-transform: uppercase;
+            color: #4a6080;
+            text-align: center;
+            margin-top: 5px;
+        }
+
+        .report-table-wrapper {
+            overflow-x: auto;
+            margin-top: 8px;
+        }
+        .report-table {
+            border-collapse: collapse;
+            font-family: "Quantico", sans-serif;
+            font-size: 0.9rem;
+            min-width: 100%;
+            background: #fff;
+        }
+        .report-table th,
+        .report-table td {
+            border: 1px solid #c9d3e3;
+            padding: 6px 10px;
+            text-align: left;
+        }
+        .report-table th {
+            background: #95abcf;
+            color: #1a3a5c;
+        }
+        .report-table tr:nth-child(even) td {
+            background: #f4f8fd;
+        }
+
+        .download-row {
+            display: flex;
+            gap: 10px;
+            margin-top: 10px;
+            flex-wrap: wrap;
+        }
+        .download-row a {
+            background-color: #757a9c;
+            color: white;
+            text-decoration: none;
+            padding: 7px 16px;
+            border-radius: 4px;
+            font-family: "Quantico", sans-serif;
+            font-weight: 700;
+            font-size: 0.85rem;
+            transition: background-color 0.2s;
+        }
+        .download-row a:hover {
+            background-color: #4d5375;
+        }
+    </style>
+
+    <script defer src="{{ url_for('static', filename='apollo-nav.js') }}"></script>
+    <script defer src="{{ url_for('static', filename='apollo-replay.js') }}"></script>
+</head>
+<body>
+<nav class="side-nav">
+    <a href="/" class="side-nav-brand">Apollo</a>
+    <a href="/sesh" class="side-nav-link"><span class="nav-badge">→</span>Start session</a>
+    <a href="/previous_sessions" class="side-nav-link"><span class="nav-badge">→</span>Previous sessions</a>
+    <hr class="side-nav-divider">
+    <a href="/analyze" class="side-nav-link"><span class="nav-badge">→</span>Analyze data</a>
+    <hr class="side-nav-divider">
+    <a href="/add_bow" class="side-nav-link"><span class="nav-badge">→</span>Add bow</a>
+    <a href="/add_arrow" class="side-nav-link"><span class="nav-badge">→</span>Add arrow</a>
+    <a href="/edit_bows" class="side-nav-link"><span class="nav-badge">→</span>Edit bows</a>
+    <a href="/edit_arrows" class="side-nav-link"><span class="nav-badge">→</span>Edit arrows</a>
+    <a href="/add_target" class="side-nav-link"><span class="nav-badge">→</span>Add target</a>
+    <a href="/edit_targets" class="side-nav-link"><span class="nav-badge">→</span>Edit targets</a>
+    <hr class="side-nav-divider">
+    <a href="#" id="export-link" class="side-nav-link"><span class="nav-badge">⬇</span>Export data</a>
+    <a href="#" id="import-link" class="side-nav-link"><span class="nav-badge">⬆</span>Import data</a>
+    {% if current_user and current_user.is_root %}
+    <hr class="side-nav-divider">
+    <a href="/admin" class="side-nav-link"><span class="nav-badge">★</span>Admin</a>
+    {% endif %}
+    <hr class="side-nav-divider">
+    <button type="button" id="units-toggle" class="side-nav-units-btn">⇄ Imperial</button>
+    <div class="side-nav-spacer"></div>
+    {% if current_user %}
+    <div class="side-nav-user">
+        <span class="username">{{ current_user.username }}</span>
+        <a href="/account">Account</a>
+        <form action="/logout" method="POST">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <button type="submit" class="logout-btn">Sign out</button>
+        </form>
+    </div>
+    {% endif %}
+</nav>
+<h1 class="title">Analyze</h1>
+<script>
+(function fitTitleInit() {
+    function fitTitle() {
+        document.querySelectorAll('.title').forEach(el => {
+            el.style.fontSize = '200px';
+            let fs = 200;
+            while (el.scrollWidth > el.clientWidth && fs > 14) {
+                fs -= 2;
+                el.style.fontSize = fs + 'px';
+            }
+        });
+    }
+    window.addEventListener('load', fitTitle);
+    window.addEventListener('resize', fitTitle);
+})();
+</script>
+
+{% if error %}
+<div class="analyze-error">{{ error }}</div>
+{% endif %}
+
+<form method="POST" action="{{ url_for('analyze') }}" class="analyze-panel">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <h3>Pick the reports to generate</h3>
+    <div class="report-options">
+        {% for item in catalog %}
+        <label>
+            <input type="checkbox" name="reports" value="{{ item.key }}"
+                   {% if item.key in selected %}checked{% endif %}>
+            <span>
+                <span class="label-text">{{ item.label }}</span>
+                <span class="label-desc">{{ item.description }}</span>
+            </span>
+        </label>
+        {% endfor %}
+    </div>
+    <div class="submit-row">
+        <span></span>
+        <button type="submit">Generate</button>
+    </div>
+</form>
+
+{% macro render_panel(p, title) %}
+    <div class="gallery-row" data-lg-gallery="true">
+        <a class="chart-thumb"
+           href="data:image/png;base64,{{ p.png_b64 }}"
+           data-src="data:image/png;base64,{{ p.png_b64 }}"
+           data-sub-html="<h4>{{ title }}</h4>">
+            <img src="data:image/png;base64,{{ p.png_b64 }}"
+                 alt="{{ title }}">
+        </a>
+        {% if p.replay %}
+        <div class="replay-block">
+            <canvas class="shot-replay"
+                    width="280" height="280"
+                    data-shots='{{ p.replay.shots | tojson }}'
+                    data-record-mode="{{ p.replay.record_mode }}"
+                    data-target-image="{{ p.replay.target_image_url }}"
+                    data-target-width-mm="{{ p.replay.target_width_mm }}"
+                    data-img-width="{{ p.replay.img_width }}"></canvas>
+            <div class="replay-label">2&times; speed
+                {% if p.replay.target_name %}&mdash; {{ p.replay.target_name }}{% endif %}
+            </div>
+        </div>
+        {% endif %}
+    </div>
+    <div class="report-table-wrapper">
+        <table class="report-table">
+            <thead>
+                <tr>
+                    {% for c in p.columns %}<th>{{ c }}</th>{% endfor %}
+                </tr>
+            </thead>
+            <tbody>
+                {% for row in p.rows %}
+                <tr>
+                    {% for cell in row %}<td>{{ cell }}</td>{% endfor %}
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+{% endmacro %}
+
+{% if results %}
+<div id="report-gallery">
+    {% for r in results %}
+    <section class="report-card">
+        <h3>{{ r.title }}</h3>
+        {% if r.empty %}
+            <p class="report-empty">No data yet — shoot a session first.</p>
+        {% elif r.panels %}
+            {% for p in r.panels %}
+                <h4 style="font-family:Quantico,sans-serif;color:#1a3a5c;margin:18px 0 8px 0;">
+                    {{ p.title }}
+                </h4>
+                {{ render_panel(p, p.title) }}
+            {% endfor %}
+            <div class="download-row">
+                <a href="{{ url_for('analyze_export', report=r.key, format='csv') }}">
+                    ⬇ Download CSV
+                </a>
+                <a href="{{ url_for('analyze_export', report=r.key, format='xlsx') }}">
+                    ⬇ Download Excel
+                </a>
+            </div>
+        {% else %}
+            {{ render_panel(r, r.title) }}
+            <div class="download-row">
+                <a href="{{ url_for('analyze_export', report=r.key, format='csv') }}">
+                    ⬇ Download CSV
+                </a>
+                <a href="{{ url_for('analyze_export', report=r.key, format='xlsx') }}">
+                    ⬇ Download Excel
+                </a>
+            </div>
+        {% endif %}
+    </section>
+    {% endfor %}
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/lightgallery@2.7.2/lightgallery.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/lightgallery@2.7.2/plugins/zoom/lg-zoom.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/lightgallery@2.7.2/plugins/thumbnail/lg-thumbnail.umd.min.js"></script>
+<script>
+    document.querySelectorAll('[data-lg-gallery]').forEach(el => {
+        if (typeof lightGallery !== 'function') return;
+        lightGallery(el, {
+            speed: 300,
+            download: true,
+            plugins: [window.lgZoom, window.lgThumbnail].filter(Boolean),
+        });
+    });
+</script>
+{% endif %}
+
+<script>
+const UNITS_KEY = 'apollo_units';
+function applyUnits() {
+    const imperial = localStorage.getItem(UNITS_KEY) === 'imperial';
+    document.getElementById('units-toggle').textContent =
+        imperial ? '⇄ Metric' : '⇄ Imperial';
+}
+document.getElementById('units-toggle').addEventListener('click', () => {
+    const current = localStorage.getItem(UNITS_KEY) || 'metric';
+    localStorage.setItem(UNITS_KEY, current === 'metric' ? 'imperial' : 'metric');
+    applyUnits();
+});
+applyUnits();
+</script>
+</body>
+</html>

@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Bungee+Shade&family=Quantico:ital,wght@0,400;0,700;1,400;1,700&family=Rubik+Iso&display=swap" rel="stylesheet">
+    <link rel="stylesheet" type="text/css" href="{{ url_for('static', filename='style.css') }}">
+    <meta charset="UTF-8">
+    <title>Apollo::sign in</title>
+</head>
+<body>
+<nav class="side-nav">
+    <a href="/" class="side-nav-brand">Apollo</a>
+    <a href="/login" class="side-nav-link"><span class="nav-badge">→</span>Sign in</a>
+    <a href="/register" class="side-nav-link"><span class="nav-badge">→</span>Create account</a>
+    <div class="side-nav-spacer"></div>
+</nav>
+<h1 class="title">Sign in</h1>
+<script>
+(function fitTitleInit() {
+    function fitTitle() {
+        document.querySelectorAll('.title').forEach(el => {
+            el.style.fontSize = '200px';
+            let fs = 200;
+            while (el.scrollWidth > el.clientWidth && fs > 14) {
+                fs -= 2;
+                el.style.fontSize = fs + 'px';
+            }
+        });
+    }
+    window.addEventListener('load', fitTitle);
+    window.addEventListener('resize', fitTitle);
+})();
+</script>
+
+{% if error %}
+<div class="auth-message error">{{ error }}</div>
+{% endif %}
+
+<form action="/login" method="POST" autocomplete="on">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    {% if next_url %}<input type="hidden" name="next" value="{{ next_url }}">{% endif %}
+    <div class="form-panel">
+
+        <span class="form-label">Username or email</span>
+        <input type="text" name="username" autocomplete="username"
+               value="{{ form.username or '' }}" autofocus required>
+
+        <span class="form-label">Password</span>
+        <input type="password" name="password" autocomplete="current-password" required>
+
+        <div class="submit-row">
+            <input type="submit" value="Sign in">
+        </div>
+    </div>
+</form>
+<p class="auth-meta">
+    Don't have an account? <a href="/register">Create one</a>.
+</p>
+<p class="auth-meta">
+    Forgot your password? <a href="/forgot_password">Reset it</a>.
+</p>
+</body>
+</html>

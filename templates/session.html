@@ -1,0 +1,638 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Bungee+Shade&family=Quantico:ital,wght@0,400;0,700;1,400;1,700&family=Rubik+Iso&display=swap" rel="stylesheet">
+    <link rel="stylesheet" type="text/css" href="{{ url_for('static', filename='style.css') }}">
+    <style>
+        /* Target image scales down to fit the available row width but
+           never grows above its natural resolution. The panel shrinks
+           before the layout wraps the form below.
+           A 75vh height cap keeps the canvas from dominating tall monitors
+           and ensures the coord readout / buttons stay on screen. The
+           flex-basis combines an img_width cap and the height-derived
+           width cap (75vh * aspect-ratio) so the panel reserves only the
+           space the image will actually use. */
+        .target-panel {
+            flex: 0 1 min({{ target_config.img_width }}px,
+                          calc(75vh * {{ target_config.img_width }} / {{ target_config.img_height }}));
+            min-width: 280px;
+        }
+        #target-img {
+            display: block;
+            width: auto;
+            height: auto;
+            max-width: 100%;
+            max-height: 75vh;
+            aspect-ratio: {{ target_config.img_width }} / {{ target_config.img_height }};
+        }
+    </style>
+    <script>
+        window.APOLLO      = {{ target_config | tojson }};
+        window.PAST_SHOTS  = {{ past_shots | tojson }};
+    </script>
+    <meta charset="UTF-8">
+    <title>Apollo::session</title>
+    <script defer src="{{ url_for('static', filename='apollo-nav.js') }}"></script>
+</head>
+<body>
+<nav class="side-nav">
+    <a href="/" class="side-nav-brand">Apollo</a>
+    <a href="/sesh" class="side-nav-link"><span class="nav-badge">→</span>Start session</a>
+    <a href="/previous_sessions" class="side-nav-link"><span class="nav-badge">→</span>Previous sessions</a>
+    <hr class="side-nav-divider">
+    <a href="/analyze" class="side-nav-link"><span class="nav-badge">→</span>Analyze data</a>
+    <hr class="side-nav-divider">
+    <a href="/add_bow" class="side-nav-link"><span class="nav-badge">→</span>Add bow</a>
+    <a href="/add_arrow" class="side-nav-link"><span class="nav-badge">→</span>Add arrow</a>
+    <a href="/edit_bows" class="side-nav-link"><span class="nav-badge">→</span>Edit bows</a>
+    <a href="/edit_arrows" class="side-nav-link"><span class="nav-badge">→</span>Edit arrows</a>
+    <a href="/add_target" class="side-nav-link"><span class="nav-badge">→</span>Add target</a>
+    <a href="/edit_targets" class="side-nav-link"><span class="nav-badge">→</span>Edit targets</a>
+    <hr class="side-nav-divider">
+    <a href="#" id="export-link" class="side-nav-link"><span class="nav-badge">⬇</span>Export data</a>
+    <a href="#" id="import-link" class="side-nav-link"><span class="nav-badge">⬆</span>Import data</a>
+    {% if current_user and current_user.is_root %}
+    <hr class="side-nav-divider">
+    <a href="/admin" class="side-nav-link"><span class="nav-badge">★</span>Admin</a>
+    {% endif %}
+    <hr class="side-nav-divider">
+    <button type="button" id="units-toggle" class="side-nav-units-btn">⇄ Imperial</button>
+    <div class="side-nav-spacer"></div>
+    {% if current_user %}
+    <div class="side-nav-user">
+        <span class="username">{{ current_user.username }}</span>
+        <a href="/account">Account</a>
+        <form action="/logout" method="POST">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <button type="submit" class="logout-btn">Sign out</button>
+        </form>
+    </div>
+    {% endif %}
+</nav>
+
+<h4 class="quantico">Session #{{ session_id }} / <a href="/end_session" data-no-warn="1">End session</a></h4>
+
+<!-- ── Leave-session warning modal ───────────────────────────────────────── -->
+<div class="modal-backdrop" id="leave-modal" role="dialog" aria-modal="true" aria-labelledby="leave-modal-title">
+    <div class="modal-card">
+        <h3 id="leave-modal-title">End your session?</h3>
+        <p>Clicking this link will end your current session. Do you want to keep going, or end the session and follow the link?</p>
+        <form id="leave-modal-form" action="/end_session_silent" method="POST">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <input type="hidden" name="next" id="leave-modal-next" value="/">
+            <div class="modal-actions">
+                <button type="button" class="secondary" id="leave-modal-cancel">Continue session</button>
+                <button type="submit">End session &amp; follow link</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<form action="/sesh" method="POST" id="shot-form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+
+    <!-- Hidden coordinate inputs — populated by target click -->
+    <input type="hidden" name="x_coord" id="x_coord" value="{{ x_coord }}">
+    <input type="hidden" name="y_coord" id="y_coord" value="{{ y_coord }}">
+    <input type="hidden" name="arrow_shot" value="arrow_shot">
+    <input type="hidden" name="is_precise" id="is_precise" value="{{ is_precise }}">
+    <input type="hidden" name="record_mode" id="record_mode_hidden" value="{{ record_mode }}">
+
+    <div class="session-layout">
+
+        <!-- ── LEFT: Clickable target ── -->
+        <div class="target-panel">
+
+            <!-- Precision toggle -->
+            <div class="autosubmit-bar" style="margin-top:4px;">
+                <span class="autosubmit-label has-tooltip"
+                      data-tooltip="Estimated — you're roughly placing the shot by eye or . Precise — you're using a paper target or you really care about the exact position on the target.">Placement:</span>
+                <div class="radio-group" style="margin:0;">
+                    <label class="radio-option">
+                        <input type="radio" name="precision_mode" value="0" checked>
+                        <span>Estimated</span>
+                    </label>
+                    <label class="radio-option">
+                        <input type="radio" name="precision_mode" value="1">
+                        <span>Precise</span>
+                    </label>
+                </div>
+            </div>
+
+            <div class="target-stage" id="stage">
+                <img id="target-img"
+                     src="{{ url_for('static', filename=target_config.target_image) }}"
+                     alt="Archery target" />
+                <svg id="overlay" xmlns="http://www.w3.org/2000/svg"></svg>
+            </div>
+
+            <div class="coord-display">
+                <div class="vals" id="coord-readout">
+                    {% if x_coord and y_coord %}
+                        X&nbsp;<span id="disp-x">{{ x_coord }}</span>
+                        &nbsp;&nbsp;
+                        Y&nbsp;<span id="disp-y">{{ y_coord }}</span>
+                    {% else %}
+                        <span style="color:#636a80">— click target —</span>
+                    {% endif %}
+                </div>
+                <div class="coord-hint" id="coord-hint">(0, 0) = center &nbsp;·&nbsp; +X right &nbsp;·&nbsp; +Y up &nbsp;·&nbsp; cm</div>
+            </div>
+
+            <div style="display:flex;gap:8px;margin-top:2px;flex-wrap:wrap;">
+                <button type="button" class="clear-shot-btn" id="miss-btn"
+                        style="background-color:#c97a4a;color:#fff;">Missed target</button>
+            </div>
+        </div>
+
+        <!-- ── RIGHT: Session form ── -->
+        <div class="form-panel form-panel-session">
+
+            <span class="form-label has-tooltip"
+                  data-tooltip="Should arrows be recorded in the sequence in which they hit the target? Stored in the database for data analysis purposes only. Does not affect session behavior.">Recording mode</span>
+            <div class="radio-group" style="margin:0 0 6px 0;">
+                <label class="radio-option">
+                    <input type="radio" name="record_mode_radio" value="0">
+                    <span>Per shot</span>
+                </label>
+                <label class="radio-option">
+                    <input type="radio" name="record_mode_radio" value="1">
+                    <span>End of quiver</span>
+                </label>
+            </div>
+
+            <span class="form-label">Target
+                {% if target_locked %}
+                    <span style="color:#888;font-weight:400;font-size:0.85em;">(locked for this session)</span>
+                {% endif %}
+            </span>
+            <select id="target_id" name="target_id" {% if target_locked %}disabled{% endif %}>
+                {% for t in targets_list %}
+                    <option value="{{ t.rowid }}" {% if t.rowid == selected_target_id %}selected{% endif %}>{{ t.name }}</option>
+                {% endfor %}
+            </select>
+            {# Disabled selects don't submit; mirror the value through a hidden input so it always posts. #}
+            {% if target_locked %}
+                <input type="hidden" name="target_id" value="{{ selected_target_id }}">
+            {% endif %}
+            <div class="links-row"><a href="/add_target">+ add target</a></div>
+
+            <span class="form-label">Bow</span>
+            <select id="bow" name="bow">
+                {% for b in bows %}
+                    <option value="{{ b }}" {% if b == bow %}selected{% endif %}>{{ b }}</option>
+                {% endfor %}
+            </select>
+            <div class="links-row"><a href="/add_bow">+ add bow</a></div>
+
+            <span class="form-label">Arrow</span>
+            <select id="arrow_type" name="arrow_type">
+                {% for arrow in arrow_types %}
+                    <option value="{{ arrow }}" {% if arrow == arrow_type %}selected{% endif %}>{{ arrow }}</option>
+                {% endfor %}
+            </select>
+            <div class="links-row"><a href="/add_arrow">+ add arrow</a></div>
+
+            <span class="form-label">Quiver size</span>
+            <br>
+            {# Quiver size is locked while a quiver is in progress (partially
+               shot). It unlocks between quivers and at session start so the
+               user can adjust when an arrow breaks/gets lost. The server
+               enforces the same rule and rejects mismatched POSTs. #}
+            <input type="text" id="quiver_size" name="quiver_size" value="{{ quiver_size }}"{% if quiver_size_locked %} readonly{% endif %}>
+            {% if quiver_size_locked %}<div class="form-hint" style="font-size: 0.85em; color: #888;">locked until current quiver completes</div>{% endif %}
+
+            <span class="form-label">Remaining arrows in quiver</span>
+            <br>
+            <pre>{{ arrows_remaining }}</pre>
+            <input type="hidden" id="arrows_remaining" name="arrows_remaining" value="{{ arrows_remaining }}">
+
+
+            <span class="form-label">Quivers completed</span>
+            <br>
+            <pre>{{ quivers_completed }}</pre>
+            <input type="hidden" id="quivers_completed" name="quivers_completed" value="{{ quivers_completed }}">
+
+            <span class="form-label" id="distance-label">Distance to target (meters)</span>
+            <br>
+            <input type="text" id="distance" name="distance" value="{{ distance }}">
+
+            <span class="form-label">Notes</span>
+            <textarea name="session_notes" id="session_notes" rows="6">{{ session_notes }}</textarea>
+
+            <span class="form-label">Tags</span>
+            <div class="tag-input-wrap" style="position:relative;">
+                <input type="text" id="session_tags" name="session_tags"
+                       value="{{ session_tags }}"
+                       autocomplete="off"
+                       placeholder="comma-separated, e.g. windy, lesson, indoor">
+                <ul id="tag-suggestions" class="tag-suggestions" hidden></ul>
+            </div>
+
+        </div>
+    </div>
+    <input type="hidden" name="session_begin_time" id="session_begin_time" value="{{ session_begin_time }}">
+</form>
+
+<script>
+const stage   = document.getElementById('stage');
+const img     = document.getElementById('target-img');
+const svg     = document.getElementById('overlay');
+const xInput  = document.getElementById('x_coord');
+const yInput  = document.getElementById('y_coord');
+const readout = document.getElementById('coord-readout');
+const form    = document.getElementById('shot-form');
+
+const UNITS_KEY             = 'apollo_units';
+const PRECISION_STORAGE_KEY = 'apollo_precision_mode';
+const RECORD_MODE_KEY       = 'apollo_record_mode';
+
+const recordModeRadios = document.querySelectorAll('input[name="record_mode_radio"]');
+const recordModeHidden = document.getElementById('record_mode_hidden');
+
+function applyRecordMode(value) {
+    recordModeRadios.forEach(r => { r.checked = (r.value === value); });
+    recordModeHidden.value = value;
+    localStorage.setItem(RECORD_MODE_KEY, value);
+}
+
+const savedRecordMode = localStorage.getItem(RECORD_MODE_KEY) || '{{ record_mode }}';
+applyRecordMode(savedRecordMode);
+
+recordModeRadios.forEach(r => r.addEventListener('change', () => applyRecordMode(r.value)));
+
+// ── Precision mode ───────────────────────────────────────────────────────
+const precisionRadios = document.querySelectorAll('input[name="precision_mode"]');
+const isPreciseInput  = document.getElementById('is_precise');
+
+function applyPrecision(value) {
+    precisionRadios.forEach(r => { r.checked = (r.value === value); });
+    isPreciseInput.value = value;
+    localStorage.setItem(PRECISION_STORAGE_KEY, value);
+}
+
+const savedPrecision = localStorage.getItem(PRECISION_STORAGE_KEY) || '0';
+applyPrecision(savedPrecision);
+
+precisionRadios.forEach(r => r.addEventListener('change', () => applyPrecision(r.value)));
+
+// ── mm → display-unit conversion ─────────────────────────────────────────
+function mmToUnit(mmX, mmY) {
+    const cmX = Math.round(mmX / 10 * 10) / 10;
+    const cmY = Math.round(mmY / 10 * 10) / 10;
+    if (localStorage.getItem(UNITS_KEY) === 'imperial') {
+        return [Math.round(cmX / 2.54 * 10) / 10, Math.round(cmY / 2.54 * 10) / 10, 'in'];
+    }
+    return [cmX, cmY, 'cm'];
+}
+
+// ── Crosshair guide ──────────────────────────────────────────────────────
+function drawCrosshair() {
+    const existing = document.getElementById('crosshair');
+    if (existing) existing.remove();
+    const w = img.clientWidth, h = img.clientHeight;
+    const g = document.createElementNS('http://www.w3.org/2000/svg','g');
+    g.id = 'crosshair';
+    const mk = (tag, attrs) => {
+        const el = document.createElementNS('http://www.w3.org/2000/svg', tag);
+        Object.entries(attrs).forEach(([k,v]) => el.setAttribute(k,v));
+        return el;
+    };
+    g.append(
+        mk('line',{x1:0,   y1:h/2, x2:w,   y2:h/2, stroke:'rgba(0,0,0,0.15)', 'stroke-width':'1'}),
+        mk('line',{x1:w/2, y1:0,   x2:w/2, y2:h,   stroke:'rgba(0,0,0,0.15)', 'stroke-width':'1'}),
+        mk('circle',{cx:w/2, cy:h/2, r:5, fill:'none', stroke:'rgba(0,0,0,0.25)', 'stroke-width':'1.5'})
+    );
+    svg.prepend(g);
+}
+
+img.addEventListener('load', drawCrosshair);
+if (img.complete) drawCrosshair();
+
+// Re-render overlays whenever the image's rendered size changes (viewport
+// resize, layout reflow). Without this, the crosshair, past-shot markers,
+// and the active shot marker drift away from their true mm positions as
+// the canvas scales.
+function redrawOverlays() {
+    drawCrosshair();
+    drawPastShots();
+    const x = parseFloat(xInput.value);
+    const y = parseFloat(yInput.value);
+    if (!isNaN(x) && !isNaN(y) && !(x === 100000 && y === 100000)) {
+        const w = img.clientWidth, h = img.clientHeight;
+        clearMarker();
+        placeMarker(
+            w/2 + x * (w / window.APOLLO.target_width_mm),
+            h/2 - y * (h / window.APOLLO.target_height_mm),
+            x, y
+        );
+    }
+}
+
+if (typeof ResizeObserver !== 'undefined') {
+    new ResizeObserver(redrawOverlays).observe(img);
+} else {
+    window.addEventListener('resize', redrawOverlays);
+}
+
+// ── Past shot markers (current quiver) ───────────────────────────────────
+function drawPastShots() {
+    const existing = document.getElementById('past-shots-layer');
+    if (existing) existing.remove();
+
+    const shots = window.PAST_SHOTS || [];
+    if (!shots.length) return;
+
+    const w = img.clientWidth, h = img.clientHeight;
+    const layer = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+    layer.id = 'past-shots-layer';
+
+    const mk = (tag, attrs) => {
+        const el = document.createElementNS('http://www.w3.org/2000/svg', tag);
+        Object.entries(attrs).forEach(([k, v]) => el.setAttribute(k, v));
+        return el;
+    };
+
+    const scaleXp = w / window.APOLLO.target_width_mm;
+    const scaleYp = h / window.APOLLO.target_height_mm;
+    shots.forEach(shot => {
+        if (shot.x === 100000 && shot.y === 100000) return;
+
+        const dx = w / 2 + shot.x * scaleXp;
+        const dy = h / 2 - shot.y * scaleYp;
+
+        const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+        g.append(
+            mk('circle', { cx: dx, cy: dy, r: 8,  fill: '#fcba03', stroke: '#c98a00', 'stroke-width': '1.5' }),
+            mk('circle', { cx: dx, cy: dy, r: 3.5, fill: 'white' })
+        );
+        layer.appendChild(g);
+    });
+
+    // Insert past-shot layer just after the first child (the crosshair)
+    // when present; otherwise just append. Guards against the load-order
+    // case where the overlay isn't drawn yet.
+    const anchor = svg.firstChild ? svg.firstChild.nextSibling : null;
+    svg.insertBefore(layer, anchor);
+}
+
+// ── Restore marker on page load ──────────────────────────────────────────
+window.addEventListener('load', () => {
+    drawPastShots();
+
+    const x = parseFloat(xInput.value);
+    const y = parseFloat(yInput.value);
+    if (!isNaN(x) && !isNaN(y)) {
+        if (x === 100000 && y === 100000) {
+            readout.innerHTML = '<span style="color:#c97a4a;font-weight:700;">MISSED TARGET</span>';
+        } else {
+            const w = img.clientWidth, h = img.clientHeight;
+            const dx = w/2 + x * (w / window.APOLLO.target_width_mm);
+            const dy = h/2 - y * (h / window.APOLLO.target_height_mm);
+            placeMarker(dx, dy, x, y);
+            updateReadout(x, y);
+        }
+    }
+});
+
+// ── Click handler ────────────────────────────────────────────────────────
+stage.addEventListener('click', e => {
+    const r      = img.getBoundingClientRect();
+    const dx     = e.clientX - r.left;
+    const dy     = e.clientY - r.top;
+    // The stage wraps both <img> and <svg>, so clicks can land outside
+    // the image rect. Drop those instead of submitting bogus coords.
+    if (dx < 0 || dy < 0 || dx > r.width || dy > r.height) return;
+    const scaleX = window.APOLLO.target_width_mm  / r.width;
+    const scaleY = window.APOLLO.target_height_mm / r.height;
+    const cartX  = Math.round((dx - r.width  / 2) * scaleX * 10) / 10;
+    const cartY  = Math.round(-(dy - r.height / 2) * scaleY * 10) / 10;
+
+    xInput.value = cartX;
+    yInput.value = cartY;
+    clearMarker();
+    placeMarker(dx, dy, cartX, cartY);
+    readout.innerHTML = '<span style="color:#2e7d32;font-weight:700;">SHOT RECORDED</span>';
+    form.submit();
+});
+
+function fmt(v) { return (v >= 0 ? '+' : '') + v; }
+
+function updateReadout(x, y) {
+    const [cx, cy, unit] = mmToUnit(x, y);
+    readout.innerHTML =
+        `X&nbsp;<span id="disp-x" class="${cx<0?'neg':''}">${fmt(cx)}</span>` +
+        `&nbsp;&nbsp;` +
+        `Y&nbsp;<span id="disp-y" class="${cy<0?'neg':''}">${fmt(cy)}</span>` +
+        `&nbsp;<span style="opacity:0.55;font-size:0.85em">${unit}</span>`;
+}
+
+function clearMarker() {
+    const m = document.getElementById('shot-marker');
+    if (m) m.remove();
+}
+
+function placeMarker(dx, dy, cartX, cartY) {
+    const mk = (tag, attrs) => {
+        const el = document.createElementNS('http://www.w3.org/2000/svg', tag);
+        Object.entries(attrs).forEach(([k,v]) => el.setAttribute(k,v));
+        return el;
+    };
+    const [cx, cy, unit] = mmToUnit(cartX, cartY);
+    const g = document.createElementNS('http://www.w3.org/2000/svg','g');
+    g.id = 'shot-marker';
+    g.append(
+        mk('line',{x1:dx-10,y1:dy,   x2:dx+10,y2:dy,   stroke:'#fcba03','stroke-width':'2'}),
+        mk('line',{x1:dx,   y1:dy-10,x2:dx,   y2:dy+10,stroke:'#fcba03','stroke-width':'2'}),
+        mk('circle',{cx:dx,cy:dy,r:6,fill:'rgba(252,186,3,0.25)',stroke:'#fcba03','stroke-width':'2'}),
+        mk('text',{x:dx+12,y:dy-8,fill:'#1a3a5c','font-size':'10',
+                   'font-family':'Quantico,sans-serif','font-weight':'700',
+                   'paint-order':'stroke',stroke:'white','stroke-width':'3'})
+    );
+    g.querySelector('text').textContent = `(${fmt(cx)}, ${fmt(cy)}) ${unit}`;
+    svg.appendChild(g);
+}
+
+// ── Units toggle ─────────────────────────────────────────────────────────
+function applyUnits() {
+    const imperial   = localStorage.getItem(UNITS_KEY) === 'imperial';
+    const unitLabel  = imperial ? 'in' : 'cm';
+    const distLabel  = imperial ? 'Distance to target (yards)' : 'Distance to target (meters)';
+    const toggleText = imperial ? '⇄ Metric' : '⇄ Imperial';
+
+    document.getElementById('coord-hint').textContent =
+        `(0, 0) = center · +X right · +Y up · ${unitLabel}`;
+    document.getElementById('distance-label').textContent = distLabel;
+    document.getElementById('units-toggle').textContent = toggleText;
+
+    const x = parseFloat(xInput.value);
+    const y = parseFloat(yInput.value);
+    if (!isNaN(x) && !isNaN(y) && !(x === 100000 && y === 100000)) {
+        const w = img.clientWidth, h = img.clientHeight;
+        clearMarker();
+        placeMarker(
+            w/2 + x * (w / window.APOLLO.target_width_mm),
+            h/2 - y * (h / window.APOLLO.target_height_mm),
+            x, y
+        );
+        updateReadout(x, y);
+    }
+}
+
+document.getElementById('units-toggle').addEventListener('click', () => {
+    const current = localStorage.getItem(UNITS_KEY) || 'metric';
+    localStorage.setItem(UNITS_KEY, current === 'metric' ? 'imperial' : 'metric');
+    applyUnits();
+});
+
+applyUnits();
+
+// ── Missed target button ─────────────────────────────────────────────────
+document.getElementById('miss-btn').addEventListener('click', () => {
+    xInput.value = 100000;
+    yInput.value = 100000;
+    clearMarker();
+    readout.innerHTML = '<span style="color:#c97a4a;font-weight:700;">MISSED TARGET</span>';
+    form.submit();
+});
+
+// ── Leave-session warning ────────────────────────────────────────────────
+// Intercept clicks on any in-page link and offer to either stay or end the
+// session and follow the link. Links flagged with data-no-warn="1" (e.g. the
+// explicit "End session" link, which already routes through its own
+// confirmation page) skip the modal.
+const leaveModal     = document.getElementById('leave-modal');
+const leaveModalNext = document.getElementById('leave-modal-next');
+const leaveCancel    = document.getElementById('leave-modal-cancel');
+
+function openLeaveModal(targetUrl) {
+    leaveModalNext.value = targetUrl;
+    leaveModal.classList.add('open');
+}
+function closeLeaveModal() {
+    leaveModal.classList.remove('open');
+}
+
+document.querySelectorAll('a[href]').forEach(link => {
+    if (link.dataset.noWarn === '1') return;
+    const href = link.getAttribute('href');
+    if (!href || href.startsWith('#') || /^[a-z]+:/i.test(href)) return;  // skip anchors and external schemes
+    link.addEventListener('click', evt => {
+        evt.preventDefault();
+        openLeaveModal(href);
+    });
+});
+
+leaveCancel.addEventListener('click', closeLeaveModal);
+leaveModal.addEventListener('click', evt => {
+    // backdrop click closes
+    if (evt.target === leaveModal) closeLeaveModal();
+});
+document.addEventListener('keydown', evt => {
+    if (evt.key === 'Escape' && leaveModal.classList.contains('open')) closeLeaveModal();
+});
+
+// ── Tag autocomplete ─────────────────────────────────────────────────────
+(function () {
+    const input = document.getElementById('session_tags');
+    const list  = document.getElementById('tag-suggestions');
+    if (!input || !list) return;
+
+    const ALL_TAGS = {{ tag_suggestions | tojson }} || [];
+    let activeIdx = -1;
+    let currentMatches = [];
+
+    function splitTags(value) {
+        // Returns {before, current} — everything up to and including the
+        // last comma, and the in-progress fragment after it.
+        const lastComma = value.lastIndexOf(',');
+        if (lastComma === -1) return { before: '', current: value };
+        return {
+            before: value.slice(0, lastComma + 1),
+            current: value.slice(lastComma + 1),
+        };
+    }
+
+    function usedTagsLower(value) {
+        return new Set(
+            value.split(',')
+                 .map(t => t.trim().toLowerCase())
+                 .filter(Boolean)
+        );
+    }
+
+    function render(matches) {
+        list.innerHTML = '';
+        if (!matches.length) { list.hidden = true; return; }
+        matches.forEach((tag, i) => {
+            const li = document.createElement('li');
+            li.textContent = tag;
+            li.dataset.idx = String(i);
+            if (i === activeIdx) li.classList.add('active');
+            li.addEventListener('mousedown', evt => {
+                // mousedown (not click) so the input doesn't blur first
+                evt.preventDefault();
+                pick(i);
+            });
+            list.appendChild(li);
+        });
+        list.hidden = false;
+    }
+
+    function compute() {
+        const { current } = splitTags(input.value);
+        const frag = current.trim().toLowerCase();
+        const used = usedTagsLower(input.value);
+        // Exclude tags already present (other than the in-progress one).
+        currentMatches = ALL_TAGS.filter(tag => {
+            const lc = tag.toLowerCase();
+            if (used.has(lc) && lc !== frag) return false;
+            if (!frag) return !used.has(lc);
+            return lc.includes(frag) && lc !== frag;
+        }).slice(0, 8);
+        activeIdx = currentMatches.length ? 0 : -1;
+        render(currentMatches);
+    }
+
+    function pick(i) {
+        const tag = currentMatches[i];
+        if (!tag) return;
+        const { before } = splitTags(input.value);
+        const next = (before ? before.replace(/\s*$/, '') + ' ' : '') + tag + ', ';
+        input.value = next;
+        input.focus();
+        compute();
+    }
+
+    input.addEventListener('input', compute);
+    input.addEventListener('focus', compute);
+    input.addEventListener('blur', () => {
+        // Delay so a mousedown on a suggestion still fires pick()
+        setTimeout(() => { list.hidden = true; }, 120);
+    });
+    input.addEventListener('keydown', evt => {
+        if (list.hidden || !currentMatches.length) return;
+        if (evt.key === 'ArrowDown') {
+            evt.preventDefault();
+            activeIdx = (activeIdx + 1) % currentMatches.length;
+            render(currentMatches);
+        } else if (evt.key === 'ArrowUp') {
+            evt.preventDefault();
+            activeIdx = (activeIdx - 1 + currentMatches.length) % currentMatches.length;
+            render(currentMatches);
+        } else if (evt.key === 'Enter' || evt.key === 'Tab') {
+            if (activeIdx >= 0) {
+                evt.preventDefault();
+                pick(activeIdx);
+            }
+        } else if (evt.key === 'Escape') {
+            list.hidden = true;
+        }
+    });
+})();
+
+</script>
+</body>
+</html>

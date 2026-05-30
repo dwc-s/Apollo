@@ -1,0 +1,845 @@
+/* ═══════════════════════════════════════════════════
+   Apollo — style.css
+   ═══════════════════════════════════════════════════ */
+
+/* ── Global ───────────────────────────────────────── */
+body {
+    background-color: #d6e4f0;
+    padding: 20px;
+    padding-left: 240px;  /* leave room for fixed .side-nav */
+}
+
+a {
+    color: #636a80;
+}
+
+h4 {
+    font-family: "Quantico", sans-serif;
+    font-weight: 700;
+    color: #1a3a5c;
+    margin-bottom: 18px;
+}
+
+/* ── Typography helpers ───────────────────────────── */
+.quantico {
+    font-family: "Quantico", sans-serif;
+    font-weight: 700;
+}
+
+.quantico_light {
+    font-family: "Quantico", sans-serif;
+    font-weight: 300;
+}
+/* ── Title — used on add_arrow / add_bow / edit_bows ─ */
+/* Uniform size across all pages. !important locks the size so the
+   per-template fitTitle() JS can't scale it per title-length. */
+.title {
+    font-family: "Bungee Shade", sans-serif;
+    font-size: 96px !important;
+    color: #a1d8ed;
+    -webkit-text-stroke: 2px #636a80;
+    width: 90%;
+    margin: 0 auto 8px auto;
+    text-align: center;
+    white-space: nowrap;
+    overflow: hidden;
+    display: block;
+}
+.title-small {
+    font-family: "Quantico", sans-serif;
+    font-size: 25px;
+    color: #a1d8ed;
+    -webkit-text-stroke: 0px #636a80;
+    margin-bottom: 14px;
+    margin-left: 10px;
+    transform: rotate(2deg);
+    display: inline-block;
+}
+/* ── Title — splash page variant ─────────────────── */
+.title-splash {
+    font-family: "Bungee Shade", sans-serif;
+    font-size: 152px;
+    color: #a1d8ed;
+    -webkit-text-stroke: 2px #636a80;
+    margin: 0 auto 24px auto;
+    text-align: center;
+    display: block;
+}
+
+/* ═══════════════════════════════════════════════════
+   Shared form components
+   ═══════════════════════════════════════════════════ */
+
+/* ── Form panel (card container) ─────────────────── */
+.form-panel {
+    background-color: #b3c6e3;
+    border-radius: 25px;
+    padding: 22px;
+    max-width: 420px;
+    width: 50%;
+    margin: 0 auto;
+    margin-bottom: 12px;
+}
+
+/* Session page: panel grows to fill flex row */
+.form-panel.form-panel-session {
+    flex: 1;
+    min-width: 280px;
+    max-width: none;
+}
+
+.form-panel h4 {
+    margin: 0 0 14px 0;
+}
+
+/* ── Field label badge ────────────────────────────── */
+.form-label {
+    display: inline-block;
+    margin-bottom: 6px;
+    margin-top: 14px;
+    padding: 4px 10px;
+    background-color: #95abcf;
+    color: #333;
+    border-radius: 4px;
+    font-family: "Quantico", sans-serif;
+    font-weight: 700;
+    font-size: 0.85rem;
+}
+
+/* -- images -- */
+.arrow-left {
+    width: 100px;
+    height: 100px;
+    opacity: 0.6;
+    position: fixed;
+    top: 180px;    /* 10px from the top of .parent */
+    left: 420px;  /* 20px from the right of .parent */
+}
+.arrow-right {
+    width: 100px;
+    height: 100px;
+    opacity: 0.6;
+    position: absolute;
+    top: 180px;    /* 10px from the top of .parent */
+    left: 1400px;  /* 20px from the right of .parent */
+}
+
+/* ── Inputs / selects / textareas inside a panel ─── */
+.form-panel input[type="text"],
+.form-panel select,
+.form-panel textarea {
+    width: 100%;
+    padding: 7px;
+    box-sizing: border-box;
+    font-family: "Quantico", sans-serif;
+    border: 1px solid #95abcf;
+    border-radius: 4px;
+    background: #e8f0f8;
+}
+
+/* ── Tag autocomplete ─────────────────────────────── */
+.tag-input-wrap {
+    position: relative;
+}
+.tag-suggestions {
+    list-style: none;
+    margin: 2px 0 0 0;
+    padding: 0;
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 100%;
+    background: #fff;
+    border: 1px solid #95abcf;
+    border-radius: 4px;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.1);
+    max-height: 200px;
+    overflow-y: auto;
+    z-index: 20;
+    font-family: "Quantico", sans-serif;
+    font-size: 0.9rem;
+}
+.tag-suggestions li {
+    padding: 6px 10px;
+    cursor: pointer;
+}
+.tag-suggestions li:hover,
+.tag-suggestions li.active {
+    background: #d4e0f1;
+}
+
+/* ── Submit row ───────────────────────────────────── */
+.submit-row {
+    display: flex;
+    justify-content: space-between;
+    margin-top: 20px;
+}
+
+.submit-row button,
+.submit-row input[type="submit"] {
+    background-color: #757a9c;
+    color: white;
+    border: none;
+    padding: 10px 24px;
+    border-radius: 4px;
+    font-family: "Quantico", sans-serif;
+    font-weight: 700;
+    font-size: 0.95rem;
+    cursor: pointer;
+    transition: background-color 0.2s;
+}
+
+.submit-row button:hover,
+.submit-row input[type="submit"]:hover {
+    background-color: #4d5375;
+}
+
+/* ── Radio group ──────────────────────────────────── */
+.radio-group {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin: 6px 0;
+}
+
+.radio-option {
+    display: flex;
+    align-items: center;
+    cursor: pointer;
+    padding: 6px 12px;
+    background-color: rgba(161, 216, 237, 0.15);
+    border: 2px solid #a1d8ed;
+    border-radius: 20px;
+    font-family: "Quantico", sans-serif;
+    font-size: 0.85rem;
+    transition: all 0.2s ease;
+}
+
+.radio-option:hover {
+    background-color: rgba(161, 216, 237, 0.35);
+}
+
+.radio-option input {
+    margin-right: 6px;
+    accent-color: #a1d8ed;
+    width: 16px;
+    height: 16px;
+}
+
+/* ═══════════════════════════════════════════════════
+   Splash page
+   ═══════════════════════════════════════════════════ */
+
+.splash-panel {
+    background-color: #b3c6e3;
+    border-radius: 25px;
+    padding: 32px 38px;
+    max-width: 70%;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin: 0 auto;
+}
+
+.nav-item {
+    display: flex;
+    align-items: center;
+}
+
+.nav-badge {
+    display: inline-block;
+    padding: 4px 10px;
+    background-color: #95abcf;
+    color: #333;
+    border-radius: 4px;
+    font-family: "Quantico", sans-serif;
+    font-weight: 700;
+    font-size: 0.85rem;
+    margin-right: 10px;
+    min-width: 6px;
+    text-align: center;
+}
+
+.splash-panel a {
+    font-family: "Quantico", sans-serif;
+    font-weight: 700;
+    font-size: 1rem;
+    color: #1a3a5c;
+    text-decoration: none;
+    transition: color 0.2s;
+}
+
+.splash-panel a:hover {
+    color: #636a80;
+}
+
+/* ═══════════════════════════════════════════════════
+   Session page
+   ═══════════════════════════════════════════════════ */
+
+.session-layout {
+    display: flex;
+    gap: 20px;
+    align-items: flex-start;
+    flex-wrap: wrap;
+    margin-top: 10px;
+}
+
+/* ── Auto-submit toggle bar ───────────────────────── */
+.autosubmit-bar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    background-color: #b3c6e3;
+    border-radius: 12px;
+    padding: 8px 14px;
+    width: 100%;
+    box-sizing: border-box;
+}
+
+.autosubmit-label {
+    font-family: "Quantico", sans-serif;
+    font-weight: 700;
+    font-size: 0.85rem;
+    color: #1a3a5c;
+    white-space: nowrap;
+}
+
+/* ── Target ───────────────────────────────────────── */
+.target-panel {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+}
+
+.target-stage {
+    position: relative;
+    display: inline-block;
+    cursor: crosshair;
+    border: 2px solid #95abcf;
+    border-radius: 8px;
+    overflow: hidden;
+    box-shadow: 0 4px 14px rgba(99, 106, 128, 0.2);
+}
+
+#target-img {
+    display: block;
+    /* width / height injected via inline <style> in each template */
+    user-select: none;
+    pointer-events: none;
+}
+
+#overlay {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+}
+
+/* ── Coordinate display ───────────────────────────── */
+.coord-display {
+    background-color: #b3c6e3;
+    border-radius: 12px;
+    padding: 10px 18px;
+    width: 100%;
+    box-sizing: border-box;
+    text-align: center;
+}
+
+.coord-display .vals {
+    font-family: "Quantico", sans-serif;
+    font-weight: 700;
+    font-size: 1.1rem;
+    color: #1a3a5c;
+    letter-spacing: 0.05em;
+}
+
+.coord-display .vals span.neg {
+    color: #b05000;
+}
+
+.coord-hint {
+    font-family: "Quantico", sans-serif;
+    font-size: 0.65rem;
+    color: #636a80;
+    margin-top: 3px;
+}
+
+/* ── Clear / Miss buttons ─────────────────────────── */
+.clear-shot-btn {
+    background-color: #95abcf;
+    color: #333;
+    border: none;
+    padding: 5px 16px;
+    border-radius: 4px;
+    font-family: "Quantico", sans-serif;
+    font-weight: 700;
+    font-size: 0.75rem;
+    cursor: pointer;
+    transition: background-color 0.2s;
+    margin-top: 2px;
+}
+
+.clear-shot-btn:hover {
+    background-color: #636a80;
+    color: #fff;
+}
+
+/* ── Add links below selects ──────────────────────── */
+.links-row {
+    font-family: "Quantico", sans-serif;
+    font-size: 0.8rem;
+    margin-top: 6px;
+}
+
+/* ═══════════════════════════════════════════════════
+   End-session page
+   ═══════════════════════════════════════════════════ */
+
+.end-panel {
+    background-color: #b3c6e3;
+    border-radius: 25px;
+    padding: 28px 32px;
+    max-width: 420px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    margin: 0 auto;
+}
+
+.end-panel p {
+    font-family: "Quantico", sans-serif;
+    color: #636a80;
+    font-size: 0.85rem;
+    margin: 0;
+}
+
+.badge {
+    display: inline-block;
+    padding: 4px 10px;
+    background-color: #95abcf;
+    color: #333;
+    border-radius: 4px;
+    font-family: "Quantico", sans-serif;
+    font-weight: 700;
+    font-size: 0.85rem;
+}
+
+/* --- misc --- */
+.grid {
+  display: grid; /* Enables the grid layout */
+  grid-template-columns: repeat(3, 1fr); /* Creates 3 equal columns */
+  gap: 10px; /* Adds space between the grid items */
+}
+
+/* ═══════════════════════════════════════════════════
+   Previous Sessions table
+   ═══════════════════════════════════════════════════ */
+
+.sessions-table {
+    width: 80%;
+    border-collapse: separate;
+    border-spacing: 0 6px;
+    font-family: "Quantico", sans-serif;
+    font-size: 0.9rem;
+    color: #1a3a5c;
+    margin: 0 auto;
+}
+
+.sessions-table thead th {
+    background-color: #95abcf;
+    color: #333;
+    font-weight: 700;
+    padding: 8px 14px;
+    text-align: left;
+    font-size: 0.8rem;
+    letter-spacing: 0.04em;
+}
+
+.sessions-table thead th:first-child { border-radius: 8px 0 0 8px; }
+.sessions-table thead th:last-child  { border-radius: 0 8px 8px 0; }
+
+.sessions-table tbody tr td {
+    background-color: #b3c6e3;
+    padding: 8px 14px;
+    vertical-align: top;
+}
+
+.sessions-table tbody tr td:first-child { border-radius: 8px 0 0 8px; }
+.sessions-table tbody tr td:last-child  { border-radius: 0 8px 8px 0; }
+
+.sessions-table tbody tr:hover td {
+    background-color: #c4d4e8;
+}
+
+.sessions-table .session-group-header td {
+    background-color: #757a9c;
+    color: #fff;
+    font-weight: 700;
+    font-size: 0.85rem;
+    letter-spacing: 0.05em;
+    padding: 6px 14px;
+    border-radius: 8px;
+}
+
+.sessions-table .session-group-header:hover td {
+    background-color: #757a9c; /* don't highlight on hover */
+}
+
+.session-header-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+}
+
+.delete-session-form {
+    margin: 0;
+}
+
+.delete-session-btn {
+    background: transparent;
+    color: #fff;
+    border: 1px solid rgba(255, 255, 255, 0.45);
+    border-radius: 6px;
+    padding: 3px 12px;
+    font-family: 'Quantico', sans-serif;
+    font-size: 0.75rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    cursor: pointer;
+    transition: background 120ms ease, border-color 120ms ease;
+}
+
+.delete-session-btn:hover {
+    background: #b71c1c;
+    border-color: #b71c1c;
+}
+
+/* ── Units toggle — fixed top-right corner ─────────── */
+.units-corner-btn {
+    position: fixed;
+    top: 16px;
+    right: 16px;
+    z-index: 1000;
+}
+
+/* ── Help tooltip ─────────────────────────────────── */
+.has-tooltip {
+    position: relative;
+    cursor: help;
+    text-decoration: underline dotted;
+    text-decoration-color: rgba(26, 58, 92, 0.45);
+    text-underline-offset: 3px;
+}
+
+.has-tooltip::after {
+    content: attr(data-tooltip);
+    position: absolute;
+    left: 0;
+    top: calc(100% + 7px);
+    width: 230px;
+    background: #1a3a5c;
+    color: #e8f0f8;
+    font-family: "Quantico", sans-serif;
+    font-weight: 400;
+    font-size: 0.78rem;
+    line-height: 1.5;
+    padding: 8px 11px;
+    border-radius: 6px;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.28);
+    white-space: normal;
+    z-index: 200;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.15s ease;
+}
+
+.has-tooltip:hover::after {
+    opacity: 1;
+}
+
+/* ═══════════════════════════════════════════════════
+   Side nav — present on every page
+   ═══════════════════════════════════════════════════ */
+.side-nav {
+    position: fixed;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    width: 200px;
+    background-color: #b3c6e3;
+    padding: 22px 16px;
+    box-sizing: border-box;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    box-shadow: 2px 0 8px rgba(99, 106, 128, 0.18);
+    z-index: 500;
+}
+
+.side-nav-brand {
+    font-family: "Bungee Shade", sans-serif;
+    font-size: 28px;
+    color: #a1d8ed;
+    -webkit-text-stroke: 1px #636a80;
+    text-align: center;
+    margin-bottom: 10px;
+    text-decoration: none;
+    display: block;
+}
+
+.side-nav-link {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 8px;
+    border-radius: 6px;
+    font-family: "Quantico", sans-serif;
+    font-weight: 700;
+    font-size: 0.85rem;
+    color: #1a3a5c;
+    text-decoration: none;
+    transition: background-color 0.15s;
+}
+
+.side-nav-link:hover {
+    background-color: #95abcf;
+    color: #1a3a5c;
+}
+
+.side-nav-link .nav-badge {
+    margin-right: 0;
+}
+
+/* Pushes everything after it to the bottom of the panel so the units toggle
+   sits at the foot of the nav regardless of how many links live above. */
+.side-nav-spacer {
+    flex: 1 1 auto;
+}
+
+.side-nav-divider {
+    border: 0;
+    border-top: 1px solid #95abcf;
+    margin: 8px 4px;
+}
+
+.side-nav-units-btn {
+    background-color: #757a9c;
+    color: white;
+    border: none;
+    padding: 8px 10px;
+    border-radius: 6px;
+    font-family: "Quantico", sans-serif;
+    font-weight: 700;
+    font-size: 0.85rem;
+    cursor: pointer;
+    transition: background-color 0.2s;
+    text-align: left;
+}
+
+.side-nav-units-btn:hover {
+    background-color: #4d5375;
+}
+
+/* ── Export-data modal radio list ──────────────────── */
+.export-format-options {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin: 0 0 18px 0;
+}
+
+.export-format-options .radio-option {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-family: "Quantico", sans-serif;
+    color: #1a3a5c;
+    font-size: 0.92rem;
+    cursor: pointer;
+}
+
+/* ═══════════════════════════════════════════════════
+   Session-leave warning modal
+   ═══════════════════════════════════════════════════ */
+.modal-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(26, 58, 92, 0.55);
+    display: none;
+    align-items: center;
+    justify-content: center;
+    z-index: 2000;
+}
+
+.modal-backdrop.open {
+    display: flex;
+}
+
+.modal-card {
+    background-color: #d6e4f0;
+    border-radius: 18px;
+    padding: 28px 32px;
+    max-width: 460px;
+    width: 90%;
+    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.35);
+    font-family: "Quantico", sans-serif;
+    color: #1a3a5c;
+}
+
+.modal-card h3 {
+    margin: 0 0 12px 0;
+    font-family: "Quantico", sans-serif;
+    font-weight: 700;
+    color: #1a3a5c;
+}
+
+.modal-card p {
+    margin: 0 0 18px 0;
+    font-size: 0.95rem;
+    line-height: 1.4;
+}
+
+.modal-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+.modal-actions button {
+    background-color: #757a9c;
+    color: white;
+    border: none;
+    padding: 10px 18px;
+    border-radius: 6px;
+    font-family: "Quantico", sans-serif;
+    font-weight: 700;
+    font-size: 0.9rem;
+    cursor: pointer;
+    transition: background-color 0.2s;
+}
+
+.modal-actions button.secondary {
+    background-color: #95abcf;
+    color: #333;
+}
+
+.modal-actions button:hover {
+    background-color: #4d5375;
+}
+
+.modal-actions button.secondary:hover {
+    background-color: #636a80;
+    color: #fff;
+}
+/* ═══════════════════════════════════════════════════
+   Auth pages — login / register / account
+   ═══════════════════════════════════════════════════ */
+
+/* Input types used by the auth forms but not the original form panels.
+   Mirrors the existing .form-panel input[type="text"] rule so the auth
+   inputs match the rest of the app visually. */
+.form-panel input[type="email"],
+.form-panel input[type="password"] {
+    width: 100%;
+    padding: 7px;
+    box-sizing: border-box;
+    font-family: "Quantico", sans-serif;
+    border: 1px solid #95abcf;
+    border-radius: 4px;
+    background: #e8f0f8;
+}
+
+.auth-message {
+    font-family: "Quantico", sans-serif;
+    font-size: 0.95rem;
+    padding: 10px 14px;
+    border-radius: 6px;
+    margin: 0 auto 14px auto;
+    max-width: 420px;
+    width: 50%;
+    box-sizing: border-box;
+}
+.auth-message.error {
+    background-color: #f5c2c7;
+    color: #842029;
+    border: 1px solid #f1aeb5;
+}
+.auth-message.success {
+    background-color: #c6e3ce;
+    color: #0f5132;
+    border: 1px solid #b1d9bc;
+}
+
+.auth-meta {
+    text-align: center;
+    font-family: "Quantico", sans-serif;
+    color: #1a3a5c;
+    margin-top: 14px;
+}
+.auth-meta a {
+    color: #1a3a5c;
+    font-weight: 700;
+}
+
+/* User footer at the bottom of the side-nav — shows signed-in username
+   plus account/logout links. Replaces the previous units toggle as the
+   "always-visible bottom block" — units toggle is still rendered above. */
+.side-nav-user {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    font-family: "Quantico", sans-serif;
+    font-size: 0.85rem;
+    color: #1a3a5c;
+    padding: 4px 8px;
+}
+.side-nav-user .username {
+    font-weight: 700;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.side-nav-user a {
+    color: #1a3a5c;
+    text-decoration: none;
+}
+.side-nav-user a:hover {
+    text-decoration: underline;
+}
+.side-nav-user form {
+    margin: 0;
+}
+.side-nav-user .logout-btn {
+    background: none;
+    border: none;
+    padding: 0;
+    color: #1a3a5c;
+    font-family: inherit;
+    font-size: inherit;
+    cursor: pointer;
+    text-decoration: none;
+}
+.side-nav-user .logout-btn:hover {
+    text-decoration: underline;
+}
+
+.danger-zone {
+    margin-top: 32px;
+    padding-top: 18px;
+    border-top: 1px dashed #95abcf;
+}
+.danger-zone .form-label { background-color: #c87a7a; color: #fff; }
+.danger-zone input[type="submit"],
+.danger-zone button[type="submit"] {
+    background-color: #b04848;
+}
+.danger-zone input[type="submit"]:hover,
+.danger-zone button[type="submit"]:hover {
+    background-color: #872f2f;
+}

@@ -1,0 +1,521 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Bungee+Shade&family=Quantico:ital,wght@0,400;0,700;1,400;1,700&family=Rubik+Iso&display=swap" rel="stylesheet">
+    <link rel="stylesheet" type="text/css" href="{{ url_for('static', filename='style.css') }}">
+    <meta charset="UTF-8">
+    <title>Apollo::previous_sessions</title>
+    <style>
+        .replay-cell {
+            vertical-align: middle;
+            text-align: center;
+            padding: 10px 14px;
+            background: #0d1117;
+            border-left: 1px solid #1e2533;
+        }
+        .shot-replay {
+            display: block;
+            border-radius: 50%;
+            box-shadow: 0 0 0 2px #1e2d40, 0 0 16px rgba(28,90,160,0.35);
+            background: #000;
+        }
+        .replay-label {
+            font-family: 'Quantico', sans-serif;
+            font-size: 9px;
+            letter-spacing: 0.12em;
+            text-transform: uppercase;
+            color: #4a6080;
+            text-align: center;
+            margin-top: 5px;
+        }
+        .session-search {
+            width: 80%;
+            margin: 0 auto 18px auto;
+            padding: 14px 18px;
+            background: #95abcf;
+            border-radius: 10px;
+            font-family: 'Quantico', sans-serif;
+            color: #1a3a5c;
+            box-sizing: border-box;
+        }
+        .session-search-fields {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+            gap: 10px 14px;
+        }
+        .session-search label {
+            display: flex;
+            flex-direction: column;
+            font-size: 0.7rem;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            font-weight: 700;
+            color: #1a3a5c;
+            gap: 4px;
+        }
+        .session-search input,
+        .session-search select {
+            font-family: 'Quantico', sans-serif;
+            font-size: 0.9rem;
+            padding: 6px 8px;
+            border: 1px solid #6b80a8;
+            border-radius: 4px;
+            background: #eef2f9;
+            color: #1a3a5c;
+        }
+        .session-search-actions {
+            margin-top: 12px;
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+        .session-search button,
+        .session-search a.clear-btn {
+            font-family: 'Quantico', sans-serif;
+            font-size: 0.85rem;
+            letter-spacing: 0.05em;
+            text-transform: uppercase;
+            padding: 6px 14px;
+            border-radius: 4px;
+            border: 1px solid #1a3a5c;
+            background: #1a3a5c;
+            color: #fff;
+            cursor: pointer;
+            text-decoration: none;
+            display: inline-block;
+        }
+        .session-search a.clear-btn {
+            background: transparent;
+            color: #1a3a5c;
+        }
+        .tags-cell {
+            max-width: 180px;
+        }
+        .tag-chip {
+            display: inline-block;
+            background: #1e2d40;
+            color: #cfe0f7;
+            border: 1px solid #3a4a66;
+            border-radius: 10px;
+            padding: 1px 8px;
+            margin: 1px 2px;
+            font-family: 'Quantico', sans-serif;
+            font-size: 0.75rem;
+            line-height: 1.4;
+            white-space: nowrap;
+        }
+        .session-search .result-count {
+            margin-left: auto;
+            font-size: 0.8rem;
+            color: #1a3a5c;
+        }
+    </style>
+    <script defer src="{{ url_for('static', filename='apollo-nav.js') }}"></script>
+    <script defer src="{{ url_for('static', filename='apollo-replay.js') }}"></script>
+</head>
+<body>
+<nav class="side-nav">
+    <a href="/" class="side-nav-brand">Apollo</a>
+    <a href="/sesh" class="side-nav-link"><span class="nav-badge">→</span>Start session</a>
+    <a href="/previous_sessions" class="side-nav-link"><span class="nav-badge">→</span>Previous sessions</a>
+    <hr class="side-nav-divider">
+    <a href="/analyze" class="side-nav-link"><span class="nav-badge">→</span>Analyze data</a>
+    <hr class="side-nav-divider">
+    <a href="/add_bow" class="side-nav-link"><span class="nav-badge">→</span>Add bow</a>
+    <a href="/add_arrow" class="side-nav-link"><span class="nav-badge">→</span>Add arrow</a>
+    <a href="/edit_bows" class="side-nav-link"><span class="nav-badge">→</span>Edit bows</a>
+    <a href="/edit_arrows" class="side-nav-link"><span class="nav-badge">→</span>Edit arrows</a>
+    <a href="/add_target" class="side-nav-link"><span class="nav-badge">→</span>Add target</a>
+    <a href="/edit_targets" class="side-nav-link"><span class="nav-badge">→</span>Edit targets</a>
+    <hr class="side-nav-divider">
+    <a href="#" id="export-link" class="side-nav-link"><span class="nav-badge">⬇</span>Export data</a>
+    <a href="#" id="import-link" class="side-nav-link"><span class="nav-badge">⬆</span>Import data</a>
+    {% if current_user and current_user.is_root %}
+    <hr class="side-nav-divider">
+    <a href="/admin" class="side-nav-link"><span class="nav-badge">★</span>Admin</a>
+    {% endif %}
+    <hr class="side-nav-divider">
+    <button type="button" id="units-toggle" class="side-nav-units-btn">⇄ Imperial</button>
+    <div class="side-nav-spacer"></div>
+    {% if current_user %}
+    <div class="side-nav-user">
+        <span class="username">{{ current_user.username }}</span>
+        <a href="/account">Account</a>
+        <form action="/logout" method="POST">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <button type="submit" class="logout-btn">Sign out</button>
+        </form>
+    </div>
+    {% endif %}
+</nav>
+<h1 class="title">Previous Sessions</h1>
+<form class="session-search" method="GET" action="{{ url_for('previous_sessions') }}">
+    <div class="session-search-fields">
+        <label>Notes
+            <input type="text" name="q_notes" value="{{ filters.q_notes }}" placeholder="text in session notes">
+        </label>
+        <label>Tags
+            <div class="tag-input-wrap" style="position:relative;">
+                <input type="text" id="q_tags" name="q_tags"
+                       value="{{ filters.q_tags }}"
+                       autocomplete="off"
+                       placeholder="comma-separated tags">
+                <ul id="q-tag-suggestions" class="tag-suggestions" hidden></ul>
+            </div>
+        </label>
+        <label>Target
+            <select name="q_target">
+                <option value="">Any target</option>
+                {% for opt in target_options %}
+                <option value="{{ opt }}" {% if filters.q_target == opt %}selected{% endif %}>{{ opt }}</option>
+                {% endfor %}
+            </select>
+        </label>
+        <label>Bow
+            <select name="q_bow">
+                <option value="">Any bow</option>
+                {% for opt in bow_options %}
+                <option value="{{ opt }}" {% if filters.q_bow == opt %}selected{% endif %}>{{ opt }}</option>
+                {% endfor %}
+            </select>
+        </label>
+        <label>Arrow
+            <select name="q_arrow">
+                <option value="">Any arrow</option>
+                {% for opt in arrow_options %}
+                <option value="{{ opt }}" {% if filters.q_arrow == opt %}selected{% endif %}>{{ opt }}</option>
+                {% endfor %}
+            </select>
+        </label>
+        <label>Date from
+            <input type="date" name="date_from" value="{{ filters.date_from }}">
+        </label>
+        <label>Date to
+            <input type="date" name="date_to" value="{{ filters.date_to }}">
+        </label>
+    </div>
+    <div class="session-search-actions">
+        <button type="submit">Search</button>
+        <a class="clear-btn" href="{{ url_for('previous_sessions') }}">Clear</a>
+        <span class="result-count">
+            {{ session_data|length }} session{{ '' if session_data|length == 1 else 's' }} shown
+        </span>
+    </div>
+</form>
+<script>
+(function fitTitleInit() {
+    function fitTitle() {
+        document.querySelectorAll('.title').forEach(el => {
+            el.style.fontSize = '200px';
+            let fs = 200;
+            while (el.scrollWidth > el.clientWidth && fs > 14) {
+                fs -= 2;
+                el.style.fontSize = fs + 'px';
+            }
+        });
+    }
+    window.addEventListener('load', fitTitle);
+    window.addEventListener('resize', fitTitle);
+})();
+</script>
+<table class="sessions-table">
+  <thead>
+    <tr>
+      <th>Timestamp</th>
+      <th>Bow</th>
+      <th>Arrow</th>
+      <th>Stats</th>
+      <th>Session Notes</th>
+      <th>Tags</th>
+      <th title="Estimated or precisely measured placement">Placement</th>
+      <th id="th-x">X (cm)</th>
+      <th id="th-y">Y (cm)</th>
+      <th>Replay</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for session_id, data in session_data.items()|reverse %}
+      {% set rows = data['rows'] %}
+      {% set stats = data['stats'] %}
+      {% set qs = (rows[0]['quiver_size'] | string | int) if rows else 0 %}
+      {# Fall back to the global default target when this session's target row
+         was hard-deleted — without this the replay canvas paints black. #}
+      {% set replay_target = data['target'] or default_target %}
+      <tr class="session-group-header">
+        <td colspan="10">
+          <div class="session-header-row">
+            <span>
+              Session {{ session_id }} &mdash; {{ stats['pretty_session_length'] }}
+              &nbsp;&nbsp;|&nbsp;&nbsp;
+              {{ stats['arrows_shot'] }} arrows &nbsp;&mdash;&nbsp;
+              {{ stats['hit_shots'] }} hit ({{ stats['percent_hit'] }}%),
+              {{ stats['missed_shots'] }} missed ({{ stats['percent_missed'] }}%)
+              {% if stats['scored_quiver_count'] %}
+                &nbsp;&nbsp;|&nbsp;&nbsp;
+                <strong>Score:</strong>
+                {{ stats['session_total_score'] }} / {{ stats['session_max_score'] }} pts
+                ({{ stats['scored_quiver_count'] }}
+                 quiver{{ '' if stats['scored_quiver_count'] == 1 else 's' }} scored)
+              {% endif %}
+            </span>
+            <form method="POST"
+                  action="{{ url_for('delete_session', session_id=session_id) }}"
+                  class="delete-session-form"
+                  onsubmit="return confirm('Delete session {{ session_id }}? This permanently removes all of its shots.');">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <button type="submit" class="delete-session-btn" title="Delete this session">Delete</button>
+            </form>
+          </div>
+        </td>
+      </tr>
+      {% set ns = namespace(first_row_rendered=false) %}
+      {% if qs > 0 %}
+        {% for quiver_rows in rows | batch(qs) %}
+          {% set quiver_num = loop.index %}
+          {% set q_stat = stats["stats_by_quiver"][quiver_num] if quiver_num in stats["stats_by_quiver"] else None %}
+          {% for row in quiver_rows %}
+          <tr>
+            <td>{{ row[0] | fmt_ts }}</td>
+            <td>{{ row['bow'] }}</td>
+            <td>{{ row['arrow_type'] }}</td>
+            {% if loop.first %}
+            <td rowspan="{{ quiver_rows | length }}">
+              {% if q_stat %}
+                <strong>Quiver #{{ q_stat["quiver_number"] }}</strong><br>
+                Hit: {{ q_stat["number_hit"] }} ({{ q_stat["percent_hit"] }}%)<br>
+                Missed: {{ q_stat["number_missed"] }} ({{ q_stat["percent_missed"] }}%)
+                {% if 'score_points' in q_stat %}
+                  <br>Score: {{ q_stat["score_points"] }} / {{ q_stat["max_score"] }} pts
+                {% endif %}
+              {% else %}
+                Quiver #{{ quiver_num }}<br><em>incomplete</em>
+              {% endif %}
+            </td>
+            {% endif %}
+            <td>{{ row['session_notes'] }}</td>
+            <td class="tags-cell">
+              {% for tag in (row['session_tags'] or '').split(',') if tag.strip() %}
+                <span class="tag-chip">{{ tag.strip() }}</span>
+              {% endfor %}
+            </td>
+            <td style="text-align:center;white-space:nowrap;">
+              {% if row['is_precise'] == 1 %}
+                <span style="color:#4caf50;font-weight:700;" title="Precisely measured">Precise</span>
+              {% else %}
+                <span style="color:#888;" title="Estimated placement">Est.</span>
+              {% endif %}
+            </td>
+            <td class="x-coord">{{ row['x_coord'] }}</td>
+            <td class="y-coord">{{ row['y_coord'] }}</td>
+            {% if not ns.first_row_rendered %}
+            <td class="replay-cell" rowspan="{{ rows | length }}">
+              <canvas
+                class="shot-replay"
+                width="360" height="360"
+                data-shots='[{% for r in rows %}{"x":"{{ r["x_coord"] or "" }}","y":"{{ r["y_coord"] or "" }}"}{% if not loop.last %},{% endif %}{% endfor %}]'
+                data-record-mode="{{ stats['record_mode'] }}"
+                data-target-image="{{ url_for('static', filename=replay_target['target_image']) if replay_target else '' }}"
+                data-target-width-mm="{{ replay_target['target_width_mm'] if replay_target else 0 }}"
+                data-img-width="{{ replay_target['img_width'] if replay_target else 0 }}"
+              ></canvas>
+              <div class="replay-label">2&times; speed{% if replay_target %} &mdash; {{ replay_target['name'] }}{% endif %}</div>
+            </td>
+            {% set ns.first_row_rendered = true %}
+            {% endif %}
+          </tr>
+          {% endfor %}
+        {% endfor %}
+      {% else %}
+        {# No quiver size set — render rows without quiver breakdown #}
+        {% for row in rows %}
+        <tr>
+          <td>{{ row[0] | fmt_ts }}</td>
+          <td>{{ row['bow'] }}</td>
+          <td>{{ row['arrow_type'] }}</td>
+          <td>&mdash;</td>
+          <td>{{ row['session_notes'] }}</td>
+          <td class="tags-cell">
+            {% for tag in (row['session_tags'] or '').split(',') if tag.strip() %}
+              <span class="tag-chip">{{ tag.strip() }}</span>
+            {% endfor %}
+          </td>
+          <td style="text-align:center;white-space:nowrap;">
+            {% if row['is_precise'] == 1 %}
+              <span style="color:#4caf50;font-weight:700;" title="Precisely measured">Precise</span>
+            {% else %}
+              <span style="color:#888;" title="Estimated placement">Est.</span>
+            {% endif %}
+          </td>
+          <td class="x-coord">{{ row['x_coord'] }}</td>
+          <td class="y-coord">{{ row['y_coord'] }}</td>
+          {% if loop.first %}
+          <td class="replay-cell" rowspan="{{ rows | length }}">
+            <canvas
+              class="shot-replay"
+              width="360" height="360"
+              data-shots='[{% for r in rows %}{"x":"{{ r["x_coord"] or "" }}","y":"{{ r["y_coord"] or "" }}"}{% if not loop.last %},{% endif %}{% endfor %}]'
+              data-record-mode="{{ stats['record_mode'] }}"
+              data-target-image="{{ url_for('static', filename=replay_target['target_image']) if replay_target else '' }}"
+              data-target-width-mm="{{ replay_target['target_width_mm'] if replay_target else 0 }}"
+              data-img-width="{{ replay_target['img_width'] if replay_target else 0 }}"
+            ></canvas>
+            <div class="replay-label">2&times; speed{% if replay_target %} &mdash; {{ replay_target['name'] }}{% endif %}</div>
+          </td>
+          {% endif %}
+        </tr>
+        {% endfor %}
+      {% endif %}
+    {% endfor %}
+  </tbody>
+</table>
+
+<script>
+const UNITS_KEY = 'apollo_units';
+
+// Stored coords are physical mm (see apollo.py docstring), so display
+// conversion is just mm→cm or mm→inches — no per-target scaling needed.
+function mmToUnit(mmX, mmY) {
+    const cmX = Math.round(mmX / 10 * 10) / 10;
+    const cmY = Math.round(mmY / 10 * 10) / 10;
+    if (localStorage.getItem(UNITS_KEY) === 'imperial') {
+        return [Math.round(cmX / 2.54 * 10) / 10, Math.round(cmY / 2.54 * 10) / 10, 'in'];
+    }
+    return [cmX, cmY, 'cm'];
+}
+
+function convertTableCoords() {
+    document.querySelectorAll('.sessions-table tbody tr:not(.session-group-header)').forEach(row => {
+        const xCell = row.querySelector('.x-coord');
+        const yCell = row.querySelector('.y-coord');
+        if (!xCell || !yCell) return;
+        // Stash raw mm values on first pass so we can re-convert on unit toggle.
+        if (xCell.dataset.rawX === undefined) {
+            xCell.dataset.rawX = xCell.textContent.trim();
+            yCell.dataset.rawY = yCell.textContent.trim();
+        }
+        const xRaw = parseFloat(xCell.dataset.rawX);
+        const yRaw = parseFloat(yCell.dataset.rawY);
+        if (isNaN(xRaw) || isNaN(yRaw)) return;
+        if (xRaw === 100000 && yRaw === 100000) {
+            xCell.textContent = '—';
+            yCell.textContent = '—';
+        } else {
+            const [cx, cy] = mmToUnit(xRaw, yRaw);
+            xCell.textContent = cx;
+            yCell.textContent = cy;
+        }
+    });
+}
+
+function applyUnits() {
+    const imperial   = localStorage.getItem(UNITS_KEY) === 'imperial';
+    const unitLabel  = imperial ? 'in' : 'cm';
+    const toggleText = imperial ? '⇄ Metric' : '⇄ Imperial';
+    document.getElementById('th-x').textContent = `X (${unitLabel})`;
+    document.getElementById('th-y').textContent = `Y (${unitLabel})`;
+    document.getElementById('units-toggle').textContent = toggleText;
+    convertTableCoords();
+}
+
+document.getElementById('units-toggle').addEventListener('click', () => {
+    const current = localStorage.getItem(UNITS_KEY) || 'metric';
+    localStorage.setItem(UNITS_KEY, current === 'metric' ? 'imperial' : 'metric');
+    applyUnits();
+});
+
+document.addEventListener('DOMContentLoaded', applyUnits);
+
+// ── Tag autocomplete (search filter) ─────────────────────────────────────
+(function () {
+    const input = document.getElementById('q_tags');
+    const list  = document.getElementById('q-tag-suggestions');
+    if (!input || !list) return;
+
+    const ALL_TAGS = {{ tag_suggestions | tojson }} || [];
+    let activeIdx = -1;
+    let currentMatches = [];
+
+    function splitTags(value) {
+        const lastComma = value.lastIndexOf(',');
+        if (lastComma === -1) return { before: '', current: value };
+        return {
+            before: value.slice(0, lastComma + 1),
+            current: value.slice(lastComma + 1),
+        };
+    }
+
+    function usedTagsLower(value) {
+        return new Set(
+            value.split(',').map(t => t.trim().toLowerCase()).filter(Boolean)
+        );
+    }
+
+    function render(matches) {
+        list.innerHTML = '';
+        if (!matches.length) { list.hidden = true; return; }
+        matches.forEach((tag, i) => {
+            const li = document.createElement('li');
+            li.textContent = tag;
+            if (i === activeIdx) li.classList.add('active');
+            li.addEventListener('mousedown', evt => {
+                evt.preventDefault();
+                pick(i);
+            });
+            list.appendChild(li);
+        });
+        list.hidden = false;
+    }
+
+    function compute() {
+        const { current } = splitTags(input.value);
+        const frag = current.trim().toLowerCase();
+        const used = usedTagsLower(input.value);
+        currentMatches = ALL_TAGS.filter(tag => {
+            const lc = tag.toLowerCase();
+            if (used.has(lc) && lc !== frag) return false;
+            if (!frag) return !used.has(lc);
+            return lc.includes(frag) && lc !== frag;
+        }).slice(0, 8);
+        activeIdx = currentMatches.length ? 0 : -1;
+        render(currentMatches);
+    }
+
+    function pick(i) {
+        const tag = currentMatches[i];
+        if (!tag) return;
+        const { before } = splitTags(input.value);
+        input.value = (before ? before.replace(/\s*$/, '') + ' ' : '') + tag + ', ';
+        input.focus();
+        compute();
+    }
+
+    input.addEventListener('input', compute);
+    input.addEventListener('focus', compute);
+    input.addEventListener('blur', () => {
+        setTimeout(() => { list.hidden = true; }, 120);
+    });
+    input.addEventListener('keydown', evt => {
+        if (list.hidden || !currentMatches.length) return;
+        if (evt.key === 'ArrowDown') {
+            evt.preventDefault();
+            activeIdx = (activeIdx + 1) % currentMatches.length;
+            render(currentMatches);
+        } else if (evt.key === 'ArrowUp') {
+            evt.preventDefault();
+            activeIdx = (activeIdx - 1 + currentMatches.length) % currentMatches.length;
+            render(currentMatches);
+        } else if (evt.key === 'Enter' || evt.key === 'Tab') {
+            if (activeIdx >= 0) {
+                evt.preventDefault();
+                pick(activeIdx);
+            }
+        } else if (evt.key === 'Escape') {
+            list.hidden = true;
+        }
+    });
+})();
+</script>
+</body>
+</html>

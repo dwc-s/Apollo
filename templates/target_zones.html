@@ -1,0 +1,589 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Bungee+Shade&family=Quantico:ital,wght@0,400;0,700;1,400;1,700&family=Rubik+Iso&display=swap" rel="stylesheet">
+    <link rel="stylesheet" type="text/css" href="{{ url_for('static', filename='style.css') }}">
+    <meta charset="UTF-8">
+    <title>Apollo::target_zones</title>
+    <style>
+        .zones-wrap {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 18px;
+            justify-content: center;
+            align-items: flex-start;
+            padding: 0 14px 24px;
+        }
+        .zones-stage {
+            position: relative;
+            display: inline-block;
+            cursor: crosshair;
+            border: 2px solid #95abcf;
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: 0 4px 14px rgba(99, 106, 128, 0.2);
+            background: #000;
+            max-width: 100%;
+        }
+        .zones-stage img {
+            display: block;
+            max-width: min(640px, 90vw);
+            height: auto;
+            user-select: none;
+            pointer-events: none;
+        }
+        .zones-stage svg {
+            position: absolute;
+            top: 0; left: 0;
+            width: 100%; height: 100%;
+            pointer-events: none;
+        }
+        .zones-panel {
+            background-color: #b3c6e3;
+            border-radius: 18px;
+            padding: 16px;
+            min-width: 320px;
+            max-width: 460px;
+            flex: 1 1 360px;
+            font-family: "Quantico", sans-serif;
+            color: #1a3a5c;
+        }
+        .zones-panel h2 {
+            font-family: "Quantico", sans-serif;
+            font-size: 1.05rem;
+            margin: 0 0 10px 0;
+            text-align: center;
+        }
+        .zones-caption {
+            font-size: 0.85rem;
+            margin-bottom: 12px;
+            opacity: 0.85;
+            text-align: center;
+        }
+        .zone-row {
+            display: grid;
+            grid-template-columns: 26px 1fr 70px 90px 28px;
+            gap: 6px;
+            align-items: center;
+            margin-bottom: 6px;
+        }
+        .zone-row .swatch {
+            width: 18px; height: 18px;
+            border-radius: 50%;
+            border: 1px solid #1a3a5c;
+        }
+        .zone-row input[type="text"],
+        .zone-row input[type="number"] {
+            font-family: "Quantico", sans-serif;
+            font-size: 0.85rem;
+            padding: 4px 6px;
+            width: 100%;
+            box-sizing: border-box;
+        }
+        .zone-row button.del {
+            background: #e63946;
+            color: #fff;
+            border: none;
+            border-radius: 4px;
+            font-family: "Quantico", sans-serif;
+            font-weight: 700;
+            cursor: pointer;
+            padding: 4px 0;
+        }
+        .zone-header {
+            display: grid;
+            grid-template-columns: 26px 1fr 70px 90px 28px;
+            gap: 6px;
+            font-size: 0.75rem;
+            font-weight: 700;
+            opacity: 0.7;
+            margin-bottom: 4px;
+            padding: 0 2px;
+        }
+        .zones-add-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+            align-items: center;
+            margin: 10px 0 4px 0;
+            font-size: 0.85rem;
+        }
+        .zones-add-row input[type="number"] {
+            width: 90px;
+            padding: 4px 6px;
+            font-family: "Quantico", sans-serif;
+        }
+        .zones-actions {
+            display: flex;
+            justify-content: center;
+            gap: 10px;
+            margin-top: 12px;
+            flex-wrap: wrap;
+        }
+        .zones-actions button, .zones-add-row button {
+            background-color: #95abcf;
+            color: #333;
+            border: none;
+            padding: 7px 14px;
+            border-radius: 6px;
+            font-family: "Quantico", sans-serif;
+            font-weight: 700;
+            font-size: 0.85rem;
+            cursor: pointer;
+        }
+        .zones-actions button:hover, .zones-add-row button:hover {
+            background-color: #636a80;
+            color: #fff;
+        }
+        .zones-actions button:disabled {
+            opacity: 0.45;
+            cursor: not-allowed;
+        }
+        .zones-msg {
+            text-align: center;
+            font-family: "Quantico", sans-serif;
+            font-size: 0.85rem;
+            margin-top: 8px;
+            min-height: 1.2em;
+        }
+        .zones-msg.ok { color: #2e7d32; }
+        .zones-msg.err { color: #8a0000; }
+        .zones-empty {
+            text-align: center;
+            font-size: 0.85rem;
+            opacity: 0.7;
+            padding: 12px 0;
+        }
+    </style>
+    <script defer src="{{ url_for('static', filename='apollo-nav.js') }}"></script>
+</head>
+<body>
+<nav class="side-nav">
+    <a href="/" class="side-nav-brand">Apollo</a>
+    <a href="/sesh" class="side-nav-link"><span class="nav-badge">→</span>Start session</a>
+    <a href="/previous_sessions" class="side-nav-link"><span class="nav-badge">→</span>Previous sessions</a>
+    <hr class="side-nav-divider">
+    <a href="/analyze" class="side-nav-link"><span class="nav-badge">→</span>Analyze data</a>
+    <hr class="side-nav-divider">
+    <a href="/add_bow" class="side-nav-link"><span class="nav-badge">→</span>Add bow</a>
+    <a href="/add_arrow" class="side-nav-link"><span class="nav-badge">→</span>Add arrow</a>
+    <a href="/edit_bows" class="side-nav-link"><span class="nav-badge">→</span>Edit bows</a>
+    <a href="/edit_arrows" class="side-nav-link"><span class="nav-badge">→</span>Edit arrows</a>
+    <a href="/add_target" class="side-nav-link"><span class="nav-badge">→</span>Add target</a>
+    <a href="/edit_targets" class="side-nav-link"><span class="nav-badge">→</span>Edit targets</a>
+    <hr class="side-nav-divider">
+    <a href="#" id="export-link" class="side-nav-link"><span class="nav-badge">⬇</span>Export data</a>
+    <a href="#" id="import-link" class="side-nav-link"><span class="nav-badge">⬆</span>Import data</a>
+    {% if current_user and current_user.is_root %}
+    <hr class="side-nav-divider">
+    <a href="/admin" class="side-nav-link"><span class="nav-badge">★</span>Admin</a>
+    {% endif %}
+    <hr class="side-nav-divider">
+    <button type="button" id="units-toggle" class="side-nav-units-btn">⇄ Imperial</button>
+    <div class="side-nav-spacer"></div>
+    {% if current_user %}
+    <div class="side-nav-user">
+        <span class="username">{{ current_user.username }}</span>
+        <a href="/account">Account</a>
+        <form action="/logout" method="POST">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <button type="submit" class="logout-btn">Sign out</button>
+        </form>
+    </div>
+    {% endif %}
+</nav>
+<h1 class="title">Zones — {{ target.name }}</h1>
+<script>
+(function fitTitleInit() {
+    function fitTitle() {
+        document.querySelectorAll('.title').forEach(el => {
+            el.style.fontSize = '200px';
+            let fs = 200;
+            while (el.scrollWidth > el.clientWidth && fs > 14) {
+                fs -= 2;
+                el.style.fontSize = fs + 'px';
+            }
+        });
+    }
+    window.addEventListener('load', fitTitle);
+    window.addEventListener('resize', fitTitle);
+})();
+</script>
+
+<div class="zones-wrap">
+    <div class="zones-stage" id="stage">
+        <img id="target-img"
+             src="{{ url_for('static', filename=target.target_image) }}"
+             alt="{{ target.name }}">
+        <svg id="overlay" xmlns="http://www.w3.org/2000/svg"></svg>
+    </div>
+
+    <div class="zones-panel">
+        <h2>Scoring zones</h2>
+        <div class="zones-caption">
+            Click anywhere on the target to add a concentric ring at that
+            radius from center. Edit name, points, or radius below.
+        </div>
+
+        <div class="zone-header">
+            <span></span>
+            <span>Name</span>
+            <span>Points</span>
+            <span id="radius-header">Radius (mm)</span>
+            <span></span>
+        </div>
+        <div id="zones-list"></div>
+        <div class="zones-empty" id="zones-empty">No zones yet.</div>
+
+        <div class="zones-add-row">
+            <span>Add ring at:</span>
+            <input type="number" id="add-radius" step="0.1" min="0.1" placeholder="mm">
+            <span id="add-unit">mm</span>
+            <button type="button" id="btn-add-by-radius">Add</button>
+        </div>
+
+        <div class="zones-actions">
+            <a href="/edit_targets" style="text-decoration:none;">
+                <button type="button">← Back</button>
+            </a>
+            <button type="button" id="btn-clear">Clear all</button>
+            <button type="button" id="btn-save">Save zones</button>
+        </div>
+
+        <div class="zones-msg" id="msg"></div>
+    </div>
+</div>
+
+<script>
+const UNITS_KEY = 'apollo_units';
+const MM_PER_IN = 25.4;
+const CSRF_TOKEN = "{{ csrf_token() }}";
+
+const TARGET_ID         = {{ target.target_id }};
+const TARGET_SIZE_MM    = parseFloat("{{ target.target_width_mm }}");
+// Targets are square and the saved file is cropped so the calibrated
+// target center sits at the geometric center of the image. That lets us
+// convert displayed pixels ↔ mm with a single ratio, matching the
+// formula session.html uses to render shots — so zones and shot markers
+// stay pixel-perfect against each other regardless of CSS scaling.
+//
+// Deliberately routed through the displayed bounding rect rather than
+// img.naturalWidth + image_size_px. Those two CAN disagree by 1 px in
+// rare banker's-rounding cases inside add_target's crop step, and
+// mixing them would amplify the error instead of cancelling it.
+const MAX_RADIUS_MM     = TARGET_SIZE_MM;  // ring at full edge — circle inscribed in the square crop is edge/2; allow corners
+
+const ZONE_COLORS = [
+    '#e63946', '#f4a261', '#e9c46a', '#2a9d8f',
+    '#264653', '#9d4edd', '#3a86ff', '#fb5607',
+];
+
+// Each zone: {name, point_value, radius_mm}
+let zones = [];
+
+// ─── Initial load from server ────────────────────────────
+{% for z in zones %}
+zones.push({
+    name: {{ z['name'] | tojson }},
+    point_value: {{ z['point_value']|int }},
+    radius_mm: {{ z['radius_mm']|float }},
+});
+{% endfor %}
+
+// ─── DOM refs ────────────────────────────────────────────
+const stage   = document.getElementById('stage');
+const img     = document.getElementById('target-img');
+const overlay = document.getElementById('overlay');
+const listEl  = document.getElementById('zones-list');
+const emptyEl = document.getElementById('zones-empty');
+const msgEl   = document.getElementById('msg');
+const addInput = document.getElementById('add-radius');
+const addUnit  = document.getElementById('add-unit');
+const radiusHeader = document.getElementById('radius-header');
+
+// ─── Helpers ─────────────────────────────────────────────
+function isImperial() {
+    return localStorage.getItem(UNITS_KEY) === 'imperial';
+}
+function toDisplay(mm) {
+    return isImperial() ? mm / MM_PER_IN : mm;
+}
+function fromDisplay(v) {
+    return isImperial() ? v * MM_PER_IN : v;
+}
+function fmtDisplay(mm) {
+    const v = toDisplay(mm);
+    return (Math.round(v * 100) / 100).toString();
+}
+function svgEl(tag, attrs) {
+    const el = document.createElementNS('http://www.w3.org/2000/svg', tag);
+    for (const k in attrs) el.setAttribute(k, attrs[k]);
+    return el;
+}
+function clearChildren(el) { while (el.firstChild) el.removeChild(el.firstChild); }
+
+function setMsg(text, kind) {
+    msgEl.textContent = text || '';
+    msgEl.className = 'zones-msg' + (kind ? ' ' + kind : '');
+}
+
+// ─── Sorting: keep zones ordered innermost-out ───────────
+function sortZones() {
+    zones.sort((a, b) => a.radius_mm - b.radius_mm);
+}
+
+// ─── Render ──────────────────────────────────────────────
+function colorFor(idx) {
+    return ZONE_COLORS[idx % ZONE_COLORS.length];
+}
+
+function renderOverlay() {
+    clearChildren(overlay);
+    if (!img.naturalWidth) return;
+    const r = img.getBoundingClientRect();
+    if (r.width <= 0 || r.height <= 0) return;
+    overlay.setAttribute('viewBox', `0 0 ${r.width} ${r.height}`);
+    // Image is square (cropped during calibration), so cx = cy = r.width/2.
+    // Use the X axis for the mm↔px ratio (Y is the same since the file is
+    // square; pinning to one axis avoids a stray fractional-px aspect
+    // mismatch making perfect circles render as ellipses).
+    const cx = r.width / 2;
+    const cy = r.height / 2;
+    const pxPerMm = r.width / TARGET_SIZE_MM;
+    // Center crosshair
+    overlay.appendChild(svgEl('line', {
+        x1: cx - 8, y1: cy, x2: cx + 8, y2: cy,
+        stroke: '#ffffffaa', 'stroke-width': 1,
+    }));
+    overlay.appendChild(svgEl('line', {
+        x1: cx, y1: cy - 8, x2: cx, y2: cy + 8,
+        stroke: '#ffffffaa', 'stroke-width': 1,
+    }));
+    zones.forEach((z, i) => {
+        const rPx = z.radius_mm * pxPerMm;
+        overlay.appendChild(svgEl('circle', {
+            cx: cx, cy: cy, r: rPx,
+            fill: 'none',
+            stroke: colorFor(i),
+            'stroke-width': 2,
+            'stroke-dasharray': '4 3',
+        }));
+        // Label point value just inside the ring on the right.
+        if (z.point_value !== 0 || z.name) {
+            const tx = cx + rPx - 4;
+            const ty = cy - 4;
+            const label = svgEl('text', {
+                x: tx, y: ty,
+                'text-anchor': 'end',
+                'font-family': 'Quantico, sans-serif',
+                'font-size': 12,
+                'font-weight': 700,
+                fill: colorFor(i),
+                stroke: '#000', 'stroke-width': 0.5, 'paint-order': 'stroke',
+            });
+            label.textContent = z.point_value.toString();
+            overlay.appendChild(label);
+        }
+    });
+}
+
+function renderList() {
+    clearChildren(listEl);
+    emptyEl.style.display = zones.length ? 'none' : 'block';
+    const imperial = isImperial();
+    zones.forEach((z, i) => {
+        const row = document.createElement('div');
+        row.className = 'zone-row';
+
+        const swatch = document.createElement('div');
+        swatch.className = 'swatch';
+        swatch.style.background = colorFor(i);
+        row.appendChild(swatch);
+
+        const nameInput = document.createElement('input');
+        nameInput.type = 'text';
+        nameInput.value = z.name || '';
+        nameInput.placeholder = 'e.g. 10 ring';
+        nameInput.addEventListener('input', e => {
+            z.name = e.target.value;
+            renderOverlay();
+        });
+        row.appendChild(nameInput);
+
+        const ptsInput = document.createElement('input');
+        ptsInput.type = 'number';
+        ptsInput.step = '1';
+        ptsInput.value = z.point_value;
+        ptsInput.addEventListener('input', e => {
+            const v = parseInt(e.target.value, 10);
+            z.point_value = isNaN(v) ? 0 : v;
+            renderOverlay();
+        });
+        row.appendChild(ptsInput);
+
+        const radInput = document.createElement('input');
+        radInput.type = 'number';
+        radInput.step = '0.1';
+        radInput.min = '0.1';
+        radInput.value = fmtDisplay(z.radius_mm);
+        radInput.addEventListener('change', e => {
+            const v = parseFloat(e.target.value);
+            if (!isNaN(v) && v > 0) {
+                z.radius_mm = fromDisplay(v);
+                sortZones();
+                renderAll();
+            } else {
+                e.target.value = fmtDisplay(z.radius_mm);
+            }
+        });
+        row.appendChild(radInput);
+
+        const del = document.createElement('button');
+        del.className = 'del';
+        del.type = 'button';
+        del.textContent = '×';
+        del.title = 'Delete zone';
+        del.addEventListener('click', () => {
+            zones.splice(i, 1);
+            renderAll();
+        });
+        row.appendChild(del);
+
+        listEl.appendChild(row);
+    });
+}
+
+function renderAll() {
+    renderList();
+    renderOverlay();
+}
+
+// ─── Click on target → add ring ──────────────────────────
+stage.addEventListener('click', evt => {
+    const r = img.getBoundingClientRect();
+    const dx = evt.clientX - r.left;
+    const dy = evt.clientY - r.top;
+    if (dx < 0 || dy < 0 || dx > r.width || dy > r.height) return;
+    if (r.width <= 0) return;
+    const cx = r.width / 2;
+    const cy = r.height / 2;
+    const distDisp = Math.hypot(dx - cx, dy - cy);
+    // Same conversion session.html uses for click→mm on shot recording:
+    //   mm = displayed-px * (target_width_mm / displayed_width)
+    // No detour through naturalWidth / image_size_px (see note above).
+    const radius_mm = distDisp * (TARGET_SIZE_MM / r.width);
+    if (radius_mm < 0.5) return;
+    addZone(radius_mm);
+});
+
+function addZone(radius_mm) {
+    if (radius_mm <= 0 || radius_mm > MAX_RADIUS_MM * 2) {
+        setMsg('Radius out of range.', 'err');
+        return;
+    }
+    // Default points: count down from current count + 1 so the user sees a
+    // sensible starting value to edit (innermost ring will end up highest
+    // after sort).
+    const defaultPts = Math.max(1, 10 - zones.length);
+    zones.push({
+        name: '',
+        point_value: defaultPts,
+        radius_mm: radius_mm,
+    });
+    sortZones();
+    renderAll();
+    setMsg('');
+}
+
+document.getElementById('btn-add-by-radius').addEventListener('click', () => {
+    const v = parseFloat(addInput.value);
+    if (isNaN(v) || v <= 0) {
+        setMsg('Enter a positive radius.', 'err');
+        return;
+    }
+    addZone(fromDisplay(v));
+    addInput.value = '';
+});
+
+document.getElementById('btn-clear').addEventListener('click', () => {
+    if (!zones.length) return;
+    if (!confirm('Remove all zones? You still need to Save to apply.')) return;
+    zones = [];
+    renderAll();
+});
+
+// ─── Save ────────────────────────────────────────────────
+const btnSave = document.getElementById('btn-save');
+btnSave.addEventListener('click', async () => {
+    // Validate names before sending so the user gets a clear local message
+    // instead of a server 400.
+    for (let i = 0; i < zones.length; i++) {
+        if (!zones[i].name || !zones[i].name.trim()) {
+            setMsg(`Zone ${i+1} needs a name.`, 'err');
+            return;
+        }
+    }
+    btnSave.disabled = true;
+    setMsg('Saving…');
+    try {
+        const resp = await fetch(`/target_zones/${TARGET_ID}`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRFToken': CSRF_TOKEN,
+            },
+            body: JSON.stringify({
+                zones: zones.map(z => ({
+                    name: z.name.trim(),
+                    point_value: z.point_value | 0,
+                    radius_mm: z.radius_mm,
+                    shape_type: 'circle',
+                })),
+            }),
+        });
+        const data = await resp.json().catch(() => ({}));
+        if (resp.ok && data.ok) {
+            setMsg(`Saved ${data.count} zone${data.count === 1 ? '' : 's'}.`, 'ok');
+        } else {
+            setMsg(data.error || 'Save failed.', 'err');
+        }
+    } catch (e) {
+        setMsg('Network error while saving.', 'err');
+    } finally {
+        btnSave.disabled = false;
+    }
+});
+
+// ─── Units toggle ────────────────────────────────────────
+function applyUnits() {
+    const imperial = isImperial();
+    addUnit.textContent = imperial ? 'in' : 'mm';
+    addInput.placeholder = imperial ? 'in' : 'mm';
+    radiusHeader.textContent = imperial ? 'Radius (in)' : 'Radius (mm)';
+    document.getElementById('units-toggle').textContent =
+        imperial ? '⇄ Metric' : '⇄ Imperial';
+    renderList();
+}
+document.getElementById('units-toggle').addEventListener('click', () => {
+    const current = localStorage.getItem(UNITS_KEY) || 'metric';
+    localStorage.setItem(UNITS_KEY, current === 'metric' ? 'imperial' : 'metric');
+    applyUnits();
+});
+
+// ─── Boot ────────────────────────────────────────────────
+function boot() {
+    sortZones();
+    applyUnits();
+    renderAll();
+}
+if (img.complete && img.naturalWidth) {
+    boot();
+} else {
+    img.addEventListener('load', boot);
+}
+window.addEventListener('resize', renderOverlay);
+</script>
+</body>
+</html>

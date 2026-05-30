@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Bungee+Shade&family=Quantico:ital,wght@0,400;0,700;1,400;1,700&family=Rubik+Iso&display=swap" rel="stylesheet">
+    <link rel="stylesheet" type="text/css" href="{{ url_for('static', filename='style.css') }}">
+    <meta charset="UTF-8">
+    <title>Apollo::edit_targets</title>
+    <script defer src="{{ url_for('static', filename='apollo-nav.js') }}"></script>
+</head>
+<body>
+<nav class="side-nav">
+    <a href="/" class="side-nav-brand">Apollo</a>
+    <a href="/sesh" class="side-nav-link"><span class="nav-badge">→</span>Start session</a>
+    <a href="/previous_sessions" class="side-nav-link"><span class="nav-badge">→</span>Previous sessions</a>
+    <hr class="side-nav-divider">
+    <a href="/analyze" class="side-nav-link"><span class="nav-badge">→</span>Analyze data</a>
+    <hr class="side-nav-divider">
+    <a href="/add_bow" class="side-nav-link"><span class="nav-badge">→</span>Add bow</a>
+    <a href="/add_arrow" class="side-nav-link"><span class="nav-badge">→</span>Add arrow</a>
+    <a href="/edit_bows" class="side-nav-link"><span class="nav-badge">→</span>Edit bows</a>
+    <a href="/edit_arrows" class="side-nav-link"><span class="nav-badge">→</span>Edit arrows</a>
+    <a href="/add_target" class="side-nav-link"><span class="nav-badge">→</span>Add target</a>
+    <a href="/edit_targets" class="side-nav-link"><span class="nav-badge">→</span>Edit targets</a>
+    <hr class="side-nav-divider">
+    <a href="#" id="export-link" class="side-nav-link"><span class="nav-badge">⬇</span>Export data</a>
+    <a href="#" id="import-link" class="side-nav-link"><span class="nav-badge">⬆</span>Import data</a>
+    {% if current_user and current_user.is_root %}
+    <hr class="side-nav-divider">
+    <a href="/admin" class="side-nav-link"><span class="nav-badge">★</span>Admin</a>
+    {% endif %}
+    <hr class="side-nav-divider">
+    <button type="button" id="units-toggle" class="side-nav-units-btn">⇄ Imperial</button>
+    <div class="side-nav-spacer"></div>
+    {% if current_user %}
+    <div class="side-nav-user">
+        <span class="username">{{ current_user.username }}</span>
+        <a href="/account">Account</a>
+        <form action="/logout" method="POST">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <button type="submit" class="logout-btn">Sign out</button>
+        </form>
+    </div>
+    {% endif %}
+</nav>
+<h1 class="title">Edit Targets</h1>
+<script>
+(function fitTitleInit() {
+    function fitTitle() {
+        document.querySelectorAll('.title').forEach(el => {
+            el.style.fontSize = '200px';
+            let fs = 200;
+            while (el.scrollWidth > el.clientWidth && fs > 14) {
+                fs -= 2;
+                el.style.fontSize = fs + 'px';
+            }
+        });
+    }
+    window.addEventListener('load', fitTitle);
+    window.addEventListener('resize', fitTitle);
+})();
+</script>
+<div class="grid">
+{% for t in targets %}
+<form action="/edit_targets" method="POST">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <div class="form-panel">
+        <input type="hidden" name="rowid" value="{{ t['rowid'] }}">
+
+        <div style="text-align:center;margin-bottom:10px;">
+            <img src="{{ url_for('static', filename=t['image_filename']) }}"
+                 alt="{{ t['name'] }}"
+                 style="max-width:160px;max-height:160px;border:1px solid #1e2533;background:#000;">
+        </div>
+
+        <span class="form-label">Name</span>
+        <input type="text" name="name" value="{{ t['name'] }}">
+
+        <span class="form-label size-label">Physical size (mm)</span>
+        <input type="text" name="physical_size_mm" value="{{ t['physical_size_mm'] }}">
+
+        <span class="form-label">Image size (px)</span>
+        <pre>{{ t['image_size_px'] }} × {{ t['image_size_px'] }}</pre>
+
+        <span class="form-label">Status</span>
+        <pre>{% if t['is_active'] %}active{% else %}archived (still used by past shots){% endif %}</pre>
+
+        <label style="display:flex;align-items:center;gap:8px;margin-top:6px;">
+            <input type="checkbox" name="make_default" value="1" {% if t['is_default'] %}checked{% endif %}>
+            <span>Default target</span>
+        </label>
+
+        <div class="submit-row">
+            <input type="submit" value="Delete target" name="delete" class="button">
+            <input type="submit" value="Submit Edit">
+        </div>
+        <div style="text-align:center;margin-top:8px;">
+            <a href="{{ url_for('target_zones', target_id=t['rowid']) }}"
+               style="font-family:Quantico,sans-serif;font-size:0.9rem;">
+                Edit scoring zones →
+            </a>
+        </div>
+    </div>
+</form>
+{% endfor %}
+</div>
+<script>
+const UNITS_KEY = 'apollo_units';
+const MM_PER_IN = 25.4;
+
+function applyUnits() {
+    const imperial   = localStorage.getItem(UNITS_KEY) === 'imperial';
+    const unitLabel  = imperial ? 'inches' : 'mm';
+    document.getElementById('units-toggle').textContent =
+        imperial ? '⇄ Metric' : '⇄ Imperial';
+    document.querySelectorAll('.size-label').forEach(el => {
+        el.textContent = `Physical size (${unitLabel})`;
+    });
+    document.querySelectorAll('input[name="physical_size_mm"]').forEach(field => {
+        if (field.dataset.mm === undefined) {
+            field.dataset.mm = field.value;
+        }
+        const mm = parseFloat(field.dataset.mm);
+        if (!isNaN(mm)) {
+            field.value = imperial
+                ? Math.round(mm / MM_PER_IN * 100) / 100
+                : field.dataset.mm;
+        }
+    });
+}
+
+document.getElementById('units-toggle').addEventListener('click', () => {
+    const current = localStorage.getItem(UNITS_KEY) || 'metric';
+    localStorage.setItem(UNITS_KEY, current === 'metric' ? 'imperial' : 'metric');
+    applyUnits();
+});
+
+// Convert inches → mm on submit so the DB always stores mm.
+document.querySelectorAll('form').forEach(form => {
+    form.addEventListener('submit', () => {
+        if (localStorage.getItem(UNITS_KEY) === 'imperial') {
+            const field = form.querySelector('input[name="physical_size_mm"]');
+            if (field) {
+                const inVal = parseFloat(field.value);
+                if (!isNaN(inVal)) field.value = Math.round(inVal * MM_PER_IN * 100) / 100;
+            }
+        }
+    });
+});
+
+applyUnits();
+</script>
+</body>
+</html>

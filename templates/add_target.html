@@ -1,0 +1,614 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Bungee+Shade&family=Quantico:ital,wght@0,400;0,700;1,400;1,700&family=Rubik+Iso&display=swap" rel="stylesheet">
+    <link rel="stylesheet" type="text/css" href="{{ url_for('static', filename='style.css') }}">
+    <meta charset="UTF-8">
+    <title>Apollo::add_target</title>
+    <style>
+        .wizard-step { display: none; }
+        .wizard-step.active { display: block; }
+        .step-indicator {
+            font-family: "Quantico", sans-serif;
+            font-size: 0.85rem;
+            color: #1a3a5c;
+            text-align: center;
+            margin: 0 auto 14px auto;
+            max-width: 720px;
+        }
+        .step-indicator .crumb { opacity: 0.45; }
+        .step-indicator .crumb.current { opacity: 1; font-weight: 700; }
+        .calib-stage {
+            position: relative;
+            display: inline-block;
+            cursor: crosshair;
+            border: 2px solid #95abcf;
+            border-radius: 8px;
+            overflow: hidden;
+            box-shadow: 0 4px 14px rgba(99, 106, 128, 0.2);
+            max-width: 100%;
+        }
+        .calib-stage img, .calib-stage canvas {
+            display: block;
+            max-width: min(720px, 90vw);
+            height: auto;
+            user-select: none;
+            pointer-events: none;
+        }
+        .calib-stage svg {
+            position: absolute;
+            top: 0; left: 0;
+            width: 100%; height: 100%;
+            pointer-events: none;
+        }
+        .calib-panel {
+            background-color: #b3c6e3;
+            border-radius: 18px;
+            padding: 18px;
+            max-width: 760px;
+            margin: 0 auto 14px auto;
+            text-align: center;
+        }
+        .calib-caption {
+            font-family: "Quantico", sans-serif;
+            font-weight: 700;
+            color: #1a3a5c;
+            margin-bottom: 10px;
+            font-size: 1.0rem;
+        }
+        .calib-readout {
+            font-family: "Quantico", sans-serif;
+            font-size: 0.9rem;
+            color: #1a3a5c;
+            margin-top: 10px;
+        }
+        .calib-warning {
+            font-family: "Quantico", sans-serif;
+            font-size: 0.85rem;
+            color: #8a4a00;
+            background: #ffe9c2;
+            border-radius: 8px;
+            padding: 8px 12px;
+            margin-top: 10px;
+            display: none;
+        }
+        .calib-error {
+            font-family: "Quantico", sans-serif;
+            font-size: 0.85rem;
+            color: #8a0000;
+            background: #ffc2c2;
+            border-radius: 8px;
+            padding: 8px 12px;
+            margin-top: 10px;
+            display: none;
+        }
+        .nav-row {
+            display: flex;
+            justify-content: center;
+            gap: 10px;
+            margin-top: 12px;
+            flex-wrap: wrap;
+        }
+        .nav-row button {
+            background-color: #95abcf;
+            color: #333;
+            border: none;
+            padding: 8px 18px;
+            border-radius: 6px;
+            font-family: "Quantico", sans-serif;
+            font-weight: 700;
+            font-size: 0.85rem;
+            cursor: pointer;
+            transition: background-color 0.2s;
+        }
+        .nav-row button:hover:not(:disabled) {
+            background-color: #636a80;
+            color: #fff;
+        }
+        .nav-row button:disabled {
+            opacity: 0.45;
+            cursor: not-allowed;
+        }
+        .mm-input-row {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 8px;
+            margin-top: 12px;
+            font-family: "Quantico", sans-serif;
+            color: #1a3a5c;
+        }
+        .mm-input-row input {
+            width: 110px;
+            padding: 5px 8px;
+            font-family: "Quantico", sans-serif;
+            font-size: 0.95rem;
+        }
+    </style>
+    <script defer src="{{ url_for('static', filename='apollo-nav.js') }}"></script>
+</head>
+<body>
+<nav class="side-nav">
+    <a href="/" class="side-nav-brand">Apollo</a>
+    <a href="/sesh" class="side-nav-link"><span class="nav-badge">→</span>Start session</a>
+    <a href="/previous_sessions" class="side-nav-link"><span class="nav-badge">→</span>Previous sessions</a>
+    <hr class="side-nav-divider">
+    <a href="/analyze" class="side-nav-link"><span class="nav-badge">→</span>Analyze data</a>
+    <hr class="side-nav-divider">
+    <a href="/add_bow" class="side-nav-link"><span class="nav-badge">→</span>Add bow</a>
+    <a href="/add_arrow" class="side-nav-link"><span class="nav-badge">→</span>Add arrow</a>
+    <a href="/edit_bows" class="side-nav-link"><span class="nav-badge">→</span>Edit bows</a>
+    <a href="/edit_arrows" class="side-nav-link"><span class="nav-badge">→</span>Edit arrows</a>
+    <a href="/add_target" class="side-nav-link"><span class="nav-badge">→</span>Add target</a>
+    <a href="/edit_targets" class="side-nav-link"><span class="nav-badge">→</span>Edit targets</a>
+    <hr class="side-nav-divider">
+    <a href="#" id="export-link" class="side-nav-link"><span class="nav-badge">⬇</span>Export data</a>
+    <a href="#" id="import-link" class="side-nav-link"><span class="nav-badge">⬆</span>Import data</a>
+    {% if current_user and current_user.is_root %}
+    <hr class="side-nav-divider">
+    <a href="/admin" class="side-nav-link"><span class="nav-badge">★</span>Admin</a>
+    {% endif %}
+    <hr class="side-nav-divider">
+    <button type="button" id="units-toggle" class="side-nav-units-btn">⇄ Imperial</button>
+    <div class="side-nav-spacer"></div>
+    {% if current_user %}
+    <div class="side-nav-user">
+        <span class="username">{{ current_user.username }}</span>
+        <a href="/account">Account</a>
+        <form action="/logout" method="POST">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <button type="submit" class="logout-btn">Sign out</button>
+        </form>
+    </div>
+    {% endif %}
+</nav>
+<h1 class="title">Add Target</h1>
+<script>
+(function fitTitleInit() {
+    function fitTitle() {
+        document.querySelectorAll('.title').forEach(el => {
+            el.style.fontSize = '200px';
+            let fs = 200;
+            while (el.scrollWidth > el.clientWidth && fs > 14) {
+                fs -= 2;
+                el.style.fontSize = fs + 'px';
+            }
+        });
+    }
+    window.addEventListener('load', fitTitle);
+    window.addEventListener('resize', fitTitle);
+})();
+</script>
+
+<div class="step-indicator">
+    <span class="crumb" data-step="1">1 — Image</span> ·
+    <span class="crumb" data-step="2">2 — Center</span> ·
+    <span class="crumb" data-step="3">3 — Boundary</span> ·
+    <span class="crumb" data-step="4">4 — Scale</span>
+</div>
+
+<form id="calib-form" action="/add_target" method="POST" enctype="multipart/form-data">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="center_x"   id="f-center-x">
+    <input type="hidden" name="center_y"   id="f-center-y">
+    <input type="hidden" name="boundary_x" id="f-boundary-x">
+    <input type="hidden" name="boundary_y" id="f-boundary-y">
+    <input type="hidden" name="p1_x"       id="f-p1-x">
+    <input type="hidden" name="p1_y"       id="f-p1-y">
+    <input type="hidden" name="p2_x"       id="f-p2-x">
+    <input type="hidden" name="p2_y"       id="f-p2-y">
+    <input type="hidden" name="mm_distance" id="f-mm-distance">
+
+    <!-- Step 1: file + name -->
+    <section class="wizard-step active" data-step="1">
+        <div class="form-panel">
+            <span class="form-label">Target name</span>
+            <input type="text" name="name" id="f-name" required>
+
+            <span class="form-label">Target image (jpg, png, or webp)</span>
+            <input type="file" name="image" id="f-image" accept="image/jpeg,image/png,image/webp" required>
+            <div class="links-row" style="opacity:0.7;font-size:0.85em;">
+                Any aspect ratio is fine — you'll calibrate it on the next screens.
+            </div>
+
+            <label style="display:flex;align-items:center;gap:8px;margin-top:10px;">
+                <input type="checkbox" name="make_default" value="1">
+                <span>Make this the default target</span>
+            </label>
+
+            <div class="nav-row">
+                <button type="button" id="btn-to-step-2" disabled>Next →</button>
+            </div>
+        </div>
+    </section>
+
+    <!-- Step 2: click center -->
+    <section class="wizard-step" data-step="2">
+        <div class="calib-panel">
+            <div class="calib-caption">Click the exact center of the target.</div>
+            <div class="calib-stage" id="stage-center">
+                <img id="img-center" alt="">
+                <svg id="svg-center" xmlns="http://www.w3.org/2000/svg"></svg>
+            </div>
+            <div class="nav-row">
+                <button type="button" data-back="1">← Back</button>
+                <button type="button" id="btn-undo-center">Undo</button>
+                <button type="button" id="btn-to-step-3" disabled>Next →</button>
+            </div>
+        </div>
+    </section>
+
+    <!-- Step 3: click outer boundary -->
+    <section class="wizard-step" data-step="3">
+        <div class="calib-panel">
+            <div class="calib-caption">Click any point on the outer boundary of the target.</div>
+            <div class="calib-stage" id="stage-boundary">
+                <img id="img-boundary" alt="">
+                <svg id="svg-boundary" xmlns="http://www.w3.org/2000/svg"></svg>
+            </div>
+            <div class="calib-error" id="err-boundary"></div>
+            <div class="nav-row">
+                <button type="button" data-back="2">← Back</button>
+                <button type="button" id="btn-undo-boundary">Undo</button>
+                <button type="button" id="btn-to-step-4" disabled>Next →</button>
+            </div>
+        </div>
+    </section>
+
+    <!-- Step 4: pick two points + enter mm distance -->
+    <section class="wizard-step" data-step="4">
+        <div class="calib-panel">
+            <div class="calib-caption">
+                Click two points on the cropped target, then enter the real-world distance between them.
+            </div>
+            <div class="calib-stage" id="stage-scale">
+                <canvas id="canvas-scale"></canvas>
+                <svg id="svg-scale" xmlns="http://www.w3.org/2000/svg"></svg>
+            </div>
+            <div class="mm-input-row">
+                <label for="f-mm-display" id="mm-label">Distance:</label>
+                <input type="number" step="0.1" min="0" id="f-mm-display" placeholder="mm">
+                <span id="mm-unit-label">mm</span>
+            </div>
+            <div class="calib-readout" id="scale-readout">
+                Click two points to begin.
+            </div>
+            <div class="calib-warning" id="scale-warning"></div>
+            <div class="nav-row">
+                <button type="button" data-back="3">← Back</button>
+                <button type="button" id="btn-undo-scale">Undo points</button>
+                <button type="button" id="btn-submit" disabled>Submit</button>
+            </div>
+        </div>
+    </section>
+</form>
+
+<script>
+const UNITS_KEY = 'apollo_units';
+const MM_PER_IN = 25.4;
+
+// ─── Step navigation ──────────────────────────────────
+function showStep(n) {
+    document.querySelectorAll('.wizard-step').forEach(s => {
+        s.classList.toggle('active', s.dataset.step === String(n));
+    });
+    document.querySelectorAll('.step-indicator .crumb').forEach(c => {
+        c.classList.toggle('current', c.dataset.step === String(n));
+    });
+    if (n === 4) renderScaleStep();
+}
+document.querySelectorAll('[data-back]').forEach(btn => {
+    btn.addEventListener('click', () => showStep(parseInt(btn.dataset.back, 10)));
+});
+showStep(1);
+
+// ─── Step 1: file/name validation ────────────────────
+const fName = document.getElementById('f-name');
+const fImage = document.getElementById('f-image');
+const btnTo2 = document.getElementById('btn-to-step-2');
+
+let imgURL = null;
+let naturalW = 0, naturalH = 0;
+
+function gateStep1() {
+    btnTo2.disabled = !(fName.value.trim() && fImage.files && fImage.files[0]);
+}
+fName.addEventListener('input', gateStep1);
+fImage.addEventListener('change', () => {
+    if (imgURL) URL.revokeObjectURL(imgURL);
+    const f = fImage.files && fImage.files[0];
+    if (f) {
+        imgURL = URL.createObjectURL(f);
+        // Pre-load to learn natural dimensions
+        const probe = new Image();
+        probe.onload = () => {
+            naturalW = probe.naturalWidth;
+            naturalH = probe.naturalHeight;
+            document.getElementById('img-center').src = imgURL;
+            document.getElementById('img-boundary').src = imgURL;
+        };
+        probe.src = imgURL;
+    }
+    gateStep1();
+});
+btnTo2.addEventListener('click', () => showStep(2));
+
+// ─── Helpers: convert displayed click to natural pixel coords ─
+function clickToNatural(evt, imgEl) {
+    const r = imgEl.getBoundingClientRect();
+    const dx = evt.clientX - r.left;
+    const dy = evt.clientY - r.top;
+    const sx = imgEl.naturalWidth  / r.width;
+    const sy = imgEl.naturalHeight / r.height;
+    return { nx: dx * sx, ny: dy * sy, dx: dx, dy: dy, dispW: r.width, dispH: r.height };
+}
+
+function svgEl(tag, attrs) {
+    const el = document.createElementNS('http://www.w3.org/2000/svg', tag);
+    for (const k in attrs) el.setAttribute(k, attrs[k]);
+    return el;
+}
+function clearSvg(svg) { while (svg.firstChild) svg.removeChild(svg.firstChild); }
+
+function drawCrosshair(svg, dx, dy, color) {
+    svg.appendChild(svgEl('line', {x1: dx-12, y1: dy, x2: dx+12, y2: dy,
+                                   stroke: color, 'stroke-width': 2}));
+    svg.appendChild(svgEl('line', {x1: dx, y1: dy-12, x2: dx, y2: dy+12,
+                                   stroke: color, 'stroke-width': 2}));
+    svg.appendChild(svgEl('circle', {cx: dx, cy: dy, r: 5, fill: 'none',
+                                     stroke: color, 'stroke-width': 2}));
+}
+
+// ─── Step 2: click center ─────────────────────────────
+const stageC = document.getElementById('stage-center');
+const imgC   = document.getElementById('img-center');
+const svgC   = document.getElementById('svg-center');
+const btnUndoC = document.getElementById('btn-undo-center');
+const btnTo3 = document.getElementById('btn-to-step-3');
+
+let centerNX = null, centerNY = null;
+
+stageC.addEventListener('click', evt => {
+    const c = clickToNatural(evt, imgC);
+    centerNX = c.nx;
+    centerNY = c.ny;
+    clearSvg(svgC);
+    drawCrosshair(svgC, c.dx, c.dy, '#e63946');
+    document.getElementById('f-center-x').value = centerNX.toFixed(2);
+    document.getElementById('f-center-y').value = centerNY.toFixed(2);
+    btnTo3.disabled = false;
+});
+btnUndoC.addEventListener('click', () => {
+    centerNX = centerNY = null;
+    clearSvg(svgC);
+    btnTo3.disabled = true;
+});
+btnTo3.addEventListener('click', () => showStep(3));
+
+// ─── Step 3: click boundary ───────────────────────────
+const stageB = document.getElementById('stage-boundary');
+const imgB   = document.getElementById('img-boundary');
+const svgB   = document.getElementById('svg-boundary');
+const btnUndoB = document.getElementById('btn-undo-boundary');
+const btnTo4 = document.getElementById('btn-to-step-4');
+const errB   = document.getElementById('err-boundary');
+
+let boundaryNX = null, boundaryNY = null, radiusNat = null;
+
+function drawCenterMarker(svg) {
+    // Re-project the natural center coords back to displayed coords for the
+    // boundary stage (the image is at the same scale, but bounding rects can
+    // differ slightly between tabs).
+    const r = imgB.getBoundingClientRect();
+    const sx = r.width  / imgB.naturalWidth;
+    const sy = r.height / imgB.naturalHeight;
+    drawCrosshair(svg, centerNX * sx, centerNY * sy, '#e63946');
+}
+
+stageB.addEventListener('click', evt => {
+    const c = clickToNatural(evt, imgB);
+    boundaryNX = c.nx;
+    boundaryNY = c.ny;
+    radiusNat = Math.hypot(boundaryNX - centerNX, boundaryNY - centerNY);
+
+    // Reject overflow client-side too so the user gets immediate feedback.
+    const overflow = (centerNX - radiusNat) < 0 ||
+                     (centerNY - radiusNat) < 0 ||
+                     (centerNX + radiusNat) > naturalW ||
+                     (centerNY + radiusNat) > naturalH;
+
+    clearSvg(svgB);
+    drawCenterMarker(svgB);
+
+    const sx = c.dispW / imgB.naturalWidth;
+    const sy = c.dispH / imgB.naturalHeight;
+    const radiusDispX = radiusNat * sx;
+    const radiusDispY = radiusNat * sy;
+    const cdx = centerNX * sx;
+    const cdy = centerNY * sy;
+
+    svgB.appendChild(svgEl('circle', {
+        cx: cdx, cy: cdy, r: Math.min(radiusDispX, radiusDispY),
+        fill: 'none', stroke: '#2e7d32', 'stroke-width': 2, 'stroke-dasharray': '4 4'
+    }));
+    svgB.appendChild(svgEl('rect', {
+        x: cdx - radiusDispX, y: cdy - radiusDispY,
+        width: 2 * radiusDispX, height: 2 * radiusDispY,
+        fill: 'none', stroke: '#1565c0', 'stroke-width': 2, 'stroke-dasharray': '6 4'
+    }));
+    drawCrosshair(svgB, c.dx, c.dy, '#2e7d32');
+
+    if (overflow) {
+        errB.style.display = 'block';
+        errB.textContent = 'Crop extends past the image edge. Move further inside the photo (Back to re-click center, or Undo and re-click boundary closer in).';
+        btnTo4.disabled = true;
+    } else {
+        errB.style.display = 'none';
+        document.getElementById('f-boundary-x').value = boundaryNX.toFixed(2);
+        document.getElementById('f-boundary-y').value = boundaryNY.toFixed(2);
+        btnTo4.disabled = false;
+    }
+});
+btnUndoB.addEventListener('click', () => {
+    boundaryNX = boundaryNY = radiusNat = null;
+    clearSvg(svgB);
+    drawCenterMarker(svgB);
+    errB.style.display = 'none';
+    btnTo4.disabled = true;
+});
+btnTo4.addEventListener('click', () => showStep(4));
+
+// ─── Step 4: cropped canvas + two-point calibration ─
+const stageS  = document.getElementById('stage-scale');
+const canvasS = document.getElementById('canvas-scale');
+const svgS    = document.getElementById('svg-scale');
+const btnUndoS = document.getElementById('btn-undo-scale');
+const btnSubmit = document.getElementById('btn-submit');
+const mmInput  = document.getElementById('f-mm-display');
+const mmUnitLabel = document.getElementById('mm-unit-label');
+const readout = document.getElementById('scale-readout');
+const warning = document.getElementById('scale-warning');
+
+let p1NX = null, p1NY = null, p2NX = null, p2NY = null;
+
+function renderScaleStep() {
+    if (radiusNat == null || centerNX == null) return;
+    // Draw the cropped region onto the canvas at a viewport-friendly size.
+    const cropPx = 2 * radiusNat;
+    const maxDisp = Math.min(720, Math.floor(window.innerWidth * 0.9));
+    const dispSize = Math.min(maxDisp, cropPx);
+    canvasS.width = dispSize;
+    canvasS.height = dispSize;
+    canvasS.style.maxWidth = dispSize + 'px';
+    canvasS.style.height = dispSize + 'px';
+    const ctx = canvasS.getContext('2d');
+    const src = new Image();
+    src.onload = () => {
+        ctx.clearRect(0, 0, dispSize, dispSize);
+        ctx.drawImage(
+            src,
+            centerNX - radiusNat, centerNY - radiusNat, cropPx, cropPx,
+            0, 0, dispSize, dispSize
+        );
+    };
+    src.src = imgURL;
+    // Reset any previous picks
+    p1NX = p1NY = p2NX = p2NY = null;
+    clearSvg(svgS);
+    redrawScaleReadout();
+    btnSubmit.disabled = true;
+}
+
+stageS.addEventListener('click', evt => {
+    const r = canvasS.getBoundingClientRect();
+    const dx = evt.clientX - r.left;
+    const dy = evt.clientY - r.top;
+    if (dx < 0 || dy < 0 || dx > r.width || dy > r.height) return;
+    // Translate canvas-displayed → original image natural coords:
+    //   crop origin is (centerNX - radiusNat, centerNY - radiusNat) in natural px
+    //   canvas displays cropPx natural px scaled to r.width displayed px
+    const cropPx = 2 * radiusNat;
+    const scale = cropPx / r.width;
+    const natX = (centerNX - radiusNat) + dx * scale;
+    const natY = (centerNY - radiusNat) + dy * scale;
+
+    if (p1NX == null) {
+        p1NX = natX; p1NY = natY;
+        drawCrosshair(svgS, dx, dy, '#1565c0');
+    } else if (p2NX == null) {
+        p2NX = natX; p2NY = natY;
+        drawCrosshair(svgS, dx, dy, '#1565c0');
+        // Connect them with a line in displayed space.
+        const r1x = (p1NX - (centerNX - radiusNat)) / scale;
+        const r1y = (p1NY - (centerNY - radiusNat)) / scale;
+        svgS.appendChild(svgEl('line', {
+            x1: r1x, y1: r1y, x2: dx, y2: dy,
+            stroke: '#1565c0', 'stroke-width': 2, 'stroke-dasharray': '4 3'
+        }));
+    } else {
+        // Both already set — start over.
+        p1NX = natX; p1NY = natY; p2NX = p2NY = null;
+        clearSvg(svgS);
+        drawCrosshair(svgS, dx, dy, '#1565c0');
+    }
+    redrawScaleReadout();
+});
+
+btnUndoS.addEventListener('click', () => {
+    p1NX = p1NY = p2NX = p2NY = null;
+    clearSvg(svgS);
+    redrawScaleReadout();
+});
+
+mmInput.addEventListener('input', redrawScaleReadout);
+
+function getMmDistance() {
+    const raw = parseFloat(mmInput.value);
+    if (isNaN(raw) || raw <= 0) return null;
+    return localStorage.getItem(UNITS_KEY) === 'imperial' ? raw * MM_PER_IN : raw;
+}
+
+function redrawScaleReadout() {
+    warning.style.display = 'none';
+    if (p1NX == null || p2NX == null) {
+        readout.textContent = 'Click two points to begin.';
+        btnSubmit.disabled = true;
+        return;
+    }
+    const pxDist = Math.hypot(p2NX - p1NX, p2NY - p1NY);
+    const mmDist = getMmDistance();
+    if (mmDist == null) {
+        readout.textContent = `Pixel distance: ${pxDist.toFixed(1)} px. Enter the real-world distance to compute scale.`;
+        btnSubmit.disabled = true;
+        return;
+    }
+    if (pxDist < 5) {
+        readout.textContent = 'Points are too close together — pick them further apart.';
+        btnSubmit.disabled = true;
+        return;
+    }
+    const mmPerPx     = mmDist / pxDist;
+    const cropPx      = 2 * radiusNat;
+    const physSizeMm  = cropPx * mmPerPx;
+    readout.innerHTML = `Scale: <b>${mmPerPx.toFixed(4)} mm/px</b>. ` +
+                        `Target edge: <b>${physSizeMm.toFixed(1)} mm</b> ` +
+                        `(${(physSizeMm / 25.4).toFixed(2)} in) over ${cropPx.toFixed(0)} px.`;
+    // Sanity-check: archery targets typically fall in a wide but bounded range.
+    if (mmPerPx < 0.05 || mmPerPx > 20 || physSizeMm < 50 || physSizeMm > 5000) {
+        warning.style.display = 'block';
+        warning.textContent = 'Heads up: that scale looks unusual. Double-check the distance you entered and which two points you clicked. You can still submit.';
+    }
+    btnSubmit.disabled = false;
+}
+
+btnSubmit.addEventListener('click', () => {
+    const mmDist = getMmDistance();
+    if (p1NX == null || p2NX == null || mmDist == null) return;
+    document.getElementById('f-p1-x').value = p1NX.toFixed(2);
+    document.getElementById('f-p1-y').value = p1NY.toFixed(2);
+    document.getElementById('f-p2-x').value = p2NX.toFixed(2);
+    document.getElementById('f-p2-y').value = p2NY.toFixed(2);
+    document.getElementById('f-mm-distance').value = mmDist.toFixed(4);
+    document.getElementById('calib-form').submit();
+});
+
+// ─── Units toggle (display only) ──────────────────────
+function applyUnits() {
+    const imperial = localStorage.getItem(UNITS_KEY) === 'imperial';
+    mmUnitLabel.textContent = imperial ? 'in' : 'mm';
+    mmInput.placeholder = imperial ? 'in' : 'mm';
+    document.getElementById('units-toggle').textContent =
+        imperial ? '⇄ Metric' : '⇄ Imperial';
+    redrawScaleReadout();
+}
+document.getElementById('units-toggle').addEventListener('click', () => {
+    const current = localStorage.getItem(UNITS_KEY) || 'metric';
+    localStorage.setItem(UNITS_KEY, current === 'metric' ? 'imperial' : 'metric');
+    applyUnits();
+});
+applyUnits();
+</script>
+</body>
+</html>

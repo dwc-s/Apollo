@@ -1,0 +1,372 @@
+================================================================
+Apollo — Installation Help
+================================================================
+
+This file explains how `install.py` works, what every environment
+variable does, and how to deploy Apollo on a server (with a
+PythonAnywhere-specific walkthrough at the end).
+
+
+----------------------------------------------------------------
+1. What install.py does
+----------------------------------------------------------------
+
+`install.py` is an interactive bootstrap script. Run it once after
+cloning the repo. It walks you through four things:
+
+  1. Picking an environment manager (conda or venv)
+  2. Picking a "flavor" (local vs. server)
+  3. Installing Python packages into that environment
+  4. Collecting environment variables and writing them to a `.env`
+     file next to `install.py`
+
+For the server flavor it also writes `wsgi_snippet.py` — a ready-
+to-paste WSGI configuration file with your real values filled in
+(see the PythonAnywhere section below).
+
+Run it with:
+
+    python install.py
+
+
+----------------------------------------------------------------
+2. The prompts, one by one
+----------------------------------------------------------------
+
+Environment manager? [conda/venv]
+    conda — uses Miniconda/Anaconda (only offered if `conda` is on
+            PATH). Creates a named env, e.g. `apollo`.
+    venv  — uses Python's built-in `python -m venv`. Creates an env
+            in a directory you choose.
+
+    On PythonAnywhere there's no conda, so pick `venv`.
+
+Which flavor to install? [local/server]
+    local  — SQLite, runs on your laptop, debug mode on.
+             Installs: Flask, Flask-WTF, Pillow, SQLAlchemy,
+             openpyxl, resend, matplotlib
+    server — MySQL, production-mode, debug off.
+             Installs everything above PLUS PyMySQL (so SQLAlchemy
+             can talk to MySQL).
+
+Venv directory  (venv only)
+    Path where the venv will be created. Defaults to `./venv` next
+    to install.py.
+
+    IMPORTANT: enter the path to the venv ITSELF, not a parent
+    directory. On PythonAnywhere, `~/.virtualenvs` is a parent
+    folder that holds many venvs — point install.py at something
+    like `/home/<user>/.virtualenvs/apollo` instead.
+
+    If the path exists but isn't a venv (no `bin/python` inside),
+    the script now detects that and offers to create one in an
+    `apollo/` subdirectory.
+
+Conda env name  (conda only)
+    Defaults to `apollo`.
+
+Python version  (conda only)
+    Defaults to 3.11.
+
+Root account prompts  (server flavor only)
+    After the env-var prompts, install.py asks for:
+      - Root username (default: `root`, 3–32 chars, letters /
+        digits / underscore / dot / hyphen)
+      - Root email
+      - Root password (min 8 chars, entered twice, no echo)
+    These get written to .env (and wsgi_snippet.py) as the
+    APOLLO_ROOT_* variables; apollo.py uses them on first boot
+    to create or promote the named account.
+
+
+----------------------------------------------------------------
+3. Environment variables
+----------------------------------------------------------------
+
+These all get written to `.env` (and, for server, also baked into
+`wsgi_snippet.py`). Apollo reads them via `os.environ` at startup
+— there is no dotenv loader, so they must already be set in the
+process environment by the time `apollo.py` is imported.
+
+SECRET_KEY                                            [required]
+    Signs Flask session cookies and CSRF tokens. install.py
+    generates a strong random default (32 bytes, urlsafe) which
+    you can accept by pressing Enter. Paste an existing value
+    only if you are rotating a key or sharing one across multiple
+    app instances.
+
+    In production (FLASK_ENV=production), apollo.py refuses to
+    start without this set.
+
+RESEND_API_KEY                                        [optional]
+    API key from https://resend.com/api-keys . Powers the
+    forgot-password email flow.
+
+    If blank: Apollo falls back to printing reset URLs to the
+    server's terminal/log instead of mailing them. Perfectly fine
+    for testing; not fine for real users.
+
+RESEND_FROM                                           [optional]
+    The "From:" address on password-reset emails. Only prompted
+    if you supplied RESEND_API_KEY.
+
+    Default: onboarding@resend.dev — Resend's shared sandbox
+    sender. It can ONLY deliver to recipients you've verified in
+    the Resend dashboard. For real users, replace this with an
+    address on a domain you've verified in Resend.
+
+FLASK_ENV                                  [server flavor only]
+    Set to `production` by install.py for the server flavor. Two
+    effects: (a) turns off the Werkzeug debugger, (b) makes
+    SECRET_KEY mandatory.
+
+APOLLO_BACKEND                             [server flavor only]
+    Set to `mysql` by install.py for the server flavor. This is
+    the explicit opt-in that tells apollo.py to read DATABASE_URL.
+    Without it, the app uses local SQLite even if DATABASE_URL is
+    set.
+
+DATABASE_URL                               [server flavor only]
+    SQLAlchemy connection string for your MySQL database.
+    Format:
+        mysql+pymysql://USER:PASSWORD@HOST:PORT/DBNAME
+    Example:
+        mysql+pymysql://apollo:s3cret@db.example.com:3306/apollo
+
+    On PythonAnywhere the host is usually `<username>.mysql.
+    pythonanywhere-services.com` and the DB name is
+    `<username>$<dbname>`.
+
+APOLLO_BASE_URL                            [server flavor only,
+                                                       optional]
+    The public origin used in password-reset email links, e.g.
+    `https://apolloshoots.org`.
+
+    In theory ProxyFix + request.url_root produces the right
+    value automatically. In practice PythonAnywhere's free-tier
+    proxy doesn't always forward X-Forwarded-Proto cleanly, which
+    can produce http:// links inside HTTPS-only deployments.
+    Setting this explicitly avoids that surprise.
+
+APOLLO_ROOT_USERNAME                       [server flavor only]
+    The username for the root (admin) account, collected during
+    install. apollo.py reads this on every boot: if a user with
+    this name exists, it gets `is_root` set (and re-activated if
+    needed); if not, apollo.py creates them using the email and
+    password below.
+
+    Same shape rules as login (3–32 chars, letters / digits /
+    underscore / dot / hyphen).
+
+APOLLO_ROOT_EMAIL                          [server flavor only]
+    The root account's email address. Only used when the account
+    doesn't exist yet — apollo.py mints it with this email on
+    first boot. After the account exists you can rotate the
+    address via the admin UI; this env var no longer matters.
+
+APOLLO_ROOT_PASSWORD                       [server flavor only]
+    The root account's initial password (min 8 chars). Only used
+    when the account doesn't exist yet. Once root exists you can
+    safely remove this from .env (and from wsgi_snippet.py /
+    your WSGI file) — apollo.py only consults it on the bootstrap
+    run.
+
+    Stored in plaintext in .env / wsgi_snippet.py (mode 0600). If
+    you're uncomfortable with that, delete the line after the
+    first successful boot.
+
+FLASK_DEBUG                                    [not set by installer]
+    Read by apollo.py when launched directly (not via WSGI).
+    Defaults to "1" if unset. Ignored in production
+    (FLASK_ENV=production forces debug off).
+
+
+----------------------------------------------------------------
+4. Files install.py creates
+----------------------------------------------------------------
+
+.env
+    Shell-sourceable file:  export KEY=value
+    Mode 0600 (owner read/write only) because it holds secrets.
+    Use it on machines where you launch Apollo from a shell:
+
+        source .env
+        source <venv>/bin/activate
+        python apollo.py
+
+wsgi_snippet.py            [server flavor only]
+    A complete WSGI configuration file. Sets `os.environ[...]`
+    for every env var, inserts the project directory onto
+    `sys.path`, then imports the Flask app. Mode 0600.
+
+    This file exists because WSGI hosts (PythonAnywhere, Passenger,
+    mod_wsgi, …) do not source `.env`. The worker process is
+    started by the host, so env vars have to be established
+    inside the WSGI file itself, before `apollo` is imported.
+
+
+----------------------------------------------------------------
+5. Local launch (local flavor)
+----------------------------------------------------------------
+
+    source .env
+    source venv/bin/activate          # or: conda activate apollo
+    python apollo.py
+
+Then open http://127.0.0.1:5000/ in a browser. Click
+"Create account" to register the first user. Any data left over
+from a pre-multi-user install gets claimed by that first account
+automatically.
+
+
+----------------------------------------------------------------
+6. Server launch on PythonAnywhere (server flavor)
+----------------------------------------------------------------
+
+PythonAnywhere has no UI on the Web tab for setting environment
+variables. The standard pattern is to set them inside the WSGI
+file directly — which is exactly what `wsgi_snippet.py` is.
+
+Step-by-step:
+
+  1. SSH into your PythonAnywhere account (Consoles → Bash).
+     Clone the repo (or upload it) and `cd` into the project.
+
+  2. Run:
+         python install.py
+     Choose `venv` for the env manager, `server` for the flavor.
+     For the venv path, enter something like
+         /home/<username>/.virtualenvs/apollo
+     (Do not enter `/home/<username>/.virtualenvs` by itself —
+     that's the parent folder, not a venv.)
+
+  3. Go to the Web tab. Create a web app if you haven't already
+     (Manual configuration, Python 3.11 or matching your venv).
+
+  4. In the Web tab, set:
+         Source code:  /home/<username>/mysite/apollo
+                       (or wherever apollo.py lives — must match
+                       project_home in wsgi_snippet.py)
+         Virtualenv:   /home/<username>/.virtualenvs/apollo
+                       (the path you gave install.py)
+
+  5. Click the "WSGI configuration file" link on the Web tab.
+     REPLACE the entire contents of that file with the contents
+     of `wsgi_snippet.py`. Don't merge — the snippet is a
+     complete, standalone WSGI file. Save.
+
+  6. Click the green Reload button.
+
+  7. Visit https://<username>.pythonanywhere.com/ and register
+     your first account.
+
+If something is broken, the first place to look is the Error log
+linked from the Web tab. Common causes:
+  - project_home in the WSGI file doesn't match where apollo.py
+    actually lives
+  - The Virtualenv field on the Web tab points somewhere that
+    doesn't have the packages installed
+  - DATABASE_URL points at a host the free tier can't reach
+    (PythonAnywhere free accounts have a whitelist for outbound
+    connections; the bundled MySQL service is always allowed)
+
+
+----------------------------------------------------------------
+7. Re-running install.py
+----------------------------------------------------------------
+
+Safe to re-run. It will:
+  - Offer to reuse an existing venv/conda env (answer Y).
+  - Re-prompt for every env var (defaults shown match what you
+    entered before only if you re-paste them).
+  - Overwrite `.env` and `wsgi_snippet.py` with the new values.
+
+If you change env vars on a PythonAnywhere deployment, you must
+re-paste the new `wsgi_snippet.py` into the WSGI file and hit
+Reload — editing `.env` alone does nothing for the WSGI worker.
+
+
+----------------------------------------------------------------
+8. Common gotchas (real things that have bitten this install)
+----------------------------------------------------------------
+
+Password-reset emails never arrive (Resend)
+-------------------------------------------
+Symptom: forgot-password flow looks like it works in the UI, but
+no email shows up.
+
+In order of likelihood:
+
+  a. Domain added in Resend but not VERIFIED.
+     Adding the DNS records at your registrar AND pasting them
+     into Resend is not enough — you also have to click "Verify
+     DNS Records" on the Resend Domains page and wait for every
+     record to flip to green. Until the domain status reads
+     "Verified", Resend silently refuses to deliver mail from
+     senders on it. This is the #1 cause; check it first.
+
+     Quick check from a shell:
+         dig TXT resend._domainkey.<yourdomain> +short
+         dig TXT <yourdomain> +short         # SPF
+         dig MX  send.<yourdomain> +short
+     All three should return the values Resend gave you. If any
+     are empty, DNS hasn't propagated yet (or was entered at the
+     wrong subdomain level — some registrars auto-append the
+     domain, producing `send.<domain>.<domain>`).
+
+  b. Still using the sandbox sender (`onboarding@resend.dev`).
+     The sandbox sender only delivers to addresses you've
+     explicitly verified in the Resend dashboard. Switch
+     RESEND_FROM to an address on your own verified domain.
+
+  c. WSGI file edited but green Reload button not clicked.
+     The worker keeps running with the old env vars until you
+     Reload.
+
+  d. `resend` package not installed in the venv the Web tab
+     points at. Activate that exact venv and `pip install resend`,
+     then Reload.
+
+  e. PythonAnywhere free-tier outbound whitelist (rare now —
+     `api.resend.com` is on the list, but check the error log
+     for connection timeouts mentioning resend.com if nothing
+     else fits).
+
+Diagnostic order:
+  1. Resend dashboard → Emails log. If the request appears there,
+     Apollo successfully called Resend; the problem is downstream
+     (delivery, bounce, spam). If it doesn't appear, Apollo never
+     reached Resend → check the PA error log.
+  2. PA Web tab → Error log. Apollo prints clear messages:
+       "RESEND_API_KEY is set but the `resend` package is not
+        installed"          → cause (d)
+       "Would send email (RESEND_API_KEY not set)"
+                            → cause (c) or env var missing in WSGI
+       "Failed to send email ... via Resend: <error>"
+                            → Resend rejected it; read the error
+                              (usually cause (a) or (b))
+  3. Resend Domains page → confirm status reads "Verified", not
+     "Pending".
+
+
+`.virtualenvs` is a parent directory, not a venv
+-------------------------------------------------
+On PythonAnywhere, `/home/<user>/.virtualenvs` holds many
+virtualenvs but isn't one itself. Point install.py (and the Web
+tab's Virtualenv field) at a subdirectory like
+`/home/<user>/.virtualenvs/apollo`, not the parent folder.
+
+
+WSGI file changes don't take effect
+------------------------------------
+You must click the green "Reload" button on the Web tab after
+every change to the WSGI file. Saving the file alone doesn't
+restart the worker.
+
+
+Source code path mismatch
+--------------------------
+The Web tab's "Source code" field and the `project_home` value
+inside the WSGI file must both point to the directory containing
+`apollo.py`. If they disagree, you'll get import errors in the
+error log.
