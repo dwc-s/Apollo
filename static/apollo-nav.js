@@ -93,6 +93,54 @@
         document.body.insertAdjacentHTML('beforeend', EXPORT_MODAL_HTML);
         document.body.insertAdjacentHTML('beforeend', IMPORT_MODAL_HTML);
 
+        // ─── Mobile side-nav drawer ────────────────────────
+        // The hamburger and backdrop are styled only inside the
+        // (max-width: 768px) breakpoint, so they're invisible on
+        // desktop even though they're always in the DOM.
+        const sideNav = document.querySelector('.side-nav');
+        if (sideNav) {
+            const burger = document.createElement('button');
+            burger.type = 'button';
+            burger.className = 'nav-hamburger';
+            burger.setAttribute('aria-label', 'Toggle navigation');
+            burger.setAttribute('aria-expanded', 'false');
+            burger.textContent = '☰';
+
+            const backdrop = document.createElement('div');
+            backdrop.className = 'side-nav-backdrop';
+
+            document.body.appendChild(burger);
+            document.body.appendChild(backdrop);
+
+            function openNav() {
+                sideNav.classList.add('open');
+                backdrop.classList.add('open');
+                burger.setAttribute('aria-expanded', 'true');
+            }
+            function closeNav() {
+                sideNav.classList.remove('open');
+                backdrop.classList.remove('open');
+                burger.setAttribute('aria-expanded', 'false');
+            }
+            function toggleNav() {
+                if (sideNav.classList.contains('open')) closeNav();
+                else openNav();
+            }
+
+            burger.addEventListener('click', toggleNav);
+            backdrop.addEventListener('click', closeNav);
+            // Tapping a link inside the drawer should close it so the
+            // user lands on the new page with the drawer dismissed.
+            sideNav.querySelectorAll('a').forEach(a => {
+                a.addEventListener('click', closeNav);
+            });
+            document.addEventListener('keydown', evt => {
+                if (evt.key === 'Escape' && sideNav.classList.contains('open')) {
+                    closeNav();
+                }
+            });
+        }
+
         // ─── Export ────────────────────────────────────────────────
         const exportModal  = document.getElementById('export-modal');
         const exportLink   = document.getElementById('export-link');

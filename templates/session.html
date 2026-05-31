@@ -34,6 +34,7 @@
         window.ARROW_SHAFT_MM = {{ arrow_shaft_diameters | tojson }};
     </script>
     <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Apollo::session</title>
     <script defer src="{{ url_for('static', filename='apollo-nav.js') }}"></script>
 </head>
@@ -143,6 +144,8 @@
             </div>
 
             <div style="display:flex;gap:8px;margin-top:2px;flex-wrap:wrap;">
+                <button type="button" class="clear-shot-btn" id="confirm-btn"
+                        style="background-color:#2e7d32;color:#fff;display:none;">Confirm shot</button>
                 <button type="button" class="clear-shot-btn" id="miss-btn"
                         style="background-color:#c97a4a;color:#fff;">Missed target</button>
             </div>
@@ -202,7 +205,7 @@
                shot). It unlocks between quivers and at session start so the
                user can adjust when an arrow breaks/gets lost. The server
                enforces the same rule and rejects mismatched POSTs. #}
-            <input type="text" id="quiver_size" name="quiver_size" value="{{ quiver_size }}"{% if quiver_size_locked %} readonly{% endif %}>
+            <input type="text" id="quiver_size" name="quiver_size" value="{{ quiver_size }}" inputmode="numeric" pattern="[0-9]*"{% if quiver_size_locked %} readonly{% endif %}>
             {% if quiver_size_locked %}<div class="form-hint" style="font-size: 0.85em; color: #888;">locked until current quiver completes</div>{% endif %}
 
             <span class="form-label">Remaining arrows in quiver</span>
@@ -218,7 +221,7 @@
 
             <span class="form-label" id="distance-label">Distance to target (meters)</span>
             <br>
-            <input type="text" id="distance" name="distance" value="{{ distance }}">
+            <input type="text" id="distance" name="distance" value="{{ distance }}" inputmode="decimal">
 
             <span class="form-label">Notes</span>
             <textarea name="session_notes" id="session_notes" rows="6">{{ session_notes }}</textarea>
@@ -432,6 +435,18 @@ function recordMiss() {
     form.submit();
 }
 
+// ── Touch-device detection & confirm button ──────────────────────────────
+// On touch devices a stray tap on the target shouldn't post a shot. The
+// tap places a marker, the user reviews, then taps "Confirm shot" to
+// submit. Re-tapping the target before confirming moves the marker.
+const IS_TOUCH    = matchMedia('(hover: none) and (pointer: coarse)').matches;
+const confirmBtn  = document.getElementById('confirm-btn');
+
+confirmBtn.addEventListener('click', () => {
+    readout.innerHTML = '<span style="color:#2e7d32;font-weight:700;">SHOT RECORDED</span>';
+    form.submit();
+});
+
 // ── Click handler ────────────────────────────────────────────────────────
 stage.addEventListener('click', e => {
     const r      = img.getBoundingClientRect();
@@ -457,6 +472,13 @@ stage.addEventListener('click', e => {
     yInput.value = cartY;
     clearMarker();
     placeMarker(dx, dy, cartX, cartY);
+
+    if (IS_TOUCH) {
+        readout.innerHTML = '<span style="color:#1a3a5c;font-weight:700;">TAP CONFIRM TO RECORD</span>';
+        confirmBtn.style.display = '';
+        return;
+    }
+
     readout.innerHTML = '<span style="color:#2e7d32;font-weight:700;">SHOT RECORDED</span>';
     form.submit();
 });

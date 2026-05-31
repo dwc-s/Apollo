@@ -862,3 +862,233 @@ h4 {
 .danger-zone button[type="submit"]:hover {
     background-color: #872f2f;
 }
+
+/* ═══════════════════════════════════════════════════
+   Mobile breakpoint — phones & narrow tablets
+   ═══════════════════════════════════════════════════ */
+
+/* Hamburger button — only rendered on small screens. apollo-nav.js
+   injects it into the DOM; this rule hides it on desktop. */
+.nav-hamburger { display: none; }
+
+/* Backdrop shown behind the drawer while it's open. */
+.side-nav-backdrop {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(26, 58, 92, 0.45);
+    z-index: 499;
+}
+.side-nav-backdrop.open { display: block; }
+
+@media (max-width: 768px) {
+    body {
+        padding: 12px;
+        padding-top: 60px;  /* room for the fixed hamburger / top bar */
+    }
+
+    /* ── Side nav becomes a left-edge drawer ────────────── */
+    .side-nav {
+        width: min(280px, 82vw);
+        transform: translateX(-100%);
+        transition: transform 0.22s ease;
+    }
+    .side-nav.open { transform: translateX(0); }
+
+    .nav-hamburger {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        position: fixed;
+        top: 10px;
+        left: 10px;
+        z-index: 600;
+        width: 44px;
+        height: 44px;
+        padding: 0;
+        border: none;
+        border-radius: 8px;
+        background-color: #b3c6e3;
+        color: #1a3a5c;
+        font-size: 22px;
+        line-height: 1;
+        cursor: pointer;
+        box-shadow: 0 2px 6px rgba(99, 106, 128, 0.25);
+    }
+
+    /* Units toggle lives in the side-nav already — hide the fixed
+       corner copy so it doesn't clash with the hamburger. */
+    .units-corner-btn { display: none; }
+
+    /* Decorative side arrows — hard-coded pixel positions don't make
+       sense on a phone. */
+    .arrow-left,
+    .arrow-right { display: none; }
+
+    /* ── Titles ──────────────────────────────────────────── */
+    /* Override the desktop !important so titles fit the viewport. */
+    .title {
+        font-size: clamp(36px, 13vw, 72px) !important;
+        width: 100%;
+        -webkit-text-stroke-width: 1px;
+    }
+    .title-splash {
+        font-size: clamp(48px, 16vw, 110px);
+        -webkit-text-stroke-width: 1px;
+    }
+
+    /* ── Panels: full-width, no fixed max ────────────────── */
+    .form-panel,
+    .form-intro,
+    .auth-message,
+    .splash-panel,
+    .end-panel {
+        width: 100%;
+        max-width: none;
+        box-sizing: border-box;
+    }
+    .splash-panel { padding: 22px 18px; }
+    .end-panel    { padding: 22px 18px; }
+    .form-panel   { padding: 18px 16px; }
+
+    /* ── Previous-sessions table → card stack ─────────────
+       The desktop layout is a 10-column table with rowspan'd Stats and
+       Replay cells. On mobile we drop the table semantics entirely and
+       lay each row out as a flex column. flex order pulls the replay
+       canvas (declared last in the first row of each session) up to the
+       top of the card so it leads visually. */
+    .sessions-table {
+        width: 100%;
+        display: block;
+    }
+    .sessions-table thead { display: none; }
+    .sessions-table tbody,
+    .sessions-table tr,
+    .sessions-table td {
+        display: block;
+        width: auto;
+    }
+    /* Session banner — full-width sticky-feeling header. */
+    .sessions-table .session-group-header {
+        margin-top: 14px;
+    }
+    .sessions-table .session-group-header td {
+        border-radius: 10px 10px 0 0;
+        padding: 10px 12px;
+    }
+    /* Per-shot row → card. */
+    .sessions-table tr.shot-row {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        padding: 12px;
+        margin-bottom: 0;
+        background-color: #eef3fa;
+        border-top: 1px solid #d2dceb;
+    }
+    .sessions-table tr.shot-row td {
+        background: transparent !important;
+        padding: 2px 0;
+        border-radius: 0;
+        display: flex;
+        justify-content: space-between;
+        align-items: baseline;
+        gap: 10px;
+        font-size: 0.9rem;
+        color: #1a3a5c;
+    }
+    /* Label badge generated from data-label="Time" etc. */
+    .sessions-table tr.shot-row td[data-label]::before {
+        content: attr(data-label);
+        font-weight: 700;
+        font-size: 0.7rem;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: #4a6080;
+        flex: 0 0 auto;
+    }
+    /* Quiver-summary cell — full-width callout. */
+    .sessions-table tr.shot-row td.quiver-cell {
+        display: block;
+        background: #d8e4f3 !important;
+        border-radius: 6px;
+        padding: 8px 10px;
+        margin: 4px 0;
+        font-size: 0.85rem;
+        order: 1;
+    }
+    /* Replay canvas — pull to the top of the card.
+       Cell background matches the light card so the page reads as a
+       cohesive stack; only the round canvas itself is dark. */
+    .sessions-table tr.shot-row td.replay-cell {
+        order: -1;
+        display: block;
+        text-align: center;
+        background: transparent !important;
+        border: none;
+        padding: 4px 0 8px 0;
+    }
+    .sessions-table tr.shot-row td.replay-cell::before { content: none; }
+    .sessions-table .shot-replay {
+        max-width: min(300px, 78vw);
+        height: auto;
+        margin: 0 auto;
+    }
+    /* Round the last row's bottom corners — visual seal of the card. */
+    .sessions-table tr.shot-row:last-child,
+    .sessions-table .session-group-header + .shot-row ~ .shot-row:last-of-type {
+        border-radius: 0 0 10px 10px;
+    }
+
+    /* Search form: kill the 80% fixed width. */
+    .session-search { width: 100% !important; }
+
+    /* ── Inputs: 16px font-size suppresses iOS focus auto-zoom ── */
+    .form-panel input[type="text"],
+    .form-panel input[type="email"],
+    .form-panel input[type="password"],
+    .form-panel input[type="number"],
+    .form-panel select,
+    .form-panel textarea,
+    input[type="text"],
+    input[type="email"],
+    input[type="password"],
+    input[type="number"],
+    select,
+    textarea {
+        font-size: 16px;
+    }
+
+    /* ── Session layout: stack target above form ─────────── */
+    .session-layout {
+        flex-direction: column;
+    }
+    .target-panel {
+        flex: 0 0 auto !important;
+        width: 100%;
+        max-width: 100%;
+    }
+    /* Cap the target so the form below stays reachable on a phone.
+       Overrides the inline 75vh max set per-template in session.html. */
+    #target-img {
+        max-height: 60vh !important;
+    }
+    .form-panel.form-panel-session {
+        width: 100%;
+    }
+
+    /* ── Edit pages: 3-column grid → 1 column ────────────── */
+    .grid {
+        grid-template-columns: 1fr;
+    }
+
+    /* ── target_zones page: panel/wrap collapse cleanly ──── */
+    .zones-panel {
+        min-width: 0;
+        max-width: none;
+        flex: 1 1 100%;
+    }
+    .zones-wrap {
+        padding: 0 0 24px;
+    }
+}

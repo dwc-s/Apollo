@@ -6,6 +6,7 @@
     <link href="https://fonts.googleapis.com/css2?family=Bungee+Shade&family=Quantico:ital,wght@0,400;0,700;1,400;1,700&family=Rubik+Iso&display=swap" rel="stylesheet">
     <link rel="stylesheet" type="text/css" href="{{ url_for('static', filename='style.css') }}">
     <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Apollo::previous_sessions</title>
     <style>
         .replay-cell {
@@ -223,7 +224,6 @@
 <table class="sessions-table">
   <thead>
     <tr>
-      <th>Timestamp</th>
       <th>Bow</th>
       <th>Arrow</th>
       <th>Stats</th>
@@ -244,7 +244,7 @@
          was hard-deleted — without this the replay canvas paints black. #}
       {% set replay_target = data['target'] or default_target %}
       <tr class="session-group-header">
-        <td colspan="10">
+        <td colspan="9">
           <div class="session-header-row">
             <span>
               Session {{ session_id }} &mdash; {{ stats['pretty_session_length'] }}
@@ -276,12 +276,11 @@
           {% set quiver_num = loop.index %}
           {% set q_stat = stats["stats_by_quiver"][quiver_num] if quiver_num in stats["stats_by_quiver"] else None %}
           {% for row in quiver_rows %}
-          <tr>
-            <td>{{ row[0] | fmt_ts }}</td>
-            <td>{{ row['bow'] }}</td>
-            <td>{{ row['arrow_type'] }}</td>
+          <tr class="shot-row">
+            <td data-label="Bow">{{ row['bow'] }}</td>
+            <td data-label="Arrow">{{ row['arrow_type'] }}</td>
             {% if loop.first %}
-            <td rowspan="{{ quiver_rows | length }}">
+            <td class="quiver-cell" rowspan="{{ quiver_rows | length }}">
               {% if q_stat %}
                 <strong>Quiver #{{ q_stat["quiver_number"] }}</strong><br>
                 Hit: {{ q_stat["number_hit"] }} ({{ q_stat["percent_hit"] }}%)<br>
@@ -294,21 +293,21 @@
               {% endif %}
             </td>
             {% endif %}
-            <td>{{ row['session_notes'] }}</td>
-            <td class="tags-cell">
+            <td data-label="Notes">{{ row['session_notes'] }}</td>
+            <td class="tags-cell" data-label="Tags">
               {% for tag in (row['session_tags'] or '').split(',') if tag.strip() %}
                 <span class="tag-chip">{{ tag.strip() }}</span>
               {% endfor %}
             </td>
-            <td style="text-align:center;white-space:nowrap;">
+            <td data-label="Placement" style="text-align:center;white-space:nowrap;">
               {% if row['is_precise'] == 1 %}
                 <span style="color:#4caf50;font-weight:700;" title="Precisely measured">Precise</span>
               {% else %}
                 <span style="color:#888;" title="Estimated placement">Est.</span>
               {% endif %}
             </td>
-            <td class="x-coord">{{ row['x_coord'] }}</td>
-            <td class="y-coord">{{ row['y_coord'] }}</td>
+            <td class="x-coord" data-label="X">{{ row['x_coord'] }}</td>
+            <td class="y-coord" data-label="Y">{{ row['y_coord'] }}</td>
             {% if not ns.first_row_rendered %}
             <td class="replay-cell" rowspan="{{ rows | length }}">
               <canvas
@@ -330,26 +329,25 @@
       {% else %}
         {# No quiver size set — render rows without quiver breakdown #}
         {% for row in rows %}
-        <tr>
-          <td>{{ row[0] | fmt_ts }}</td>
-          <td>{{ row['bow'] }}</td>
-          <td>{{ row['arrow_type'] }}</td>
-          <td>&mdash;</td>
-          <td>{{ row['session_notes'] }}</td>
-          <td class="tags-cell">
+        <tr class="shot-row">
+          <td data-label="Bow">{{ row['bow'] }}</td>
+          <td data-label="Arrow">{{ row['arrow_type'] }}</td>
+          <td class="quiver-cell">&mdash;</td>
+          <td data-label="Notes">{{ row['session_notes'] }}</td>
+          <td class="tags-cell" data-label="Tags">
             {% for tag in (row['session_tags'] or '').split(',') if tag.strip() %}
               <span class="tag-chip">{{ tag.strip() }}</span>
             {% endfor %}
           </td>
-          <td style="text-align:center;white-space:nowrap;">
+          <td data-label="Placement" style="text-align:center;white-space:nowrap;">
             {% if row['is_precise'] == 1 %}
               <span style="color:#4caf50;font-weight:700;" title="Precisely measured">Precise</span>
             {% else %}
               <span style="color:#888;" title="Estimated placement">Est.</span>
             {% endif %}
           </td>
-          <td class="x-coord">{{ row['x_coord'] }}</td>
-          <td class="y-coord">{{ row['y_coord'] }}</td>
+          <td class="x-coord" data-label="X">{{ row['x_coord'] }}</td>
+          <td class="y-coord" data-label="Y">{{ row['y_coord'] }}</td>
           {% if loop.first %}
           <td class="replay-cell" rowspan="{{ rows | length }}">
             <canvas
