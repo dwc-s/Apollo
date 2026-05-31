@@ -275,6 +275,7 @@ function applyPrecision(value) {
     precisionRadios.forEach(r => { r.checked = (r.value === value); });
     isPreciseInput.value = value;
     localStorage.setItem(PRECISION_STORAGE_KEY, value);
+    if (value !== '1') removePrecisionCursor();
 }
 
 const savedPrecision = localStorage.getItem(PRECISION_STORAGE_KEY) || '0';
@@ -322,6 +323,7 @@ if (img.complete) drawCrosshair();
 function redrawOverlays() {
     drawCrosshair();
     drawPastShots();
+    updatePrecisionCursorRadius();
     const x = parseFloat(xInput.value);
     const y = parseFloat(yInput.value);
     if (!isNaN(x) && !isNaN(y) && !(x === 100000 && y === 100000)) {
@@ -427,6 +429,54 @@ function isOffTarget(x, y) {
     return dist > outer;
 }
 
+// ── Precision cursor follower ────────────────────────────────────────────
+// In precision mode the system cursor is hidden over the target and a
+// translucent circle (arrow-shaft sized) follows the pointer. Visualizes
+// the rule that any part of the shaft touching a higher-value zone counts
+// as that zone.
+var precisionCursorEl = null;
+
+function isPrecisionActive() { return isPreciseInput.value === '1'; }
+
+function ensurePrecisionCursor() {
+    if (precisionCursorEl) return precisionCursorEl;
+    const el = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+    el.id = 'precision-cursor';
+    el.setAttribute('fill', 'rgba(252,186,3,0.35)');
+    el.setAttribute('stroke', 'rgba(201,138,0,0.75)');
+    el.setAttribute('stroke-width', '1');
+    el.setAttribute('pointer-events', 'none');
+    svg.appendChild(el);
+    precisionCursorEl = el;
+    return el;
+}
+
+function updatePrecisionCursorRadius() {
+    if (!precisionCursorEl) return;
+    const w = img.clientWidth;
+    if (!w) return;
+    const r = (currentShaftDiameterMm() / 2) * (w / window.APOLLO.target_width_mm);
+    precisionCursorEl.setAttribute('r', r);
+}
+
+function showPrecisionCursor(dx, dy) {
+    ensurePrecisionCursor();
+    updatePrecisionCursorRadius();
+    precisionCursorEl.setAttribute('cx', dx);
+    precisionCursorEl.setAttribute('cy', dy);
+    precisionCursorEl.style.display = '';
+}
+
+function hidePrecisionCursor() {
+    if (precisionCursorEl) precisionCursorEl.style.display = 'none';
+    stage.classList.remove('precision-cursor');
+}
+
+function removePrecisionCursor() {
+    if (precisionCursorEl) { precisionCursorEl.remove(); precisionCursorEl = null; }
+    stage.classList.remove('precision-cursor');
+}
+
 function recordMiss() {
     xInput.value = 100000;
     yInput.value = 100000;
@@ -446,6 +496,24 @@ confirmBtn.addEventListener('click', () => {
     readout.innerHTML = '<span style="color:#2e7d32;font-weight:700;">SHOT RECORDED</span>';
     form.submit();
 });
+
+// ── Precision cursor mouse tracking ──────────────────────────────────────
+stage.addEventListener('mousemove', e => {
+    if (!isPrecisionActive() || IS_TOUCH) { hidePrecisionCursor(); return; }
+    const r = img.getBoundingClientRect();
+    const dx = e.clientX - r.left;
+    const dy = e.clientY - r.top;
+    if (dx < 0 || dy < 0 || dx > r.width || dy > r.height) {
+        hidePrecisionCursor();
+        return;
+    }
+    stage.classList.add('precision-cursor');
+    showPrecisionCursor(dx, dy);
+});
+stage.addEventListener('mouseleave', hidePrecisionCursor);
+
+const arrowSelect = document.getElementById('arrow_type');
+if (arrowSelect) arrowSelect.addEventListener('change', updatePrecisionCursorRadius);
 
 // ── Click handler ────────────────────────────────────────────────────────
 stage.addEventListener('click', e => {

@@ -342,6 +342,8 @@ h4 {
     box-shadow: 0 4px 14px rgba(99, 106, 128, 0.2);
 }
 
+.target-stage.precision-cursor { cursor: none; }
+
 #target-img {
     display: block;
     /* width / height injected via inline <style> in each template */
