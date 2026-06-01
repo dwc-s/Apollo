@@ -182,12 +182,13 @@ _NFAA_RING_FG = '#ffffff'
 
 
 def _nfaa_indoor_blue_zones():
+    # X ring is half the inner-5 radius (4cm dia X inside 8cm dia 5).
     return [
-        (5, 40.0,  _NFAA_RING_FG),   # X ring
-        (5, 80.0,  _NFAA_RING_FG),   # inner 5
-        (4, 120.0, _NFAA_RING_FG),
-        (3, 160.0, _NFAA_RING_FG),
-        (2, 180.0, _NFAA_RING_FG),
+        (5, 20.0,  _NFAA_RING_FG),   # X ring
+        (5, 40.0,  _NFAA_RING_FG),   # inner 5
+        (4, 80.0,  _NFAA_RING_FG),
+        (3, 120.0, _NFAA_RING_FG),
+        (2, 160.0, _NFAA_RING_FG),
         (1, 200.0, _NFAA_RING_FG),
     ]
 
@@ -196,9 +197,10 @@ def _nfaa_5spot_zones():
     """NFAA 5-spot — Apollo flattens the 5-face layout into one logical
     face with two zones (X / 5). The per-spot constraint is enforced
     visually only; users can click anywhere they actually hit."""
+    # X ring is half the 5-ring radius (4cm dia X inside 8cm dia 5).
     return [
+        (5, 20.0, _NFAA_RING_FG),
         (5, 40.0, _NFAA_RING_FG),
-        (5, 80.0, _NFAA_RING_FG),
     ]
 
 
@@ -218,9 +220,9 @@ TOURNAMENT_FACES = {
     'wa_122': {
         'name':             'WA 122cm 10-zone',
         'physical_size_mm': 1220.0,
-        'x_ring_mm':        61.0,
+        'x_ring_mm':        30.5,
         'face_bg':          '#ffffff',
-        'zones':            _wa_zones_10(610.0, 61.0),
+        'zones':            _wa_zones_10(610.0, 30.5),
     },
     # WA outdoor — 80cm 6-ring (compound 50m)
     'wa_80_6ring': {
@@ -279,7 +281,7 @@ TOURNAMENT_FACES = {
     'nfaa_indoor_blue': {
         'name':             'NFAA Indoor Blue',
         'physical_size_mm': 400.0,
-        'x_ring_mm':        40.0,
+        'x_ring_mm':        20.0,
         'face_bg':          _NFAA_BLUE_BG,
         'zones':            _nfaa_indoor_blue_zones(),
     },
@@ -288,7 +290,7 @@ TOURNAMENT_FACES = {
     'nfaa_5spot': {
         'name':             'NFAA 5-spot (per spot)',
         'physical_size_mm': 200.0,
-        'x_ring_mm':        40.0,
+        'x_ring_mm':        20.0,
         'face_bg':          _NFAA_BLUE_BG,
         'zones':            _nfaa_5spot_zones(),
     },
@@ -297,9 +299,9 @@ TOURNAMENT_FACES = {
     'vegas_3spot': {
         'name':             'Vegas 40cm (per spot)',
         'physical_size_mm': 200.0,
-        'x_ring_mm':        10.0,
+        'x_ring_mm':        5.0,
         'face_bg':          '#ffffff',
-        'zones':            _wa_zones_6(100.0, 10.0),
+        'zones':            _wa_zones_6(100.0, 5.0),
     },
     # NFAA Field 65cm — 5/4/3 with X inside 5
     'nfaa_field_65': {
@@ -767,7 +769,7 @@ def _compute_tournament_progress(session_id, user_id, round_def):
                 pass
         running += points
         end_arrows.append({'points': points, 'x': xraw, 'y': yraw,
-                           'miss': (xraw == MISS_SENTINEL)})
+                           'miss': (xraw == MISS_SENTINEL and yraw == MISS_SENTINEL)})
         if len(end_arrows) == arrows_per_end:
             out['ends'].append({
                 'arrows':       list(end_arrows),

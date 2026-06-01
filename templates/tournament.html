@@ -275,7 +275,7 @@
                 <div class="vals" id="coord-readout">
                     <span style="color:#636a80">— click target —</span>
                 </div>
-                <div class="coord-hint" id="coord-hint">(0, 0) = center · +X right · +Y up · cm</div>
+                <div class="coord-hint" id="coord-hint">(0, 0) = center · +X right · +Y up</div>
             </div>
 
             <div style="display:flex;gap:8px;margin-top:2px;flex-wrap:wrap;">
@@ -659,11 +659,11 @@ document.addEventListener('keydown', evt => {
     if (evt.key === 'Escape' && leaveModal.classList.contains('open')) closeLeaveModal();
 });
 
-// Units toggle (label only — coords stay in cm; consistent with session.html)
+// Units toggle (label only — the tournament readout never shows coords,
+// so the hint stays unit-less; the toggle still flips localStorage so
+// the preference carries over to /sesh).
 function applyUnits() {
     const imperial = localStorage.getItem(UNITS_KEY) === 'imperial';
-    document.getElementById('coord-hint').textContent =
-        imperial ? '(0, 0) = center · +X right · +Y up · in' : '(0, 0) = center · +X right · +Y up · cm';
     document.getElementById('units-toggle').textContent = imperial ? '⇄ Metric' : '⇄ Imperial';
 }
 document.getElementById('units-toggle').addEventListener('click', () => {
