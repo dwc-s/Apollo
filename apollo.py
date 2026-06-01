@@ -4518,6 +4518,190 @@ def delete_session(session_id):
     return redirect(url_for('previous_sessions'))
 
 
+@app.route('/edit_session/<int:session_id>', methods=['GET', 'POST'])
+@login_required
+def edit_session(session_id):
+    """Edit a past session's session-level attribution and per-shot rows.
+
+    Session-level edits (bow / arrow / distance / notes / tags / target)
+    apply to every row in the session and re-snapshot the bow_* / arrow_*
+    denormalized columns from the user's current bows/arrows tables — same
+    snapshot logic the active /sesh path uses on insert.
+    """
+    user_id = current_user_id()
+    try:
+        with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
+            rows = cur.execute(
+                "SELECT id, session_id, timestamp, bow, arrow_type, quiver_size, "
+                "arrows_remaining, distance, session_notes, session_tags, "
+                "x_coord, y_coord, is_precise, target_id "
+                "FROM apollo WHERE session_id = %s AND user_id = %s "
+                "ORDER BY timestamp, id",
+                (session_id, user_id)
+            ).fetchall()
+            if not rows:
+                abort(404)
+
+            if request.method == 'POST':
+                first = rows[0]
+                new_bow      = (request.form.get('bow') or first['bow'] or '').strip()
+                new_arrow    = (request.form.get('arrow_type') or first['arrow_type'] or '').strip()
+                new_distance = (request.form.get('distance') or '').strip()
+                new_notes    = request.form.get('session_notes', '')
+                new_tags     = _normalize_tags(request.form.get('session_tags', ''))
+                posted_tid   = (request.form.get('target_id') or '').strip()
+                try:
+                    new_target_id = int(posted_tid) if posted_tid else first['target_id']
+                except ValueError:
+                    new_target_id = first['target_id']
+                # Reject a target_id the current user doesn't own.
+                if new_target_id is not None and get_target(new_target_id, user_id) is None:
+                    new_target_id = first['target_id']
+
+                # Refresh bow snapshot from the current bows row, if any.
+                bow_row = cur.execute(
+                    "SELECT nock_height, bow_draw_weight, effective_draw_weight, "
+                    "amo, bow_type FROM bows WHERE bow_model = %s AND user_id = %s LIMIT 1",
+                    (new_bow, user_id)
+                ).fetchone()
+                if bow_row is not None:
+                    bow_snap = (
+                        bow_row['nock_height'], bow_row['bow_draw_weight'],
+                        bow_row['effective_draw_weight'], bow_row['amo'],
+                        bow_row['bow_type'],
+                    )
+                else:
+                    bow_snap = (None, None, None, None, None)
+
+                # Refresh arrow snapshot from the current arrows row, if any.
+                arrow_row = cur.execute(
+                    "SELECT length, spine, shaft_weight, shaft_diameter, "
+                    "shaft_material, nock_weight, tip, tip_weight FROM arrows "
+                    "WHERE arrow = %s AND user_id = %s LIMIT 1",
+                    (new_arrow, user_id)
+                ).fetchone()
+                if arrow_row is not None:
+                    arrow_snap = (
+                        arrow_row['length'], arrow_row['spine'],
+                        arrow_row['shaft_weight'], arrow_row['shaft_diameter'],
+                        arrow_row['shaft_material'], arrow_row['nock_weight'],
+                        arrow_row['tip'], arrow_row['tip_weight'],
+                    )
+                else:
+                    arrow_snap = (None, None, None, None, None, None, None, None)
+
+                # Per-shot deletes — checkbox name "delete_<row id>".
+                shot_ids = {int(r['id']) for r in rows}
+                delete_ids = []
+                for key in request.form.keys():
+                    if not key.startswith('delete_'):
+                        continue
+                    try:
+                        rid = int(key.split('_', 1)[1])
+                    except ValueError:
+                        continue
+                    if rid in shot_ids:
+                        delete_ids.append(rid)
+                if delete_ids:
+                    placeholders = ','.join(['%s'] * len(delete_ids))
+                    cur.execute(
+                        f"DELETE FROM apollo WHERE user_id = %s AND session_id = %s "
+                        f"AND id IN ({placeholders})",
+                        tuple([user_id, session_id] + delete_ids)
+                    )
+
+                # Per-shot hit→miss conversion — checkbox name "miss_<row id>".
+                # Going the other way (miss→hit) needs new coords, so it isn't
+                # offered here. The form just marks a shot as a miss.
+                for r in rows:
+                    if int(r['id']) in delete_ids:
+                        continue
+                    if request.form.get(f"miss_{r['id']}") == '1':
+                        rx = str(r['x_coord']).strip() if r['x_coord'] is not None else ''
+                        ry = str(r['y_coord']).strip() if r['y_coord'] is not None else ''
+                        if rx != MISS_SENTINEL or ry != MISS_SENTINEL:
+                            cur.execute(
+                                "UPDATE apollo SET x_coord = %s, y_coord = %s, "
+                                "is_precise = 0 WHERE id = %s AND user_id = %s",
+                                (MISS_SENTINEL, MISS_SENTINEL, int(r['id']), user_id)
+                            )
+
+                # Session-level update — bow/arrow plus their denormalized snapshots,
+                # distance, notes, tags, target. quiver/arrows_remaining/x/y are
+                # left untouched.
+                cur.execute(
+                    "UPDATE apollo SET bow = %s, arrow_type = %s, distance = %s, "
+                    "session_notes = %s, session_tags = %s, target_id = %s, "
+                    "nock_height = %s, bow_draw_weight = %s, effective_draw_weight = %s, "
+                    "bow_amo = %s, bow_type = %s, "
+                    "arrow_length = %s, arrow_spine = %s, arrow_shaft_weight = %s, "
+                    "arrow_shaft_diameter = %s, arrow_shaft_material = %s, "
+                    "arrow_nock_weight = %s, arrow_tip = %s, arrow_tip_weight = %s "
+                    "WHERE session_id = %s AND user_id = %s",
+                    (new_bow, new_arrow, new_distance, new_notes, new_tags,
+                     new_target_id, *bow_snap, *arrow_snap,
+                     session_id, user_id)
+                )
+                con.commit()
+                flash(f"Session {session_id} updated.")
+                return redirect(url_for('previous_sessions'))
+
+            # GET — gather dropdown options.
+            arrow_rows = cur.execute(
+                "SELECT DISTINCT arrow FROM arrows WHERE user_id = %s ORDER BY arrow",
+                (user_id,)
+            ).fetchall()
+            arrow_types = [r[0] for r in arrow_rows] if arrow_rows else []
+            bow_rows = cur.execute(
+                "SELECT DISTINCT bow_model FROM bows WHERE user_id = %s ORDER BY bow_model",
+                (user_id,)
+            ).fetchall()
+            bow_models = [r[0] for r in bow_rows] if bow_rows else []
+            target_rows = cur.execute(
+                "SELECT id AS rowid, name FROM targets "
+                "WHERE is_active = 1 AND user_id = %s ORDER BY name",
+                (user_id,)
+            ).fetchall()
+            targets_list = [{'rowid': r['rowid'], 'name': r['name']} for r in target_rows]
+    except SQLAlchemyError as e:
+        print(f"❌ Edit-session error: {e}")
+        flash("Could not load session for editing — please try again.")
+        return redirect(url_for('previous_sessions'))
+
+    first = rows[0]
+    current = {
+        'bow':           first['bow'] or '',
+        'arrow_type':    first['arrow_type'] or '',
+        'distance':      first['distance'] or '',
+        'session_notes': first['session_notes'] or '',
+        'session_tags':  first['session_tags'] or '',
+        'target_id':     first['target_id'],
+    }
+    # Per-row miss flag for the template — same rule as the replay payload.
+    shot_view = []
+    for r in rows:
+        xraw = str(r['x_coord']).strip() if r['x_coord'] is not None else ''
+        yraw = str(r['y_coord']).strip() if r['y_coord'] is not None else ''
+        shot_view.append({
+            'id':        int(r['id']),
+            'timestamp': r['timestamp'],
+            'x':         xraw,
+            'y':         yraw,
+            'is_miss':   (xraw == MISS_SENTINEL and yraw == MISS_SENTINEL),
+            'is_precise': r['is_precise'],
+        })
+    return render_template(
+        'edit_session.html',
+        session_id=session_id,
+        current=current,
+        shots=shot_view,
+        bow_models=bow_models,
+        arrow_types=arrow_types,
+        targets_list=targets_list,
+        tag_suggestions=_distinct_user_tags(user_id),
+    )
+
+
 @app.route('/end_session', methods=['GET', 'POST'])
 @login_required
 def end_session():
