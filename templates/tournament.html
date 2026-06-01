@@ -300,6 +300,9 @@
                         style="background-color:#2e7d32;color:#fff;display:none;">Confirm shot</button>
                 <button type="button" class="clear-shot-btn" id="miss-btn"
                         style="background-color:#c97a4a;color:#fff;">Missed target</button>
+                <button type="button" class="clear-shot-btn" id="recall-btn"
+                        style="background-color:#5a6c8a;color:#fff;"
+                        title="Undo the most recent shot in this session">Recall arrow</button>
             </div>
         </div>
 
@@ -538,6 +541,12 @@ function recordMiss() {
     xInput.value = 100000;
     yInput.value = 100000;
     readout.innerHTML = '<span style="color:#c97a4a;font-weight:700;">MISSED TARGET</span>';
+    // /sesh's POST re-renders the page with x=y=100000 so the "MISSED
+    // TARGET" message stays visible until the next click. /tournament
+    // redirects to GET, losing that context — stash the miss in
+    // sessionStorage so the reloaded page can resurface the message
+    // for the same duration.
+    sessionStorage.setItem('apollo_miss_notice', '1');
     form.submit();
 }
 
@@ -781,6 +790,53 @@ stage.addEventListener('click', e => {
 
 document.getElementById('miss-btn').addEventListener('click', recordMiss);
 
+// ── Recall arrow button ──────────────────────────────────────────────────
+// Undo the most recent shot in this tournament session — for accidental
+// submissions. Fires a POST to /recall_arrow, then reloads so the page
+// re-renders without the deleted shot (and counters/scorecard reflect it).
+const recallBtn = document.getElementById('recall-btn');
+if (recallBtn) {
+    recallBtn.addEventListener('click', async () => {
+        if (ROUND_COMPLETE) return;
+        recallBtn.disabled = true;
+        try {
+            const fd = new FormData();
+            fd.append('csrf_token', document.querySelector('input[name="csrf_token"]').value);
+            const res = await fetch('/recall_arrow', { method: 'POST', body: fd });
+            let payload = {};
+            try { payload = await res.json(); } catch (_) {}
+            if (res.ok && payload.ok) {
+                sessionStorage.setItem('apollo_recall_notice', '1');
+                // Navigate via GET, not reload — the current page is the
+                // response to the last shot's POST, and reload() would
+                // prompt Firefox to resubmit it.
+                window.location.assign('/tournament');
+                return;
+            }
+            const msg = payload.msg || 'Could not recall arrow.';
+            readout.innerHTML = '<span style="color:#c97a4a;font-weight:700;">' +
+                                msg.replace(/[<>&]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;'}[c])) +
+                                '</span>';
+        } catch (err) {
+            readout.innerHTML = '<span style="color:#c97a4a;font-weight:700;">Could not recall arrow.</span>';
+        } finally {
+            recallBtn.disabled = false;
+        }
+    });
+    if (sessionStorage.getItem('apollo_recall_notice')) {
+        sessionStorage.removeItem('apollo_recall_notice');
+        readout.innerHTML = '<span style="color:#1a3a5c;font-weight:700;">ARROW RECALLED — re-enter the shot</span>';
+    }
+}
+
+// Resurface the "MISSED TARGET" message after the tournament's POST→GET
+// redirect — same persistence as /sesh, which renders the message via
+// the round-tripped x_coord/y_coord values.
+if (sessionStorage.getItem('apollo_miss_notice')) {
+    sessionStorage.removeItem('apollo_miss_notice');
+    readout.innerHTML = '<span style="color:#c97a4a;font-weight:700;">MISSED TARGET</span>';
+}
+
 // ── Precision cursor follower ────────────────────────────────────────
 // In precision mode the system cursor is hidden over the target and a
 // translucent circle (sized to the selected arrow's actual shaft
@@ -788,7 +844,14 @@ document.getElementById('miss-btn').addEventListener('click', recordMiss);
 // any part of the shaft touching a higher-value zone counts as that
 // zone — so the user can see exactly which ring their click will
 // register in. Same behavior as the regular /sesh page.
-let precisionCursorEl = null;
+// `var` (not `let`) so the declaration hoists. updatePrecisionCursorRadius
+// can run during the initial redrawOverlays() — triggered synchronously
+// when the target image is already cached and img.complete is true at
+// script-eval time — which happens *before* this source line executes. A
+// `let` declaration would still be in the temporal dead zone at that point
+// and throw ReferenceError, breaking the rest of the script (click and
+// mousemove handlers never register). Same pattern as session.html.
+var precisionCursorEl = null;
 
 function isPrecisionActive() { return isPreciseInput.value === '1'; }
 

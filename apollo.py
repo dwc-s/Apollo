@@ -3888,6 +3888,12 @@ def sesh():
         get_current_qs > 0
         and 0 < get_arrows_remaining < get_current_qs
     )
+    # Repopulate the in-progress quiver's markers on GET so a mid-session
+    # navigation (e.g. a Recall arrow that GET-redirects back to /sesh)
+    # restores the past-shot dots instead of clearing the target.
+    get_past_shots_list = get_past_shots(
+        session['session_id'], get_current_qs, get_arrows_remaining, user_id
+    ) if get_current_qs > 0 else []
     return render_template('session.html',
                            session_id=session['session_id'],
                            arrow_type='',
@@ -3905,13 +3911,88 @@ def sesh():
                            y_coord='',
                            arrow_types=arrow_types,
                            arrow_shaft_diameters=_arrow_shaft_diameters_for_user(user_id),
-                           past_shots=[],
+                           past_shots=get_past_shots_list,
                            is_precise=0,
                            record_mode=record_mode,
                            targets_list=targets_list,
                            selected_target_id=session.get('target_id'),
                            target_locked=target_locked,
                            target_config=target_config)
+
+
+@app.route('/recall_arrow', methods=['POST'])
+@login_required
+def recall_arrow():
+    """Undo the most recently submitted shot in the active session.
+
+    Deletes the latest apollo row for this user's current session and
+    rewinds the in-memory counters (arrows_remaining, quivers_completed,
+    current_quiver_size, and the tournament segment index when applicable)
+    to the state they held before that shot was saved.
+
+    The row's stored ``arrows_remaining`` is the *pre-decrement* value,
+    so restoring the cookie to that number undoes the per-shot decrement;
+    if it was 1, that shot also closed a quiver so quivers_completed
+    drops by one as well. Used by the "Recall arrow" button on /sesh
+    and /tournament for accidental submissions.
+    """
+    user_id = current_user_id()
+    session_id = session.get('session_id')
+    if session_id is None:
+        return jsonify(ok=False, msg='No active session.'), 400
+
+    try:
+        with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
+            row = cur.execute(
+                "SELECT id, quiver_size, arrows_remaining FROM apollo "
+                "WHERE session_id = %s AND user_id = %s "
+                "ORDER BY id DESC LIMIT 1",
+                (session_id, user_id)
+            ).fetchone()
+            if not row:
+                return jsonify(ok=False, msg='No arrow to recall.'), 400
+            row_id = row['id']            if 'id'            in row else row[0]
+            row_qs = row['quiver_size']   if 'quiver_size'   in row else row[1]
+            row_ar = row['arrows_remaining'] if 'arrows_remaining' in row else row[2]
+            cur.execute(
+                "DELETE FROM apollo WHERE id = %s AND user_id = %s",
+                (row_id, user_id)
+            )
+            con.commit()
+    except SQLAlchemyError as e:
+        print(f"❌ Recall arrow error: {e}")
+        return jsonify(ok=False, msg='Database error.'), 500
+
+    try:
+        row_qs_int = int(row_qs) if row_qs is not None else 0
+    except (TypeError, ValueError):
+        row_qs_int = 0
+    try:
+        row_ar_int = int(row_ar) if row_ar is not None else 0
+    except (TypeError, ValueError):
+        row_ar_int = 0
+
+    quivers_completed = int(session.get('quivers_completed', 0) or 0)
+    if row_ar_int == 1 and quivers_completed > 0:
+        quivers_completed -= 1
+    session['quivers_completed'] = quivers_completed
+    session['arrows_remaining']  = row_ar_int
+    if row_qs_int > 0:
+        session['current_quiver_size'] = row_qs_int
+
+    # Tournament-only: a recalled shot that previously crossed a segment
+    # boundary should roll the segment index back too, so the next shot's
+    # distance matches what it had when the recalled shot was fired.
+    round_key = session.get('tournament_round_key')
+    round_def = TOURNAMENT_ROUNDS.get(round_key) if round_key else None
+    if round_def and round_def.get('segments'):
+        seg_idx = int(session.get('tournament_segment_idx', 0) or 0)
+        if seg_idx > 0:
+            prior_ends = sum(int(s['ends']) for s in round_def['segments'][:seg_idx])
+            if quivers_completed < prior_ends:
+                session['tournament_segment_idx'] = seg_idx - 1
+
+    return jsonify(ok=True)
 
 
 # ── Tournament mode routes ──────────────────────────────────────────────
@@ -4220,9 +4301,15 @@ def tournament():
         target_config['zone_radii_mm'] = _zone_radii_for_target(target_id, user_id)
         target_config['default_shaft_diameter_mm'] = DEFAULT_SHAFT_DIAMETER_MM
 
+    # At session start (and between completed ends) the cookie stores
+    # arrows_remaining=0 — the POST handler treats that as "refill to
+    # arrows_per_end" before saving the next shot. Mirror that here so
+    # the right-rail counter shows the upcoming end's size instead of 0.
+    arrows_remaining_display = (
+        int(session.get('arrows_remaining') or 0) or arrows_per_end
+    )
     past_shots = get_past_shots(session_id, arrows_per_end,
-                                session.get('arrows_remaining', arrows_per_end),
-                                user_id)
+                                arrows_remaining_display, user_id)
 
     return render_template(
         'tournament.html',
@@ -4238,7 +4325,7 @@ def tournament():
         arrow_types=arrow_types,
         bow_models=bow_models,
         arrows_per_end=arrows_per_end,
-        arrows_remaining=session.get('arrows_remaining', arrows_per_end),
+        arrows_remaining=arrows_remaining_display,
         quivers_completed=session.get('quivers_completed', 0),
         progress=progress,
         current_distance_m=current_distance_m,

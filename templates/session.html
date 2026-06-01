@@ -166,6 +166,9 @@
                         style="background-color:#2e7d32;color:#fff;display:none;">Confirm shot</button>
                 <button type="button" class="clear-shot-btn" id="miss-btn"
                         style="background-color:#c97a4a;color:#fff;">Missed target</button>
+                <button type="button" class="clear-shot-btn" id="recall-btn"
+                        style="background-color:#5a6c8a;color:#fff;"
+                        title="Undo the most recent shot in this session">Recall arrow</button>
             </div>
         </div>
 
@@ -874,6 +877,45 @@ applyUnits();
 
 // ── Missed target button ─────────────────────────────────────────────────
 document.getElementById('miss-btn').addEventListener('click', recordMiss);
+
+// ── Recall arrow button ──────────────────────────────────────────────────
+// Undo the most recent shot in this session — for the "I tapped the wrong
+// place by accident" case. Fires a POST to /recall_arrow, then reloads so
+// the page re-renders without the deleted shot. A sessionStorage flag
+// surfaces the "ARROW RECALLED" banner after reload.
+const recallBtn = document.getElementById('recall-btn');
+if (recallBtn) {
+    recallBtn.addEventListener('click', async () => {
+        recallBtn.disabled = true;
+        try {
+            const fd = new FormData();
+            fd.append('csrf_token', document.querySelector('input[name="csrf_token"]').value);
+            const res = await fetch('/recall_arrow', { method: 'POST', body: fd });
+            let payload = {};
+            try { payload = await res.json(); } catch (_) {}
+            if (res.ok && payload.ok) {
+                sessionStorage.setItem('apollo_recall_notice', '1');
+                // Navigate via GET, not reload — the current page is the
+                // response to the last shot's POST, and reload() would
+                // prompt Firefox to resubmit it.
+                window.location.assign('/sesh');
+                return;
+            }
+            const msg = payload.msg || 'Could not recall arrow.';
+            readout.innerHTML = '<span style="color:#c97a4a;font-weight:700;">' +
+                                msg.replace(/[<>&]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;'}[c])) +
+                                '</span>';
+        } catch (err) {
+            readout.innerHTML = '<span style="color:#c97a4a;font-weight:700;">Could not recall arrow.</span>';
+        } finally {
+            recallBtn.disabled = false;
+        }
+    });
+    if (sessionStorage.getItem('apollo_recall_notice')) {
+        sessionStorage.removeItem('apollo_recall_notice');
+        readout.innerHTML = '<span style="color:#1a3a5c;font-weight:700;">ARROW RECALLED — re-enter the shot</span>';
+    }
+}
 
 // ── Leave-session warning ────────────────────────────────────────────────
 // Intercept clicks on any in-page link and offer to either stay or end the
