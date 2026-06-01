@@ -1,0 +1,680 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Bungee+Shade&family=Quantico:ital,wght@0,400;0,700;1,400;1,700&family=Rubik+Iso&display=swap" rel="stylesheet">
+    <link rel="stylesheet" type="text/css" href="{{ url_for('static', filename='style.css') }}">
+    {% if view == 'shoot' %}
+    <style>
+        /* Same panel sizing as session.html so the canvas behaves the
+           same way at every breakpoint. */
+        .target-panel {
+            flex: 0 1 min({{ target_config.img_width }}px,
+                          calc(75vh * {{ target_config.img_width }} / {{ target_config.img_height }}));
+            min-width: 280px;
+        }
+        #target-img {
+            display: block;
+            width: auto;
+            height: auto;
+            max-width: 100%;
+            max-height: 75vh;
+            aspect-ratio: {{ target_config.img_width }} / {{ target_config.img_height }};
+            visibility: hidden;
+        }
+        /* Tournament face background covers the entire stage — the
+           placeholder image is hidden and the SVG overlay paints the
+           real ring layout on top, sized from face_render.rings. */
+        .target-stage {
+            background: {{ face_render.face_bg }};
+        }
+        .end-table {
+            font-family: "Quantico", sans-serif;
+            font-size: 0.85rem;
+            border-collapse: collapse;
+            width: 100%;
+            margin-top: 8px;
+        }
+        .end-table th, .end-table td {
+            padding: 2px 6px;
+            border: 1px solid #95abcf;
+            text-align: center;
+            color: #1a3a5c;
+        }
+        .end-table thead th { background: #b3c6e3; }
+        .end-table tr.partial td { background: #f5f0d8; font-style: italic; }
+        .end-table .arrow-miss { color: #c97a4a; }
+        .progress-card {
+            background-color: #b3c6e3;
+            border-radius: 16px;
+            padding: 12px 16px;
+            font-family: "Quantico", sans-serif;
+            color: #1a3a5c;
+            margin-bottom: 12px;
+        }
+        .progress-card .row { display: flex; gap: 14px; flex-wrap: wrap; }
+        .progress-card .metric { flex: 1 1 100px; }
+        .progress-card .metric .v {
+            font-size: 1.6rem; font-weight: 700; display: block;
+        }
+        .progress-card .metric .k {
+            font-size: 0.7rem; opacity: 0.7; text-transform: uppercase;
+        }
+        .complete-banner {
+            background: #2e7d32;
+            color: #fff;
+            padding: 10px 16px;
+            border-radius: 12px;
+            margin-bottom: 12px;
+            font-family: "Quantico", sans-serif;
+            font-weight: 700;
+        }
+    </style>
+    {% endif %}
+    {% if view == 'selector' %}
+    <style>
+        .round-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(290px, 1fr));
+            gap: 12px;
+            max-width: 1100px;
+            margin: 0 auto 24px auto;
+        }
+        .round-card {
+            background-color: #b3c6e3;
+            border-radius: 16px;
+            padding: 14px 16px;
+            font-family: "Quantico", sans-serif;
+            color: #1a3a5c;
+        }
+        .round-card h4 { margin: 0 0 6px 0; font-size: 1.05rem; }
+        .round-card p  { margin: 4px 0; font-size: 0.85rem; opacity: 0.85; }
+        .round-card .spec {
+            font-size: 0.75rem;
+            opacity: 0.8;
+            margin-top: 8px;
+        }
+        .round-card form { margin-top: 10px; }
+        .round-card button {
+            background: #1a3a5c;
+            color: #fff;
+            border: none;
+            padding: 6px 14px;
+            border-radius: 8px;
+            font-family: "Quantico", sans-serif;
+            font-weight: 700;
+            cursor: pointer;
+        }
+        .org-header {
+            font-family: "Quantico", sans-serif;
+            font-weight: 700;
+            color: #1a3a5c;
+            font-size: 1.2rem;
+            max-width: 1100px;
+            margin: 12px auto 6px auto;
+        }
+        .selector-intro {
+            max-width: 1100px;
+            margin: 0 auto 16px auto;
+            font-family: "Quantico", sans-serif;
+            font-size: 0.95rem;
+            color: #1a3a5c;
+        }
+    </style>
+    {% endif %}
+    <script>
+        {% if view == 'shoot' %}
+        window.APOLLO         = {{ target_config | tojson }};
+        window.PAST_SHOTS     = {{ past_shots | tojson }};
+        window.ARROW_SHAFT_MM = {{ arrow_shaft_diameters | tojson }};
+        window.FACE_RENDER    = {{ face_render | tojson }};
+        {% endif %}
+    </script>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Apollo::tournament</title>
+    <script defer src="{{ url_for('static', filename='apollo-nav.js') }}"></script>
+</head>
+<body>
+<nav class="side-nav">
+    <a href="/" class="side-nav-brand">Apollo</a>
+    <a href="/sesh" class="side-nav-link"><span class="nav-badge">→</span>Start session</a>
+    <a href="/tournament" class="side-nav-link"><span class="nav-badge">★</span>Tournament</a>
+    <a href="/previous_sessions" class="side-nav-link"><span class="nav-badge">→</span>Previous sessions</a>
+    <hr class="side-nav-divider">
+    <a href="/analyze" class="side-nav-link"><span class="nav-badge">→</span>Analyze data</a>
+    <hr class="side-nav-divider">
+    <a href="/add_bow" class="side-nav-link"><span class="nav-badge">→</span>Add bow</a>
+    <a href="/add_arrow" class="side-nav-link"><span class="nav-badge">→</span>Add arrow</a>
+    <a href="/edit_bows" class="side-nav-link"><span class="nav-badge">→</span>Edit bows</a>
+    <a href="/edit_arrows" class="side-nav-link"><span class="nav-badge">→</span>Edit arrows</a>
+    <a href="/add_target" class="side-nav-link"><span class="nav-badge">→</span>Add target</a>
+    <a href="/edit_targets" class="side-nav-link"><span class="nav-badge">→</span>Edit targets</a>
+    <hr class="side-nav-divider">
+    <a href="#" id="export-link" class="side-nav-link"><span class="nav-badge">⬇</span>Export data</a>
+    <a href="#" id="import-link" class="side-nav-link"><span class="nav-badge">⬆</span>Import data</a>
+    {% if current_user and current_user.is_root %}
+    <hr class="side-nav-divider">
+    <a href="/admin" class="side-nav-link"><span class="nav-badge">★</span>Admin</a>
+    {% endif %}
+    <hr class="side-nav-divider">
+    <button type="button" id="units-toggle" class="side-nav-units-btn">⇄ Imperial</button>
+    <div class="side-nav-spacer"></div>
+    {% if current_user %}
+    <div class="side-nav-user">
+        <span class="username">{{ current_user.username }}</span>
+        <a href="/account">Account</a>
+        <form action="/logout" method="POST">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <button type="submit" class="logout-btn">Sign out</button>
+        </form>
+    </div>
+    {% endif %}
+</nav>
+
+{% if view == 'selector' %}
+<h2 class="quantico" style="text-align:center;color:#1a3a5c;">Tournament rounds</h2>
+<p class="selector-intro">
+    Tournament mode runs a structured round with a fixed target face, end size, and arrow count.
+    Apollo locks the target and end size to the round's specification and tallies your score using
+    the official ring radii. Scoring rules follow the published World Archery / NFAA / USA Archery
+    conventions — see <code>documentation/tournament/</code> for the full reference and known
+    limitations.
+</p>
+
+{% for org, rounds in rounds_by_org.items() %}
+<div class="org-header">{{ org }}</div>
+<div class="round-grid">
+    {% for r in rounds %}
+    <div class="round-card">
+        <h4>{{ r.name }}</h4>
+        <p>{{ r.description }}</p>
+        <div class="spec">
+            {{ r.arrows_per_end }} arrows × {{ r.ends }} ends = {{ r.total_arrows }} shots ·
+            max {{ r.max_score }} ·
+            {% if r.distance_m %}{{ '%.1f'|format(r.distance_m) }} m{% endif %}
+            {% if r.equipment_class != 'any' %} · {{ r.equipment_class }}{% endif %}
+        </div>
+        <form action="/tournament/start" method="POST">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <input type="hidden" name="round_key" value="{{ r.key }}">
+            <button type="submit">Start round</button>
+        </form>
+    </div>
+    {% endfor %}
+</div>
+{% endfor %}
+
+{% endif %}
+
+{% if view == 'shoot' %}
+
+<h4 class="quantico">
+    Tournament: {{ round_def.name }} (#{{ session_id }}) /
+    <a href="/end_session" data-no-warn="1">End round</a>
+</h4>
+
+<!-- Leave-session warning modal — same wiring as session.html -->
+<div class="modal-backdrop" id="leave-modal" role="dialog" aria-modal="true" aria-labelledby="leave-modal-title">
+    <div class="modal-card">
+        <h3 id="leave-modal-title">End your round?</h3>
+        <p>Clicking this link will end your tournament round. Continue or end the round and follow the link?</p>
+        <form id="leave-modal-form" action="/end_session_silent" method="POST">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <input type="hidden" name="next" id="leave-modal-next" value="/">
+            <div class="modal-actions">
+                <button type="button" class="secondary" id="leave-modal-cancel">Continue round</button>
+                <button type="submit">End round &amp; follow link</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+{% if progress.is_complete %}
+<div class="complete-banner">
+    Round complete — {{ progress.total_score }} / {{ round_def.max_score }} ({{ progress.x_count }}X).
+    <a href="/end_session" data-no-warn="1" style="color:#fff;text-decoration:underline;">Finalize and view stats →</a>
+</div>
+{% endif %}
+
+<form action="/tournament" method="POST" id="shot-form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="x_coord" id="x_coord" value="">
+    <input type="hidden" name="y_coord" id="y_coord" value="">
+    <input type="hidden" name="arrow_shot" value="arrow_shot">
+    <input type="hidden" name="is_precise" id="is_precise" value="0">
+    <input type="hidden" name="record_mode" id="record_mode_hidden" value="0">
+
+    <div class="session-layout">
+        <!-- LEFT: target panel -->
+        <div class="target-panel">
+            <div class="autosubmit-bar" style="margin-top:4px;">
+                <span class="autosubmit-label has-tooltip"
+                      data-tooltip="Estimated — you place the shot by eye. Precise — paper face or careful coords; shows the arrow's true diameter on the target.">Placement:</span>
+                <div class="radio-group" style="margin:0;">
+                    <label class="radio-option">
+                        <input type="radio" name="precision_mode" value="0" checked>
+                        <span>Estimated</span>
+                    </label>
+                    <label class="radio-option">
+                        <input type="radio" name="precision_mode" value="1">
+                        <span>Precise</span>
+                    </label>
+                </div>
+            </div>
+
+            <div class="target-stage" id="stage">
+                <img id="target-img"
+                     src="{{ url_for('static', filename=target_config.target_image) }}"
+                     alt="Tournament target face" />
+                <svg id="overlay" xmlns="http://www.w3.org/2000/svg"></svg>
+            </div>
+
+            <div class="coord-display">
+                <div class="vals" id="coord-readout">
+                    <span style="color:#636a80">— click target —</span>
+                </div>
+                <div class="coord-hint" id="coord-hint">(0, 0) = center · +X right · +Y up · cm</div>
+            </div>
+
+            <div style="display:flex;gap:8px;margin-top:2px;flex-wrap:wrap;">
+                <button type="button" class="clear-shot-btn" id="confirm-btn"
+                        style="background-color:#2e7d32;color:#fff;display:none;">Confirm shot</button>
+                <button type="button" class="clear-shot-btn" id="miss-btn"
+                        style="background-color:#c97a4a;color:#fff;">Missed target</button>
+            </div>
+        </div>
+
+        <!-- RIGHT: round status & equipment selectors -->
+        <div class="form-panel form-panel-session">
+
+            <div class="progress-card">
+                <div class="row">
+                    <div class="metric">
+                        <span class="v">{{ progress.total_score }}</span>
+                        <span class="k">Score / {{ round_def.max_score }}</span>
+                    </div>
+                    <div class="metric">
+                        <span class="v">{{ progress.arrows_shot }}/{{ progress.arrows_planned }}</span>
+                        <span class="k">Arrows shot</span>
+                    </div>
+                    <div class="metric">
+                        <span class="v">{{ progress.x_count }}</span>
+                        <span class="k">X-ring</span>
+                    </div>
+                    <div class="metric">
+                        <span class="v">{{ progress.ten_count }}</span>
+                        <span class="k">{{ progress.max_per_arrow }}s</span>
+                    </div>
+                </div>
+                <div style="margin-top:8px;font-size:0.8rem;opacity:0.75;">
+                    {{ round_def.org }} ·
+                    {{ round_def.arrows_per_end }} arrows / end ·
+                    {% if round_def.end_time_s %}{{ round_def.end_time_s }}s per end ·{% endif %}
+                    {{ '%.1f'|format(current_distance_m) }} m ·
+                    {{ face_def.name }}
+                </div>
+            </div>
+
+            <span class="form-label">Arrows left in this end</span>
+            <br><pre>{{ arrows_remaining }}</pre>
+
+            <span class="form-label">Ends completed</span>
+            <br><pre>{{ quivers_completed }}</pre>
+
+            <span class="form-label">Bow</span>
+            <select id="bow" name="bow">
+                {% for b in bow_models %}
+                    <option value="{{ b }}">{{ b }}</option>
+                {% endfor %}
+            </select>
+            <div class="links-row"><a href="/add_bow">+ add bow</a></div>
+
+            <span class="form-label">Arrow</span>
+            <select id="arrow_type" name="arrow_type">
+                {% for arrow in arrow_types %}
+                    <option value="{{ arrow }}">{{ arrow }}</option>
+                {% endfor %}
+            </select>
+            <div class="links-row"><a href="/add_arrow">+ add arrow</a></div>
+
+            {% if progress.ends %}
+            <span class="form-label">Ends scorecard</span>
+            <table class="end-table">
+                <thead>
+                    <tr>
+                        <th>End</th>
+                        {% for i in range(arrows_per_end) %}<th>A{{ i+1 }}</th>{% endfor %}
+                        <th>End</th>
+                        <th>Run</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for end in progress.ends %}
+                    <tr class="{% if end.partial %}partial{% endif %}">
+                        <td>{{ loop.index }}</td>
+                        {% for a in end.arrows %}
+                            <td class="{% if a.miss %}arrow-miss{% endif %}">{% if a.miss %}M{% else %}{{ a.points }}{% endif %}</td>
+                        {% endfor %}
+                        {% for _ in range(arrows_per_end - end.arrows|length) %}<td></td>{% endfor %}
+                        <td><strong>{{ end.end_total }}</strong></td>
+                        <td>{{ end.running }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            {% endif %}
+        </div>
+    </div>
+</form>
+
+<script>
+const stage   = document.getElementById('stage');
+const img     = document.getElementById('target-img');
+const svg     = document.getElementById('overlay');
+const xInput  = document.getElementById('x_coord');
+const yInput  = document.getElementById('y_coord');
+const readout = document.getElementById('coord-readout');
+const form    = document.getElementById('shot-form');
+const isPreciseInput = document.getElementById('is_precise');
+
+const UNITS_KEY  = 'apollo_units';
+const PRECISION_KEY = 'apollo_precision_mode';
+const IS_TOUCH   = matchMedia('(hover: none) and (pointer: coarse)').matches;
+const ROUND_COMPLETE = {{ 'true' if progress.is_complete else 'false' }};
+
+// ── Ring overlay rendering ───────────────────────────────────────────
+// Draw the official scoring rings from face_render.rings on top of the
+// placeholder image so the user always sees the right face layout —
+// independent of which static image happens to be bundled.
+function drawRings() {
+    const old = document.getElementById('rings-layer');
+    if (old) old.remove();
+    const rings = (window.FACE_RENDER && window.FACE_RENDER.rings) || [];
+    if (!rings.length) return;
+    const w = img.clientWidth, h = img.clientHeight;
+    if (!w || !h) return;
+    const mmW = window.APOLLO.target_width_mm;
+    const mmH = window.APOLLO.target_height_mm;
+    const layer = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+    layer.id = 'rings-layer';
+    rings.forEach((ring, idx) => {
+        const c = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+        c.setAttribute('cx', w / 2);
+        c.setAttribute('cy', h / 2);
+        c.setAttribute('r', ring.radius_mm * (w / mmW));
+        c.setAttribute('fill', ring.color);
+        c.setAttribute('stroke', '#1a3a5c');
+        c.setAttribute('stroke-width', '0.5');
+        layer.appendChild(c);
+    });
+    // Insert at the very back of the overlay so crosshair / shots
+    // render on top.
+    svg.prepend(layer);
+}
+
+function drawCrosshair() {
+    const existing = document.getElementById('crosshair');
+    if (existing) existing.remove();
+    const w = img.clientWidth, h = img.clientHeight;
+    const g = document.createElementNS('http://www.w3.org/2000/svg','g');
+    g.id = 'crosshair';
+    const mk = (tag, attrs) => {
+        const el = document.createElementNS('http://www.w3.org/2000/svg', tag);
+        Object.entries(attrs).forEach(([k,v]) => el.setAttribute(k,v));
+        return el;
+    };
+    g.append(
+        mk('line',{x1:0,   y1:h/2, x2:w,   y2:h/2, stroke:'rgba(0,0,0,0.25)', 'stroke-width':'1'}),
+        mk('line',{x1:w/2, y1:0,   x2:w/2, y2:h,   stroke:'rgba(0,0,0,0.25)', 'stroke-width':'1'}),
+    );
+    svg.appendChild(g);
+}
+
+function redrawOverlays() {
+    drawRings();
+    drawCrosshair();
+    drawPastShots();
+    updatePrecisionCursorRadius();
+}
+
+img.addEventListener('load', redrawOverlays);
+if (img.complete) redrawOverlays();
+if (typeof ResizeObserver !== 'undefined') {
+    new ResizeObserver(redrawOverlays).observe(img);
+} else {
+    window.addEventListener('resize', redrawOverlays);
+}
+
+function drawPastShots() {
+    const old = document.getElementById('past-shots-layer');
+    if (old) old.remove();
+    const shots = window.PAST_SHOTS || [];
+    if (!shots.length) return;
+    const w = img.clientWidth, h = img.clientHeight;
+    const layer = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+    layer.id = 'past-shots-layer';
+    const mk = (tag, attrs) => {
+        const el = document.createElementNS('http://www.w3.org/2000/svg', tag);
+        Object.entries(attrs).forEach(([k,v]) => el.setAttribute(k,v));
+        return el;
+    };
+    const sx = w / window.APOLLO.target_width_mm;
+    const sy = h / window.APOLLO.target_height_mm;
+    shots.forEach(shot => {
+        if (shot.x === 100000 && shot.y === 100000) return;
+        const dx = w/2 + shot.x * sx;
+        const dy = h/2 - shot.y * sy;
+        const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+        g.append(
+            mk('circle', {cx:dx, cy:dy, r:7, fill:'#fcba03', stroke:'#c98a00', 'stroke-width':'1.5'}),
+            mk('circle', {cx:dx, cy:dy, r:3, fill:'white'})
+        );
+        layer.appendChild(g);
+    });
+    svg.appendChild(layer);
+}
+
+// ── Click handler ────────────────────────────────────────────────────
+const ZONE_RADII   = Array.isArray(window.APOLLO.zone_radii_mm)
+                        ? window.APOLLO.zone_radii_mm.map(parseFloat).filter(n => !isNaN(n))
+                        : [];
+const DEFAULT_SHAFT = parseFloat(window.APOLLO.default_shaft_diameter_mm) || 6.0;
+
+function currentShaftDiameterMm() {
+    const sel = document.getElementById('arrow_type');
+    const name = sel ? sel.value : '';
+    const map = window.ARROW_SHAFT_MM || {};
+    const d = parseFloat(map[name]);
+    return (d && d > 0) ? d : DEFAULT_SHAFT;
+}
+
+function isOffTarget(x, y) {
+    if (!ZONE_RADII.length) return false;
+    const shaftR = currentShaftDiameterMm() / 2;
+    const dist = Math.max(0, Math.hypot(x, y) - shaftR);
+    const outer = ZONE_RADII[ZONE_RADII.length - 1];
+    return dist > outer;
+}
+
+function placeMarker(dx, dy) {
+    const old = document.getElementById('shot-marker');
+    if (old) old.remove();
+    const mk = (tag, attrs) => {
+        const el = document.createElementNS('http://www.w3.org/2000/svg', tag);
+        Object.entries(attrs).forEach(([k,v]) => el.setAttribute(k,v));
+        return el;
+    };
+    const g = document.createElementNS('http://www.w3.org/2000/svg','g');
+    g.id = 'shot-marker';
+    g.append(
+        mk('line',{x1:dx-10,y1:dy,   x2:dx+10,y2:dy,   stroke:'#fcba03','stroke-width':'2'}),
+        mk('line',{x1:dx,   y1:dy-10,x2:dx,   y2:dy+10,stroke:'#fcba03','stroke-width':'2'}),
+        mk('circle',{cx:dx,cy:dy,r:6,fill:'rgba(252,186,3,0.25)',stroke:'#fcba03','stroke-width':'2'})
+    );
+    svg.appendChild(g);
+}
+
+function recordMiss() {
+    if (ROUND_COMPLETE) return;
+    xInput.value = 100000;
+    yInput.value = 100000;
+    readout.innerHTML = '<span style="color:#c97a4a;font-weight:700;">MISSED TARGET</span>';
+    form.submit();
+}
+
+const confirmBtn = document.getElementById('confirm-btn');
+confirmBtn.addEventListener('click', () => {
+    readout.innerHTML = '<span style="color:#2e7d32;font-weight:700;">SHOT RECORDED</span>';
+    form.submit();
+});
+
+stage.addEventListener('click', e => {
+    if (ROUND_COMPLETE) return;
+    const r  = img.getBoundingClientRect();
+    const dx = e.clientX - r.left;
+    const dy = e.clientY - r.top;
+    if (dx < 0 || dy < 0 || dx > r.width || dy > r.height) return;
+    const sx = window.APOLLO.target_width_mm  / r.width;
+    const sy = window.APOLLO.target_height_mm / r.height;
+    const cartX = Math.round((dx - r.width  / 2) * sx * 10) / 10;
+    const cartY = Math.round(-(dy - r.height / 2) * sy * 10) / 10;
+    if (isOffTarget(cartX, cartY)) { recordMiss(); return; }
+    xInput.value = cartX;
+    yInput.value = cartY;
+    placeMarker(dx, dy);
+    if (IS_TOUCH) {
+        readout.innerHTML = '<span style="color:#1a3a5c;font-weight:700;">TAP CONFIRM TO RECORD</span>';
+        confirmBtn.style.display = '';
+        return;
+    }
+    readout.innerHTML = '<span style="color:#2e7d32;font-weight:700;">SHOT RECORDED</span>';
+    form.submit();
+});
+
+document.getElementById('miss-btn').addEventListener('click', recordMiss);
+
+// ── Precision cursor follower ────────────────────────────────────────
+// In precision mode the system cursor is hidden over the target and a
+// translucent circle (sized to the selected arrow's actual shaft
+// diameter) follows the pointer. Visualizes the line-cutter rule —
+// any part of the shaft touching a higher-value zone counts as that
+// zone — so the user can see exactly which ring their click will
+// register in. Same behavior as the regular /sesh page.
+let precisionCursorEl = null;
+
+function isPrecisionActive() { return isPreciseInput.value === '1'; }
+
+function ensurePrecisionCursor() {
+    if (precisionCursorEl) return precisionCursorEl;
+    const el = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+    el.id = 'precision-cursor';
+    el.setAttribute('fill', 'rgba(252,186,3,0.35)');
+    el.setAttribute('stroke', 'rgba(201,138,0,0.75)');
+    el.setAttribute('stroke-width', '1');
+    el.setAttribute('pointer-events', 'none');
+    svg.appendChild(el);
+    precisionCursorEl = el;
+    return el;
+}
+
+function updatePrecisionCursorRadius() {
+    if (!precisionCursorEl) return;
+    const w = img.clientWidth;
+    if (!w) return;
+    const r = (currentShaftDiameterMm() / 2) * (w / window.APOLLO.target_width_mm);
+    precisionCursorEl.setAttribute('r', r);
+}
+
+function showPrecisionCursor(dx, dy) {
+    ensurePrecisionCursor();
+    updatePrecisionCursorRadius();
+    precisionCursorEl.setAttribute('cx', dx);
+    precisionCursorEl.setAttribute('cy', dy);
+    precisionCursorEl.style.display = '';
+}
+
+function hidePrecisionCursor() {
+    if (precisionCursorEl) precisionCursorEl.style.display = 'none';
+    stage.classList.remove('precision-cursor');
+}
+
+function removePrecisionCursor() {
+    if (precisionCursorEl) { precisionCursorEl.remove(); precisionCursorEl = null; }
+    stage.classList.remove('precision-cursor');
+}
+
+stage.addEventListener('mousemove', e => {
+    if (!isPrecisionActive() || IS_TOUCH) { hidePrecisionCursor(); return; }
+    const r = img.getBoundingClientRect();
+    const dx = e.clientX - r.left;
+    const dy = e.clientY - r.top;
+    if (dx < 0 || dy < 0 || dx > r.width || dy > r.height) {
+        hidePrecisionCursor();
+        return;
+    }
+    stage.classList.add('precision-cursor');
+    showPrecisionCursor(dx, dy);
+});
+stage.addEventListener('mouseleave', hidePrecisionCursor);
+
+const arrowSelectEl = document.getElementById('arrow_type');
+if (arrowSelectEl) arrowSelectEl.addEventListener('change', updatePrecisionCursorRadius);
+
+// Precision toggle (persists across sessions)
+const precisionRadios = document.querySelectorAll('input[name="precision_mode"]');
+function applyPrecision(v) {
+    precisionRadios.forEach(r => { r.checked = (r.value === v); });
+    isPreciseInput.value = v;
+    localStorage.setItem(PRECISION_KEY, v);
+    if (v !== '1') removePrecisionCursor();
+}
+applyPrecision(localStorage.getItem(PRECISION_KEY) || '0');
+precisionRadios.forEach(r => r.addEventListener('change', () => applyPrecision(r.value)));
+
+// Leave-warning modal — same as session.html
+const leaveModal     = document.getElementById('leave-modal');
+const leaveModalNext = document.getElementById('leave-modal-next');
+const leaveCancel    = document.getElementById('leave-modal-cancel');
+function openLeaveModal(targetUrl) {
+    leaveModalNext.value = targetUrl;
+    leaveModal.classList.add('open');
+}
+function closeLeaveModal() { leaveModal.classList.remove('open'); }
+document.querySelectorAll('a[href]').forEach(link => {
+    if (link.dataset.noWarn === '1') return;
+    const href = link.getAttribute('href');
+    if (!href || href.startsWith('#') || /^[a-z]+:/i.test(href)) return;
+    link.addEventListener('click', evt => {
+        evt.preventDefault();
+        openLeaveModal(href);
+    });
+});
+leaveCancel.addEventListener('click', closeLeaveModal);
+leaveModal.addEventListener('click', evt => {
+    if (evt.target === leaveModal) closeLeaveModal();
+});
+document.addEventListener('keydown', evt => {
+    if (evt.key === 'Escape' && leaveModal.classList.contains('open')) closeLeaveModal();
+});
+
+// Units toggle (label only — coords stay in cm; consistent with session.html)
+function applyUnits() {
+    const imperial = localStorage.getItem(UNITS_KEY) === 'imperial';
+    document.getElementById('coord-hint').textContent =
+        imperial ? '(0, 0) = center · +X right · +Y up · in' : '(0, 0) = center · +X right · +Y up · cm';
+    document.getElementById('units-toggle').textContent = imperial ? '⇄ Metric' : '⇄ Imperial';
+}
+document.getElementById('units-toggle').addEventListener('click', () => {
+    const current = localStorage.getItem(UNITS_KEY) || 'metric';
+    localStorage.setItem(UNITS_KEY, current === 'metric' ? 'imperial' : 'metric');
+    applyUnits();
+});
+applyUnits();
+</script>
+
+{% endif %}
+
+</body>
+</html>

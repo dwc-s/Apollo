@@ -569,6 +569,15 @@ function clearMarker() {
 }
 
 function placeMarker(dx, dy, cartX, cartY) {
+    // Self-clear: drop any existing marker before placing a new one. Both
+    // applyUnits() (called synchronously at script-eval) and the window.load
+    // handler call placeMarker when x_coord/y_coord come back populated
+    // (e.g. after confirming a shot), so without this guard two <g> elements
+    // with id="shot-marker" can co-exist. getElementById only returns the
+    // first, so clearMarker can never remove both — leaving a stuck marker
+    // that persists even after the user taps to relocate the shot.
+    const stale = document.getElementById('shot-marker');
+    if (stale) stale.remove();
     const mk = (tag, attrs) => {
         const el = document.createElementNS('http://www.w3.org/2000/svg', tag);
         Object.entries(attrs).forEach(([k,v]) => el.setAttribute(k,v));
