@@ -124,6 +124,23 @@
                 </div>
             </div>
 
+            <!-- Touch input mode toggle (mobile only) -->
+            <div class="autosubmit-bar" id="touch-input-bar" style="margin-top:4px;display:none;">
+                <span class="autosubmit-label has-tooltip"
+                      data-tooltip="Tap — tap to place, then tap Confirm to record. Press & hold — press the target, drag the circle to fine-tune, release to record.">Input:</span>
+                <div class="radio-group" style="margin:0;">
+                    <label class="radio-option">
+                        <input type="radio" name="touch_input_mode" value="tap" checked>
+                        <span>Tap</span>
+                    </label>
+                    <label class="radio-option">
+                        <input type="radio" name="touch_input_mode" value="hold">
+                        <span class="has-tooltip"
+                              data-tooltip="A loupe magnifies the area under your finger so you can aim without it being covered. The yellow ring around the crosshair is the diameter of your selected arrow's shaft — any part of it touching a higher-scoring zone counts as that zone.">Press &amp; hold</span>
+                    </label>
+                </div>
+            </div>
+
             <div class="target-stage" id="stage">
                 <img id="target-img"
                      src="{{ url_for('static', filename=target_config.target_image) }}"
@@ -499,8 +516,12 @@ confirmBtn.addEventListener('click', () => {
 });
 
 // ── Precision cursor mouse tracking ──────────────────────────────────────
+// Touch devices synthesize mouse events after touch events; if this
+// handler runs on touch, it will hide the hold-mode cursor that
+// touchstart just showed. So bail out entirely on touch.
 stage.addEventListener('mousemove', e => {
-    if (!isPrecisionActive() || IS_TOUCH) { hidePrecisionCursor(); return; }
+    if (IS_TOUCH) return;
+    if (!isPrecisionActive()) { hidePrecisionCursor(); return; }
     const r = img.getBoundingClientRect();
     const dx = e.clientX - r.left;
     const dy = e.clientY - r.top;
@@ -511,13 +532,232 @@ stage.addEventListener('mousemove', e => {
     stage.classList.add('precision-cursor');
     showPrecisionCursor(dx, dy);
 });
-stage.addEventListener('mouseleave', hidePrecisionCursor);
+stage.addEventListener('mouseleave', () => {
+    if (IS_TOUCH) return;
+    hidePrecisionCursor();
+});
 
 const arrowSelect = document.getElementById('arrow_type');
 if (arrowSelect) arrowSelect.addEventListener('change', updatePrecisionCursorRadius);
 
+// ── Touch press-and-hold autosubmit mode ─────────────────────────────────
+// Opt-in on mobile: user presses the target, the arrow-diameter cursor
+// follows the finger (page doesn't scroll), and releasing submits the
+// shot at the final position. Independent of Estimated/Precise.
+const TOUCH_INPUT_KEY = 'apollo_touch_input_mode';
+const touchInputBar    = document.getElementById('touch-input-bar');
+const touchInputRadios = document.querySelectorAll('input[name="touch_input_mode"]');
+
+function isHoldMode() {
+    return IS_TOUCH && localStorage.getItem(TOUCH_INPUT_KEY) === 'hold';
+}
+
+function applyTouchInputMode(value) {
+    touchInputRadios.forEach(r => { r.checked = (r.value === value); });
+    localStorage.setItem(TOUCH_INPUT_KEY, value);
+    if (value === 'hold') {
+        stage.classList.add('touch-hold-mode');
+    } else {
+        stage.classList.remove('touch-hold-mode');
+        hidePrecisionCursor();
+    }
+}
+
+if (IS_TOUCH) {
+    touchInputBar.style.display = '';
+    applyTouchInputMode(localStorage.getItem(TOUCH_INPUT_KEY) || 'tap');
+    touchInputRadios.forEach(r => r.addEventListener('change', () => applyTouchInputMode(r.value)));
+}
+
+let holdActive = false;
+let holdCx = 0, holdCy = 0;
+
+// ── Aiming loupe ─────────────────────────────────────────────────────────
+// While the user is holding, their fingertip covers the exact spot they're
+// trying to place. A floating circular magnifier shows a zoomed view of
+// that spot, positioned above (or below) the finger so they can fine-tune
+// before releasing.
+const LOUPE_SIZE   = 160;
+const LOUPE_ZOOM   = 2.5;
+const LOUPE_OFFSET = 110;   // distance from touch point to loupe center
+// Inside this radius of dead-center, the loupe holds whichever quadrant
+// it was last in instead of flipping every time the finger crosses a
+// midline. Without it, touches near the bullseye jitter the loupe between
+// quadrants.
+const LOUPE_DEADZONE_MM = 20;
+
+let loupeEl, loupeContent, loupeCircle;
+let lastQuadrant = null;   // {qx:'left'|'right', qy:'top'|'bottom'}
+
+function buildLoupe() {
+    if (!loupeEl) {
+        loupeEl = document.createElement('div');
+        loupeEl.className = 'aim-loupe';
+        loupeContent = document.createElement('div');
+        loupeContent.className = 'aim-loupe-content';
+        loupeEl.appendChild(loupeContent);
+        const cross = document.createElement('div');
+        cross.className = 'aim-loupe-cross';
+        loupeEl.appendChild(cross);
+        loupeCircle = document.createElement('div');
+        loupeCircle.className = 'aim-loupe-circle';
+        loupeEl.appendChild(loupeCircle);
+        stage.appendChild(loupeEl);
+    }
+    // Re-clone stage content so the loupe reflects the current state
+    // (newly drawn past-shots, ring layer, etc.).
+    loupeContent.innerHTML = '';
+    const liveW = img.clientWidth;
+    const liveH = img.clientHeight;
+    const clone = stage.cloneNode(true);
+    // Drop any nested loupe (the one we just appended) to avoid recursion.
+    clone.querySelectorAll('.aim-loupe').forEach(l => l.remove());
+    // Stripping IDs loses the #target-img / #overlay sizing rules, so the
+    // clone collapses to intrinsic size and the zoom math points at the
+    // wrong area. Pin the cloned img + svg to the live dimensions.
+    const clonedImg = clone.querySelector('img');
+    if (clonedImg) {
+        clonedImg.style.visibility = getComputedStyle(img).visibility;
+        clonedImg.style.width  = liveW + 'px';
+        clonedImg.style.height = liveH + 'px';
+        clonedImg.style.maxWidth  = 'none';
+        clonedImg.style.maxHeight = 'none';
+        clonedImg.style.display = 'block';
+    }
+    const clonedSvg = clone.querySelector('svg');
+    if (clonedSvg) {
+        clonedSvg.style.position = 'absolute';
+        clonedSvg.style.top = '0';
+        clonedSvg.style.left = '0';
+        clonedSvg.style.width  = liveW + 'px';
+        clonedSvg.style.height = liveH + 'px';
+    }
+    // Strip IDs to keep the live document's getElementById lookups intact.
+    if (clone.id) clone.id = '';
+    clone.querySelectorAll('[id]').forEach(el => el.removeAttribute('id'));
+    // Render the clone bare — no border / shadow / radius inside the loupe.
+    clone.style.position = 'absolute';
+    clone.style.top = '0';
+    clone.style.left = '0';
+    clone.style.width  = liveW + 'px';
+    clone.style.height = liveH + 'px';
+    clone.style.border = 'none';
+    clone.style.borderRadius = '0';
+    clone.style.boxShadow = 'none';
+    clone.style.cursor = '';
+    loupeContent.appendChild(clone);
+
+    // Size the arrow-shaft indicator so the user sees the diameter at zoom.
+    const w = img.clientWidth;
+    if (w) {
+        const dPx = currentShaftDiameterMm() * (w / window.APOLLO.target_width_mm) * LOUPE_ZOOM;
+        loupeCircle.style.width  = dPx + 'px';
+        loupeCircle.style.height = dPx + 'px';
+    }
+}
+
+function positionLoupe(touchDx, touchDy) {
+    const w = img.clientWidth;
+    const h = img.clientHeight;
+    // Place the loupe in the opposite quadrant from the touch point so the
+    // user's hand and arm don't cover it. Inside a small deadzone around
+    // dead-center, hold the previous quadrant so the loupe doesn't jitter
+    // as the finger crosses a midline.
+    const mmPerPxX = window.APOLLO.target_width_mm  / w;
+    const mmPerPxY = window.APOLLO.target_height_mm / h;
+    const dxMm = (touchDx - w / 2) * mmPerPxX;
+    const dyMm = (touchDy - h / 2) * mmPerPxY;
+    const distMm = Math.hypot(dxMm, dyMm);
+    if (distMm >= LOUPE_DEADZONE_MM || !lastQuadrant) {
+        lastQuadrant = {
+            qx: touchDx < w / 2 ? 'right' : 'left',
+            qy: touchDy < h / 2 ? 'bottom' : 'top',
+        };
+    }
+    const cxIdeal = lastQuadrant.qx === 'right' ? w * 0.75 : w * 0.25;
+    const cyIdeal = lastQuadrant.qy === 'bottom' ? h * 0.75 : h * 0.25;
+    const cx = Math.max(LOUPE_SIZE/2, Math.min(w - LOUPE_SIZE/2, cxIdeal));
+    const cy = Math.max(LOUPE_SIZE/2, Math.min(h - LOUPE_SIZE/2, cyIdeal));
+    loupeEl.style.left = (cx - LOUPE_SIZE/2) + 'px';
+    loupeEl.style.top  = (cy - LOUPE_SIZE/2) + 'px';
+    // Move the zoomed content so the touch point lands at loupe center.
+    const tx = LOUPE_SIZE/2 - touchDx * LOUPE_ZOOM;
+    const ty = LOUPE_SIZE/2 - touchDy * LOUPE_ZOOM;
+    loupeContent.style.transform = `translate(${tx}px, ${ty}px) scale(${LOUPE_ZOOM})`;
+}
+
+function showLoupe(touchDx, touchDy) {
+    buildLoupe();
+    positionLoupe(touchDx, touchDy);
+    loupeEl.classList.add('active');
+}
+
+function moveLoupe(touchDx, touchDy) {
+    if (!loupeEl) return;
+    positionLoupe(touchDx, touchDy);
+}
+
+function hideLoupe() {
+    if (loupeEl) loupeEl.classList.remove('active');
+}
+
+function clampToImage(clientX, clientY) {
+    const r = img.getBoundingClientRect();
+    const dx = Math.max(0, Math.min(r.width,  clientX - r.left));
+    const dy = Math.max(0, Math.min(r.height, clientY - r.top));
+    return { dx, dy, rect: r };
+}
+
+stage.addEventListener('touchstart', e => {
+    if (!isHoldMode()) return;
+    const t = e.touches[0];
+    if (!t) return;
+    const { dx, dy } = clampToImage(t.clientX, t.clientY);
+    holdActive = true;
+    holdCx = dx; holdCy = dy;
+    showLoupe(dx, dy);
+}, { passive: true });
+
+stage.addEventListener('touchmove', e => {
+    if (!holdActive) return;
+    const t = e.touches[0];
+    if (!t) return;
+    const { dx, dy } = clampToImage(t.clientX, t.clientY);
+    holdCx = dx; holdCy = dy;
+    moveLoupe(dx, dy);
+}, { passive: true });
+
+stage.addEventListener('touchend', e => {
+    if (!holdActive) return;
+    holdActive = false;
+    e.preventDefault();   // suppress the synthetic click that follows
+    hideLoupe();
+
+    const r = img.getBoundingClientRect();
+    const scaleX = window.APOLLO.target_width_mm  / r.width;
+    const scaleY = window.APOLLO.target_height_mm / r.height;
+    const cartX  = Math.round((holdCx - r.width  / 2) * scaleX * 10) / 10;
+    const cartY  = Math.round(-(holdCy - r.height / 2) * scaleY * 10) / 10;
+
+    if (isOffTarget(cartX, cartY)) { recordMiss(); return; }
+
+    xInput.value = cartX;
+    yInput.value = cartY;
+    clearMarker();
+    placeMarker(holdCx, holdCy, cartX, cartY);
+    readout.innerHTML = '<span style="color:#2e7d32;font-weight:700;">SHOT RECORDED</span>';
+    form.submit();
+});
+
+stage.addEventListener('touchcancel', () => {
+    if (!holdActive) return;
+    holdActive = false;
+    hideLoupe();
+});
+
 // ── Click handler ────────────────────────────────────────────────────────
 stage.addEventListener('click', e => {
+    if (isHoldMode()) return;   // touch handlers own the gesture
     const r      = img.getBoundingClientRect();
     const dx     = e.clientX - r.left;
     const dy     = e.clientY - r.top;

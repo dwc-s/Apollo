@@ -343,6 +343,84 @@ h4 {
 }
 
 .target-stage.precision-cursor { cursor: none; }
+.target-stage.touch-hold-mode { touch-action: none; }
+
+/* Block iOS/Android long-press selection + callout, and the gray
+   tap-highlight flash, so a sustained press in hold mode doesn't
+   light up the canvas. */
+.target-stage {
+    -webkit-touch-callout: none;
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-tap-highlight-color: transparent;
+}
+
+/* ── Touch-hold aiming loupe ──────────────────────────
+   Floats above the fingertip while the user is holding,
+   showing a zoomed view of the area under the touch
+   point so they can fine-tune the shot without the
+   finger covering it. */
+.aim-loupe {
+    position: absolute;
+    width: 160px;
+    height: 160px;
+    border-radius: 50%;
+    overflow: hidden;
+    border: 3px solid #1a3a5c;
+    box-shadow: 0 4px 14px rgba(0,0,0,0.45);
+    background: #fff;
+    pointer-events: none;
+    z-index: 5;
+    display: none;
+}
+.aim-loupe.active { display: block; }
+.aim-loupe-content {
+    position: absolute;
+    top: 0;
+    left: 0;
+    transform-origin: 0 0;
+    pointer-events: none;
+}
+.aim-loupe-cross {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 18px;
+    height: 18px;
+    transform: translate(-50%, -50%);
+    pointer-events: none;
+}
+.aim-loupe-cross::before,
+.aim-loupe-cross::after {
+    content: '';
+    position: absolute;
+    background: rgba(26, 58, 92, 0.85);
+}
+.aim-loupe-cross::before {
+    left: 50%;
+    top: 0;
+    width: 2px;
+    height: 100%;
+    margin-left: -1px;
+}
+.aim-loupe-cross::after {
+    top: 50%;
+    left: 0;
+    height: 2px;
+    width: 100%;
+    margin-top: -1px;
+}
+.aim-loupe-circle {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    border: 2px solid #fcba03;
+    background: rgba(252, 186, 3, 0.20);
+    border-radius: 50%;
+    pointer-events: none;
+    box-sizing: border-box;
+}
 
 #target-img {
     display: block;
