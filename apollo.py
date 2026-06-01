@@ -101,6 +101,692 @@ def _is_safe_target_image_filename(fn):
 CIRCLE_RADIUS   = 32   # in mm — not yet wired up (boundary logic TBD)
 BULLSEYE_RADIUS = 10   # in mm — not yet wired up (boundary logic TBD)
 
+# ── Tournament mode ─────────────────────────────────────────────────────
+# TOURNAMENT_FACES describes every official scoring face Apollo seeds for
+# tournament rounds. Each face becomes a targets-table row per user (name
+# prefixed with TOURNAMENT_TARGET_NAME_PREFIX so we can find/refresh
+# them deterministically), with target_zones rows whose radii match the
+# published face spec. The image asset is a placeholder until proper face
+# images are sourced — see documentation/tournament/targets.md. The
+# template draws colored SVG ring overlays from the same zones list, so
+# the user *sees* the official ring layout even when the underlying image
+# is the bundled NASP placeholder.
+#
+# zones are listed innermost-out as (point_value, outer_radius_mm, fill_color).
+# Colors follow WA / NFAA conventions for outdoor / indoor / Vegas / NFAA
+# faces respectively.
+# Plain-ASCII prefix on tournament face rows so MySQL backends running
+# the default 3-byte `utf8` charset accept the INSERT — a Unicode prefix
+# (e.g. 🏆) is a 4-byte supplementary-plane codepoint and would raise
+# "Incorrect string value" on utf8 columns. Keeps the seeder portable
+# across SQLite and any MySQL configuration.
+TOURNAMENT_TARGET_NAME_PREFIX = '[Tournament] '
+TOURNAMENT_PLACEHOLDER_IMAGE  = 'targets/nasp_40cm.jpg'
+TOURNAMENT_PLACEHOLDER_PX     = 1197  # px edge of TOURNAMENT_PLACEHOLDER_IMAGE
+# Legacy prefix used by the very first tournament-mode release. The
+# seeder migrates rows from this prefix to TOURNAMENT_TARGET_NAME_PREFIX
+# on first run so users who tried the old build don't end up with two
+# parallel sets of tournament faces.
+_LEGACY_TOURNAMENT_PREFIX     = '\U0001F3C6 '   # '🏆 '
+
+# WA outdoor 10-zone ring colors, listed from innermost (X) outward.
+# Index 0 = X ring; indices 1..10 = the 10, 9, 8, ..., 1 rings.
+_WA_PALETTE = (
+    '#fff44f', '#fff44f', '#fff44f',  # X / 10 / 9 → gold
+    '#ff4f4f', '#ff4f4f',             # 8 / 7 → red
+    '#5fb0d6', '#5fb0d6',             # 6 / 5 → blue
+    '#1a1a1a', '#1a1a1a',             # 4 / 3 → black
+    '#ffffff', '#ffffff',             # 2 / 1 → white
+)
+
+def _wa_zones_10(face_radius_mm, x_ring_radius_mm):
+    """Build innermost-out zones list for a WA 10-zone face.
+
+    face_radius_mm is the face's outer edge (610 for 122cm face, 400 for
+    80cm, 300 for 60cm, 200 for 40cm). The 10 ring's outer radius is
+    face_radius_mm / 10; rings widen linearly outward from there.
+    """
+    ring_w = face_radius_mm / 10.0
+    out = [(10, x_ring_radius_mm, _WA_PALETTE[0])]  # X ring
+    for i in range(10):
+        pv = 10 - i
+        r = (i + 1) * ring_w
+        out.append((pv, r, _WA_PALETTE[i + 1]))
+    return out
+
+
+def _wa_zones_6(face_radius_mm, x_ring_radius_mm):
+    """WA 80cm 6-ring (compound 50m) and WA Field 6-ring faces.
+
+    Only rings 5-10 are printed; below 5 is a miss. Same ring widths as
+    the full 10-zone face.
+    """
+    ring_w = face_radius_mm / 10.0
+    out = [(10, x_ring_radius_mm, '#fff44f')]
+    for i in range(6):
+        pv = 10 - i
+        r = (i + 1) * ring_w
+        # WA palette for printed rings 10..5
+        color = ('#fff44f', '#fff44f', '#ff4f4f', '#ff4f4f',
+                 '#5fb0d6', '#5fb0d6')[i]
+        out.append((pv, r, color))
+    return out
+
+
+# NFAA Indoor Blue face: white rings on blue background, 5/4/3/2/1
+# with X inside the inner 5. Approximate radii per NFAA Vermont-style
+# spec — verify against current NFAA rulebook before relying for
+# competition.
+_NFAA_BLUE_BG = '#1a3a5c'
+_NFAA_RING_FG = '#ffffff'
+
+
+def _nfaa_indoor_blue_zones():
+    return [
+        (5, 40.0,  _NFAA_RING_FG),   # X ring
+        (5, 80.0,  _NFAA_RING_FG),   # inner 5
+        (4, 120.0, _NFAA_RING_FG),
+        (3, 160.0, _NFAA_RING_FG),
+        (2, 180.0, _NFAA_RING_FG),
+        (1, 200.0, _NFAA_RING_FG),
+    ]
+
+
+def _nfaa_5spot_zones():
+    """NFAA 5-spot — Apollo flattens the 5-face layout into one logical
+    face with two zones (X / 5). The per-spot constraint is enforced
+    visually only; users can click anywhere they actually hit."""
+    return [
+        (5, 40.0, _NFAA_RING_FG),
+        (5, 80.0, _NFAA_RING_FG),
+    ]
+
+
+# Field round face: 5 / 4 / 3 with X inside the 5. The published radii
+# scale with face size; here we encode the 65cm face as the default.
+def _nfaa_field_zones(face_radius_mm):
+    return [
+        (5, face_radius_mm * 0.10, _NFAA_RING_FG),
+        (5, face_radius_mm * 0.20, _NFAA_RING_FG),
+        (4, face_radius_mm * 0.33, _NFAA_RING_FG),
+        (3, face_radius_mm * 0.50, _NFAA_RING_FG),
+    ]
+
+
+TOURNAMENT_FACES = {
+    # WA outdoor — 122cm 10-zone, used at 70m (recurve)
+    'wa_122': {
+        'name':             'WA 122cm 10-zone',
+        'physical_size_mm': 1220.0,
+        'x_ring_mm':        61.0,
+        'face_bg':          '#ffffff',
+        'zones':            _wa_zones_10(610.0, 61.0),
+    },
+    # WA outdoor — 80cm 6-ring (compound 50m)
+    'wa_80_6ring': {
+        'name':             'WA 80cm 6-ring',
+        'physical_size_mm': 800.0,
+        'x_ring_mm':        20.0,
+        'face_bg':          '#ffffff',
+        'zones':            _wa_zones_6(400.0, 20.0),
+    },
+    # WA short-distance — 80cm 10-zone (50m / 30m on the 1440)
+    'wa_80': {
+        'name':             'WA 80cm 10-zone',
+        'physical_size_mm': 800.0,
+        'x_ring_mm':        20.0,
+        'face_bg':          '#ffffff',
+        'zones':            _wa_zones_10(400.0, 20.0),
+    },
+    # WA Indoor 25m — 60cm 10-zone
+    'wa_60': {
+        'name':             'WA 60cm 10-zone',
+        'physical_size_mm': 600.0,
+        'x_ring_mm':        15.0,
+        'face_bg':          '#ffffff',
+        'zones':            _wa_zones_10(300.0, 15.0),
+    },
+    # WA Indoor 18m — 40cm 10-zone
+    'wa_40': {
+        'name':             'WA 40cm 10-zone',
+        'physical_size_mm': 400.0,
+        'x_ring_mm':        10.0,
+        'face_bg':          '#ffffff',
+        'zones':            _wa_zones_10(200.0, 10.0),
+    },
+    # WA Indoor 18m compound — same face but 10 ring scores 9 (only X = 10).
+    # Encoded by demoting the "10" zone to 9; X still 10.
+    'wa_40_compound': {
+        'name':             'WA 40cm (compound)',
+        'physical_size_mm': 400.0,
+        'x_ring_mm':        10.0,
+        'face_bg':          '#ffffff',
+        'zones':            [
+            (10, 10.0,  '#fff44f'),
+            (9,  20.0,  '#fff44f'),  # demoted: only X = 10 for compound
+            (9,  40.0,  '#fff44f'),
+            (8,  60.0,  '#ff4f4f'),
+            (7,  80.0,  '#ff4f4f'),
+            (6,  100.0, '#5fb0d6'),
+            (5,  120.0, '#5fb0d6'),
+            (4,  140.0, '#1a1a1a'),
+            (3,  160.0, '#1a1a1a'),
+            (2,  180.0, '#ffffff'),
+            (1,  200.0, '#ffffff'),
+        ],
+    },
+    # NFAA Indoor Blue (single-spot) — 40cm
+    'nfaa_indoor_blue': {
+        'name':             'NFAA Indoor Blue',
+        'physical_size_mm': 400.0,
+        'x_ring_mm':        40.0,
+        'face_bg':          _NFAA_BLUE_BG,
+        'zones':            _nfaa_indoor_blue_zones(),
+    },
+    # NFAA 5-spot — single representative spot (Apollo doesn't enforce
+    # per-spot placement; the rule is documented for the user).
+    'nfaa_5spot': {
+        'name':             'NFAA 5-spot (per spot)',
+        'physical_size_mm': 200.0,
+        'x_ring_mm':        40.0,
+        'face_bg':          _NFAA_BLUE_BG,
+        'zones':            _nfaa_5spot_zones(),
+    },
+    # Vegas 40cm 3-spot — Apollo treats this as one 40cm face with
+    # rings 6-10 active. Per-spot enforcement is visual only.
+    'vegas_3spot': {
+        'name':             'Vegas 40cm (per spot)',
+        'physical_size_mm': 200.0,
+        'x_ring_mm':        10.0,
+        'face_bg':          '#ffffff',
+        'zones':            _wa_zones_6(100.0, 10.0),
+    },
+    # NFAA Field 65cm — 5/4/3 with X inside 5
+    'nfaa_field_65': {
+        'name':             'NFAA Field 65cm',
+        'physical_size_mm': 650.0,
+        'x_ring_mm':        65.0,
+        'face_bg':          '#ffffff',
+        'zones':            _nfaa_field_zones(325.0),
+    },
+    # NASP 80cm (10-ring) — same layout as WA 80cm
+    'nasp_80': {
+        'name':             'NASP 80cm',
+        'physical_size_mm': 800.0,
+        'x_ring_mm':        20.0,
+        'face_bg':          '#ffffff',
+        'zones':            _wa_zones_10(400.0, 20.0),
+    },
+}
+
+# TOURNAMENT_ROUNDS describes the structured rounds Apollo supports. Each
+# round references a face_key from TOURNAMENT_FACES. Multi-distance rounds
+# (1440, NFAA 900, NASP) use the `segments` list to define a sequence of
+# (distance_m, ends, face_key) chunks; single-segment rounds set segments
+# to None and use the top-level distance_m / ends / face_key.
+TOURNAMENT_ROUNDS = {
+    'wa_720_recurve': {
+        'org':              'World Archery',
+        'name':             'WA 720 (Recurve)',
+        'face_key':         'wa_122',
+        'distance_m':       70,
+        'arrows_per_end':   6,
+        'ends':             12,
+        'total_arrows':     72,
+        'max_score':        720,
+        'end_time_s':       240,
+        'equipment_class':  'recurve',
+        'description':      '72 arrows at 70m on the 122cm face. Recurve outdoor qualification round.',
+        'segments':         None,
+    },
+    'wa_720_compound': {
+        'org':              'World Archery',
+        'name':             'WA 720 (Compound)',
+        'face_key':         'wa_80_6ring',
+        'distance_m':       50,
+        'arrows_per_end':   6,
+        'ends':             12,
+        'total_arrows':     72,
+        'max_score':        720,
+        'end_time_s':       240,
+        'equipment_class':  'compound',
+        'description':      '72 arrows at 50m on the 80cm 6-ring face. Compound outdoor qualification round.',
+        'segments':         None,
+    },
+    'wa_indoor_18_recurve': {
+        'org':              'World Archery',
+        'name':             'WA Indoor 18m (Recurve)',
+        'face_key':         'wa_40',
+        'distance_m':       18,
+        'arrows_per_end':   3,
+        'ends':             20,
+        'total_arrows':     60,
+        'max_score':        600,
+        'end_time_s':       120,
+        'equipment_class':  'recurve',
+        'description':      '60 arrows at 18m on the 40cm face. Both outer-10 and inner-10 (X) score 10.',
+        'segments':         None,
+    },
+    'wa_indoor_18_compound': {
+        'org':              'World Archery',
+        'name':             'WA Indoor 18m (Compound)',
+        'face_key':         'wa_40_compound',
+        'distance_m':       18,
+        'arrows_per_end':   3,
+        'ends':             20,
+        'total_arrows':     60,
+        'max_score':        600,
+        'end_time_s':       120,
+        'equipment_class':  'compound',
+        'description':      '60 arrows at 18m on the 40cm face. Only the inner-10 (X-ring) scores 10; outer-10 ring scores 9.',
+        'segments':         None,
+    },
+    'wa_indoor_25': {
+        'org':              'World Archery',
+        'name':             'WA Indoor 25m',
+        'face_key':         'wa_60',
+        'distance_m':       25,
+        'arrows_per_end':   3,
+        'ends':             20,
+        'total_arrows':     60,
+        'max_score':        600,
+        'end_time_s':       120,
+        'equipment_class':  'any',
+        'description':      '60 arrows at 25m on the 60cm face.',
+        'segments':         None,
+    },
+    'wa_match_recurve_cum': {
+        'org':              'World Archery',
+        'name':             'WA Match Play — Recurve (cumulative)',
+        'face_key':         'wa_122',
+        'distance_m':       70,
+        'arrows_per_end':   3,
+        'ends':             5,
+        'total_arrows':     15,
+        'max_score':        150,
+        'end_time_s':       120,
+        'equipment_class':  'recurve',
+        'description':      '5 sets of 3 arrows at 70m. Apollo records arrow scores; set-point logic is shown but not used to declare a match winner (Apollo is single-archer).',
+        'segments':         None,
+    },
+    'wa_match_compound': {
+        'org':              'World Archery',
+        'name':             'WA Match Play — Compound',
+        'face_key':         'wa_80_6ring',
+        'distance_m':       50,
+        'arrows_per_end':   3,
+        'ends':             5,
+        'total_arrows':     15,
+        'max_score':        150,
+        'end_time_s':       120,
+        'equipment_class':  'compound',
+        'description':      '5 ends of 3 arrows at 50m. Highest cumulative wins.',
+        'segments':         None,
+    },
+    'nfaa_indoor_blue': {
+        'org':              'NFAA',
+        'name':             'NFAA Indoor (Blue face)',
+        'face_key':         'nfaa_indoor_blue',
+        'distance_m':       18.29,  # 20 yards
+        'arrows_per_end':   5,
+        'ends':             12,
+        'total_arrows':     60,
+        'max_score':        300,
+        'end_time_s':       240,
+        'equipment_class':  'any',
+        'description':      '60 arrows at 20 yards on the NFAA blue face. Max 5 per arrow.',
+        'segments':         None,
+    },
+    'nfaa_5spot': {
+        'org':              'NFAA',
+        'name':             'NFAA 5-spot',
+        'face_key':         'nfaa_5spot',
+        'distance_m':       18.29,
+        'arrows_per_end':   5,
+        'ends':             12,
+        'total_arrows':     60,
+        'max_score':        300,
+        'end_time_s':       240,
+        'equipment_class':  'any',
+        'description':      '60 arrows at 20 yards on the 5-spot face. One arrow per spot — Apollo does not enforce; the user must distribute manually.',
+        'segments':         None,
+    },
+    'nfaa_vegas': {
+        'org':              'NFAA',
+        'name':             'Vegas Round (40cm 3-spot)',
+        'face_key':         'vegas_3spot',
+        'distance_m':       18.29,
+        'arrows_per_end':   3,
+        'ends':             10,
+        'total_arrows':     30,
+        'max_score':        300,
+        'end_time_s':       120,
+        'equipment_class':  'any',
+        'description':      '30 arrows at 20 yards on the 40cm Vegas 3-spot. One arrow per spot; rings 6-10 only.',
+        'segments':         None,
+    },
+    'nfaa_900': {
+        'org':              'NFAA',
+        'name':             'NFAA 900 Round',
+        'face_key':         'wa_122',
+        'distance_m':       54.86,  # 60 yards — first segment
+        'arrows_per_end':   6,
+        'ends':             5,      # per segment
+        'total_arrows':     90,
+        'max_score':        900,
+        'end_time_s':       240,
+        'equipment_class':  'any',
+        'description':      '30 arrows at each of 60, 50, and 40 yards on the 122cm face.',
+        'segments': [
+            {'distance_m': 54.86, 'ends': 5, 'face_key': 'wa_122'},  # 60 yd
+            {'distance_m': 45.72, 'ends': 5, 'face_key': 'wa_122'},  # 50 yd
+            {'distance_m': 36.58, 'ends': 5, 'face_key': 'wa_122'},  # 40 yd
+        ],
+    },
+    'nasp_round': {
+        'org':              'NASP / USA Archery',
+        'name':             'NASP Round',
+        'face_key':         'nasp_80',
+        'distance_m':       10,
+        'arrows_per_end':   5,
+        'ends':             3,      # per segment
+        'total_arrows':     30,
+        'max_score':        300,
+        'end_time_s':       120,
+        'equipment_class':  'any',
+        'description':      '15 arrows at 10m + 15 arrows at 15m on the 80cm NASP face.',
+        'segments': [
+            {'distance_m': 10, 'ends': 3, 'face_key': 'nasp_80'},
+            {'distance_m': 15, 'ends': 3, 'face_key': 'nasp_80'},
+        ],
+    },
+}
+
+
+def _tournament_round_def(round_key):
+    return TOURNAMENT_ROUNDS.get(round_key)
+
+
+def _tournament_face_def(face_key):
+    return TOURNAMENT_FACES.get(face_key)
+
+
+def _tournament_tag_for_round(round_key):
+    """Session-tag string Apollo stamps on every shot in a tournament
+    session so finalization and the analytics page can recover the
+    round identity without a schema migration."""
+    return f'tournament:{round_key}'
+
+
+def _round_key_from_tags(tags):
+    """Recover the round_key from a comma-separated session_tags string.
+    Returns None if the session is not a tournament session."""
+    if not tags:
+        return None
+    for part in tags.split(','):
+        t = part.strip()
+        if t.startswith('tournament:'):
+            key = t.split(':', 1)[1].strip()
+            if key in TOURNAMENT_ROUNDS:
+                return key
+    return None
+
+
+def _migrate_legacy_tournament_prefix(user_id):
+    """Best-effort rename of any 🏆-prefixed tournament face rows from
+    the very first Apollo build to the current ASCII prefix.
+
+    Runs on a dedicated short-lived connection so a failure (typical on
+    MySQL where `targets.name` is `utf8mb3` and can't compare against a
+    4-byte parameter — "Illegal mix of collations") doesn't poison the
+    main seed transaction. The user's MySQL database never actually
+    contains legacy rows in that case (the original INSERT would have
+    failed too) so silently swallowing the lookup is correct.
+    """
+    if user_id is None:
+        return
+    try:
+        with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
+            for face in TOURNAMENT_FACES.values():
+                legacy_name = _LEGACY_TOURNAMENT_PREFIX + face['name']
+                new_name = TOURNAMENT_TARGET_NAME_PREFIX + face['name']
+                try:
+                    legacy = cur.execute(
+                        "SELECT id FROM targets WHERE user_id = %s AND name = %s LIMIT 1",
+                        (user_id, legacy_name)
+                    ).fetchone()
+                except SQLAlchemyError:
+                    # Charset/collation mismatch on this backend — the
+                    # row literally cannot exist (the original emoji-
+                    # prefix INSERT would have failed too), so skip the
+                    # rest of the migration entirely.
+                    return
+                if legacy is None:
+                    continue
+                try:
+                    cur.execute(
+                        "UPDATE targets SET name = %s WHERE id = %s AND user_id = %s",
+                        (new_name, int(legacy[0]), user_id)
+                    )
+                except SQLAlchemyError:
+                    continue
+            con.commit()
+    except SQLAlchemyError:
+        # Whole-connection failure: nothing to migrate, fall through.
+        pass
+
+
+def _seed_tournament_faces(user_id):
+    """Insert any missing tournament face rows for this user.
+
+    Each face becomes a row in `targets` (name prefixed with
+    TOURNAMENT_TARGET_NAME_PREFIX so the seeder can find them on
+    subsequent calls and so the user sees a distinct "tournament" group
+    in the targets dropdown). Each face's scoring zones are written to
+    `target_zones` — on a refresh, existing zones are deleted and
+    re-inserted from the canonical spec so future rule updates can
+    re-seed by bumping the constants and bouncing the route.
+
+    Returns a dict {face_key: target_id} mapping for the user.
+    """
+    if user_id is None:
+        return {}
+    # Best-effort legacy-prefix rename on a separate connection. Runs
+    # before the main seed so any rows it renamed are visible to the
+    # SELECT below; runs on its own connection so a collation failure
+    # (MySQL utf8mb3 column vs utf8mb4 parameter) can't abort the seed
+    # transaction that follows.
+    _migrate_legacy_tournament_prefix(user_id)
+    out = {}
+    try:
+        with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
+            for face_key, face in TOURNAMENT_FACES.items():
+                name = TOURNAMENT_TARGET_NAME_PREFIX + face['name']
+                row = cur.execute(
+                    "SELECT id FROM targets WHERE user_id = %s AND name = %s LIMIT 1",
+                    (user_id, name)
+                ).fetchone()
+                if row is None:
+                    cur.execute(
+                        "INSERT INTO targets "
+                        "(user_id, name, image_filename, physical_size_mm, "
+                        "image_size_px, is_active, is_default) "
+                        "VALUES (%s, %s, %s, %s, %s, 1, 0)",
+                        (user_id, name, TOURNAMENT_PLACEHOLDER_IMAGE,
+                         float(face['physical_size_mm']),
+                         TOURNAMENT_PLACEHOLDER_PX)
+                    )
+                    row = cur.execute(
+                        "SELECT id FROM targets WHERE user_id = %s AND name = %s LIMIT 1",
+                        (user_id, name)
+                    ).fetchone()
+                if row is None:
+                    # INSERT silently dropped — surface a real error
+                    # rather than handing the caller a None target_id and
+                    # the user a useless "please try again".
+                    raise SQLAlchemyError(
+                        f"targets INSERT did not produce a row for {name!r}"
+                    )
+                target_id = int(row[0])
+                out[face_key] = target_id
+
+                # Replace zones from the spec — innermost-out → highest
+                # display_order on the innermost so the editor sorts
+                # them sensibly. The classifier sorts by radius_mm.
+                cur.execute(
+                    "DELETE FROM target_zones WHERE user_id = %s AND target_id = %s",
+                    (user_id, target_id)
+                )
+                for idx, (pv, radius_mm, _color) in enumerate(face['zones']):
+                    cur.execute(
+                        "INSERT INTO target_zones "
+                        "(user_id, target_id, name, point_value, "
+                        "shape_type, radius_mm, display_order) "
+                        "VALUES (%s, %s, %s, %s, 'circle', %s, %s)",
+                        (user_id, target_id, f"{pv} pts", pv,
+                         float(radius_mm), idx)
+                    )
+            con.commit()
+    except SQLAlchemyError as e:
+        # Log loudly with a traceback. The previous swallow-and-return
+        # path made this error invisible to anyone troubleshooting from
+        # the production logs.
+        import traceback
+        print(f"⚠️ Tournament face seeding failed for user {user_id}: {e}")
+        traceback.print_exc()
+        return {}
+    return out
+
+
+def _tournament_face_target_id(user_id, face_key):
+    """Return the targets.id row id for the given tournament face for
+    this user, seeding on the fly if it doesn't exist yet."""
+    if user_id is None or face_key not in TOURNAMENT_FACES:
+        return None
+    face = TOURNAMENT_FACES[face_key]
+    name = TOURNAMENT_TARGET_NAME_PREFIX + face['name']
+    try:
+        with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
+            row = cur.execute(
+                "SELECT id FROM targets WHERE user_id = %s AND name = %s LIMIT 1",
+                (user_id, name)
+            ).fetchone()
+            if row is not None:
+                return int(row[0])
+    except SQLAlchemyError:
+        return None
+    seeded = _seed_tournament_faces(user_id)
+    return seeded.get(face_key)
+
+
+def _tournament_face_render_payload(face_key):
+    """Return a dict the template's JS uses to draw the ring overlay.
+    Includes the zones list with colors for visual rendering plus the
+    background color shown behind the rings."""
+    face = TOURNAMENT_FACES.get(face_key)
+    if face is None:
+        return None
+    return {
+        'face_key':         face_key,
+        'face_bg':          face['face_bg'],
+        # rings — drawn outer→inner so painter's-order produces the
+        # right z-stack (innermost on top).
+        'rings':            [
+            {'point_value': pv, 'radius_mm': r, 'color': c}
+            for (pv, r, c) in reversed(face['zones'])
+        ],
+        'x_ring_mm':        face['x_ring_mm'],
+    }
+
+
+def _compute_tournament_progress(session_id, user_id, round_def):
+    """Compute the per-end / total / X count summary for one tournament
+    session. Returns a dict the template renders into the score panel.
+
+    Reads every shot for the session in time order, scores it via the
+    target's seeded zones (same code path as analytics), groups by
+    arrows_per_end into "ends", and reports cumulative totals plus the
+    inner-10 / X count.
+    """
+    out = {
+        'arrows_shot':      0,
+        'arrows_planned':   int(round_def['total_arrows']),
+        'total_score':      0,
+        'x_count':          0,
+        'ten_count':        0,
+        'ends':             [],
+        'is_complete':      False,
+        'max_per_arrow':    max(pv for (pv, _, _) in
+                                TOURNAMENT_FACES[round_def['face_key']]['zones']),
+    }
+    try:
+        with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
+            shots = cur.execute(
+                "SELECT x_coord, y_coord, target_id, arrow_shaft_diameter "
+                "FROM apollo WHERE session_id = %s AND user_id = %s "
+                "ORDER BY timestamp, id",
+                (session_id, user_id)
+            ).fetchall()
+    except SQLAlchemyError:
+        return out
+
+    # Cache zones per target_id (a multi-segment round may switch
+    # face_key across segments but in practice every shot lands on the
+    # same target_id in the current implementation).
+    zones_cache = {}
+    def _zones(tid):
+        if tid not in zones_cache:
+            zones_cache[tid] = _fetch_target_zones(tid, user_id) if tid else []
+        return zones_cache[tid]
+
+    face_key       = round_def['face_key']
+    face           = TOURNAMENT_FACES.get(face_key, {})
+    x_ring_radius  = float(face.get('x_ring_mm') or 0.0)
+    arrows_per_end = int(round_def['arrows_per_end'])
+
+    running = 0
+    end_arrows = []
+    out['arrows_shot'] = len(shots)
+    for r in shots:
+        xraw = str(r['x_coord']).strip() if r['x_coord'] is not None else ''
+        yraw = str(r['y_coord']).strip() if r['y_coord'] is not None else ''
+        shaft = _row_get(r, 'arrow_shaft_diameter')
+        points = _score_one_shot(xraw, yraw, _zones(r['target_id']), shaft)
+        out['total_score'] += points
+        if points == out['max_per_arrow']:
+            out['ten_count'] += 1
+        # X count: inside the X ring (using line-cutter slack).
+        if xraw != MISS_SENTINEL and x_ring_radius > 0:
+            try:
+                x = float(xraw); y = float(yraw)
+                shaft_r = _parse_shaft_diameter_mm(shaft) / 2.0
+                eff = max(0.0, math.sqrt(x*x + y*y) - shaft_r)
+                if eff <= x_ring_radius:
+                    out['x_count'] += 1
+            except (TypeError, ValueError):
+                pass
+        running += points
+        end_arrows.append({'points': points, 'x': xraw, 'y': yraw,
+                           'miss': (xraw == MISS_SENTINEL)})
+        if len(end_arrows) == arrows_per_end:
+            out['ends'].append({
+                'arrows':       list(end_arrows),
+                'end_total':    sum(a['points'] for a in end_arrows),
+                'running':      running,
+            })
+            end_arrows = []
+    # Trailing partial end — show it so the user sees what they've shot.
+    if end_arrows:
+        out['ends'].append({
+            'arrows':    list(end_arrows),
+            'end_total': sum(a['points'] for a in end_arrows),
+            'running':   running,
+            'partial':   True,
+        })
+    out['is_complete'] = out['arrows_shot'] >= out['arrows_planned']
+    return out
+
+
 SESSION_DT_FMT_WITH_MS = '%Y-%m-%d %H:%M:%S.%f'
 SESSION_DT_FMT = '%Y-%m-%d %H:%M:%S'
 
@@ -3225,6 +3911,386 @@ def sesh():
                            target_locked=target_locked,
                            target_config=target_config)
 
+
+# ── Tournament mode routes ──────────────────────────────────────────────
+# A tournament session is a /sesh session with an extra `session_tags`
+# marker (`tournament:<round_key>`) so post-hoc code can recover which
+# round it was. The /tournament route enforces the round's arrows-per-end
+# and target lock; everything else flows through the existing shot-save
+# and end-session machinery so analytics, replay, and exports keep
+# working without changes.
+
+@app.route('/tournament', methods=['GET', 'POST'])
+@login_required
+def tournament():
+    """Tournament mode. GET shows either the round-selector or the
+    in-progress shot UI; POST records a shot the same way /sesh does
+    but with the round's arrows-per-end and target locked.
+
+    Round identity lives in `session_tags` (tag `tournament:<key>`),
+    so the route recovers state across reloads by reading the latest
+    apollo row for the active session. The Flask cookie carries a
+    cached round_key for the GET path to avoid a DB hit when the
+    session is mid-round.
+    """
+    user_id = current_user_id()
+
+    # ── GET path: figure out whether a tournament is in progress ───────
+    # An "in-progress tournament" means: there's a session_id in the
+    # cookie, AND its latest shot row carries a tournament:* tag. The
+    # session_tags lookup also lets us survive a cookie wipe — if the
+    # cookie's tournament_round_key was lost but session_id remains
+    # (e.g. the user cleared local storage), we can still recover it
+    # from the DB.
+    # The active round comes from either:
+    #   - the Flask cookie's cached `tournament_round_key` (set on
+    #     /tournament/start, holds before any shot is recorded), or
+    #   - the latest apollo row's session_tags (authoritative once any
+    #     shot exists; survives a cookie wipe).
+    # If session_id is set but neither source identifies a tournament,
+    # the user is in a regular /sesh — fall through to the selector and
+    # let them either resume that session via /sesh or end it first.
+    active_round_key = session.get('tournament_round_key')
+    if not active_round_key and session.get('session_id') is not None:
+        latest_tags = _last_session_tags(user_id, session['session_id'])
+        active_round_key = _round_key_from_tags(latest_tags)
+    if active_round_key and active_round_key not in TOURNAMENT_ROUNDS:
+        # Stale key from an older deploy — clear and bounce to selector.
+        session.pop('tournament_round_key', None)
+        active_round_key = None
+    if active_round_key:
+        session['tournament_round_key'] = active_round_key
+
+    if request.method == 'GET' and active_round_key is None:
+        # Round selector page. Group by org for the UI.
+        by_org = {}
+        for key, rd in TOURNAMENT_ROUNDS.items():
+            by_org.setdefault(rd['org'], []).append({
+                'key':              key,
+                'name':             rd['name'],
+                'description':      rd['description'],
+                'distance_m':       rd['distance_m'],
+                'arrows_per_end':   rd['arrows_per_end'],
+                'ends':             rd['ends'],
+                'total_arrows':     rd['total_arrows'],
+                'max_score':        rd['max_score'],
+                'equipment_class':  rd['equipment_class'],
+            })
+        return render_template(
+            'tournament.html',
+            view='selector',
+            rounds_by_org=by_org,
+        )
+
+    # From here on we expect a round_key. POSTs use the cookie's cached
+    # key (mid-round shot submit). If that's also missing on POST,
+    # something's wrong with the cookie — bounce to the selector.
+    round_key = active_round_key or session.get('tournament_round_key')
+    if not round_key:
+        return redirect(url_for('tournament'))
+    round_def = _tournament_round_def(round_key)
+    if round_def is None:
+        # Stale key from an older deploy — clear and bounce.
+        session.pop('tournament_round_key', None)
+        return redirect(url_for('tournament'))
+
+    face_key = round_def['face_key']
+    face_def = TOURNAMENT_FACES[face_key]
+    target_id = _tournament_face_target_id(user_id, face_key)
+    if target_id is None:
+        # Seeding failed earlier; the seeder already logged the traceback.
+        # Surface the offending face_key so the user has something to
+        # share when reporting.
+        print(f"❌ Tournament face seed missing — user={user_id} face={face_key}")
+        return (f"Could not seed tournament target face "
+                f"(face_key={face_key}). Check server logs for the "
+                f"underlying database error."), 500
+    session['target_id'] = target_id
+
+    arrows_per_end = int(round_def['arrows_per_end'])
+
+    # Lazy session_id mint (same retry-with-backoff trick as /sesh) when
+    # the user is starting a fresh round. Stamps the round tag onto the
+    # first shot row written below.
+    if not session.get('session_id'):
+        new_session_id = None
+        for _attempt in range(12):
+            with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
+                res = cur.execute(
+                    "SELECT MAX(session_id) FROM apollo WHERE user_id = %s",
+                    (user_id,)
+                ).fetchone()
+                max_apollo = res[0] if res and res[0] is not None else 0
+                res = cur.execute(
+                    "SELECT MAX(session_id) FROM session_times WHERE user_id = %s",
+                    (user_id,)
+                ).fetchone()
+                max_st = res[0] if res and res[0] is not None else 0
+                candidate = max(int(max_apollo or 0), int(max_st or 0)) + 1
+                try:
+                    cur.execute(
+                        "INSERT INTO session_times "
+                        "(user_id, session_id, session_begin_time) "
+                        "VALUES (%s, %s, %s)",
+                        (user_id, candidate, datetime.utcnow())
+                    )
+                    con.commit()
+                    new_session_id = candidate
+                    break
+                except DBIntegrityError:
+                    time.sleep(0.005 + secrets.randbelow(20) / 1000.0)
+                    continue
+        if new_session_id is None:
+            return "Could not allocate session id — please try again", 500
+        session['session_id'] = new_session_id
+        session['quivers_completed'] = 0
+        session['arrows_remaining'] = 0
+        session['current_quiver_size'] = arrows_per_end
+        session['record_mode'] = 0
+
+    session_id = session['session_id']
+    tournament_tag = _tournament_tag_for_round(round_key)
+
+    # ── POST: record a shot ─────────────────────────────────────────────
+    if request.method == 'POST':
+        if 'arrow_shot' not in request.form:
+            return redirect(url_for('tournament'))
+        x = request.form.get("x_coord", "")
+        y = request.form.get("y_coord", "")
+        is_precise = 0
+        try:
+            is_precise = int(request.form.get('is_precise', '0'))
+        except (TypeError, ValueError):
+            is_precise = 0
+        bow         = request.form.get('bow', '')
+        arrow_type  = request.form.get('arrow_type', '')
+        record_mode = 0
+        try:
+            record_mode = int(request.form.get('record_mode', '0'))
+        except (TypeError, ValueError):
+            record_mode = 0
+        session['record_mode'] = record_mode
+
+        # Distance comes from the round (or the current segment). The
+        # user can't override it — locking it keeps the recorded shot
+        # data consistent with the published round structure.
+        distance_m = round_def['distance_m']
+        if round_def.get('segments'):
+            seg_idx = int(session.get('tournament_segment_idx', 0))
+            segs = round_def['segments']
+            if 0 <= seg_idx < len(segs):
+                distance_m = segs[seg_idx]['distance_m']
+        distance = f"{distance_m}"
+
+        # Refuse further shots once the round is complete. The template
+        # hides the form when complete, but a stale POST shouldn't add
+        # a 73rd arrow to a 72-arrow round.
+        with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
+            shot_row = cur.execute(
+                "SELECT COUNT(*) FROM apollo "
+                "WHERE session_id = %s AND user_id = %s",
+                (session_id, user_id)
+            ).fetchone()
+            shots_so_far = int(shot_row[0]) if shot_row and shot_row[0] is not None else 0
+        if shots_so_far >= int(round_def['total_arrows']):
+            return redirect(url_for('tournament'))
+        if x == '' or y == '':
+            return redirect(url_for('tournament'))
+
+        # Recover quiver bookkeeping (same logic as /sesh, but the size
+        # is fixed at arrows_per_end — no user-supplied value to lock).
+        arrows_remaining = int(session.get('arrows_remaining', 0) or 0)
+        quivers_completed = int(session.get('quivers_completed', 0) or 0)
+        if arrows_remaining <= 0:
+            arrows_remaining = arrows_per_end
+        session['current_quiver_size'] = arrows_per_end
+
+        # Equipment-row snapshots — same code path as /sesh.
+        try:
+            with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
+                bow_row = cur.execute(
+                    "SELECT nock_height, bow_draw_weight, effective_draw_weight, "
+                    "amo, bow_type FROM bows "
+                    "WHERE bow_model = %s AND user_id = %s LIMIT 1",
+                    (bow, user_id)
+                ).fetchone()
+                if bow_row is not None:
+                    nock_height          = bow_row['nock_height']           if 'nock_height'           in bow_row else bow_row[0]
+                    shot_bow_draw_weight = bow_row['bow_draw_weight']       if 'bow_draw_weight'       in bow_row else bow_row[1]
+                    shot_effective_dw    = bow_row['effective_draw_weight'] if 'effective_draw_weight' in bow_row else bow_row[2]
+                    shot_bow_amo         = bow_row['amo']                   if 'amo'                   in bow_row else bow_row[3]
+                    shot_bow_type        = bow_row['bow_type']              if 'bow_type'              in bow_row else bow_row[4]
+                else:
+                    nock_height = shot_bow_draw_weight = shot_effective_dw = shot_bow_amo = shot_bow_type = None
+
+                arrow_row = cur.execute(
+                    "SELECT length, spine, shaft_weight, shaft_diameter, "
+                    "shaft_material, nock_weight, tip, tip_weight FROM arrows "
+                    "WHERE arrow = %s AND user_id = %s LIMIT 1",
+                    (arrow_type, user_id)
+                ).fetchone()
+                if arrow_row is not None:
+                    shot_arrow_length    = arrow_row['length']         if 'length'         in arrow_row else arrow_row[0]
+                    shot_arrow_spine     = arrow_row['spine']          if 'spine'          in arrow_row else arrow_row[1]
+                    shot_arrow_shaft_w   = arrow_row['shaft_weight']   if 'shaft_weight'   in arrow_row else arrow_row[2]
+                    shot_arrow_shaft_d   = arrow_row['shaft_diameter'] if 'shaft_diameter' in arrow_row else arrow_row[3]
+                    shot_arrow_shaft_m   = arrow_row['shaft_material'] if 'shaft_material' in arrow_row else arrow_row[4]
+                    shot_arrow_nock_w    = arrow_row['nock_weight']    if 'nock_weight'    in arrow_row else arrow_row[5]
+                    shot_arrow_tip       = arrow_row['tip']            if 'tip'            in arrow_row else arrow_row[6]
+                    shot_arrow_tip_w     = arrow_row['tip_weight']     if 'tip_weight'     in arrow_row else arrow_row[7]
+                else:
+                    shot_arrow_length = shot_arrow_spine = shot_arrow_shaft_w = None
+                    shot_arrow_shaft_d = shot_arrow_shaft_m = shot_arrow_nock_w = None
+                    shot_arrow_tip = shot_arrow_tip_w = None
+
+                cur.execute("""
+                    INSERT INTO apollo (user_id, session_id, timestamp, bow,
+                    arrow_type, quiver_size, arrows_remaining,
+                    distance, session_notes, x_coord, y_coord, is_precise,
+                    record_mode, target_id, nock_height,
+                    bow_draw_weight, effective_draw_weight, bow_amo, bow_type,
+                    arrow_length, arrow_spine, arrow_shaft_weight,
+                    arrow_shaft_diameter, arrow_shaft_material,
+                    arrow_nock_weight, arrow_tip, arrow_tip_weight,
+                    session_tags)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                            %s, %s, %s, %s,
+                            %s, %s, %s, %s, %s, %s, %s, %s,
+                            %s)""",
+                    (user_id, session_id, _app_now(), bow, arrow_type, arrows_per_end,
+                     arrows_remaining, distance, '', x, y, is_precise,
+                     record_mode, target_id, nock_height,
+                     shot_bow_draw_weight, shot_effective_dw, shot_bow_amo, shot_bow_type,
+                     shot_arrow_length, shot_arrow_spine, shot_arrow_shaft_w,
+                     shot_arrow_shaft_d, shot_arrow_shaft_m,
+                     shot_arrow_nock_w, shot_arrow_tip, shot_arrow_tip_w,
+                     tournament_tag)
+                )
+                con.commit()
+        except SQLAlchemyError as e:
+            print(f"❌ Tournament shot save error: {e}")
+            return "Error saving entry", 500
+
+        arrows_remaining -= 1
+        if arrows_remaining <= 0:
+            quivers_completed += 1
+            arrows_remaining = arrows_per_end
+            # Advance segment index when we cross a segment boundary.
+            if round_def.get('segments'):
+                seg_idx = int(session.get('tournament_segment_idx', 0))
+                segs = round_def['segments']
+                # Ends shot so far across the *current* segment.
+                ends_into_segment = quivers_completed
+                for prior in range(seg_idx):
+                    ends_into_segment -= int(segs[prior]['ends'])
+                if seg_idx < len(segs) and ends_into_segment >= int(segs[seg_idx]['ends']):
+                    session['tournament_segment_idx'] = seg_idx + 1
+        session['arrows_remaining'] = arrows_remaining
+        session['quivers_completed'] = quivers_completed
+
+        return redirect(url_for('tournament'))
+
+    # ── GET path with active round: render the shot UI ─────────────────
+    # Pull the user's bows / arrows (same as /sesh) so the right rail's
+    # equipment selectors stay populated.
+    with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
+        arrow_types = [r[0] for r in cur.execute(
+            "SELECT DISTINCT arrow FROM arrows WHERE user_id = %s",
+            (user_id,)).fetchall() or []]
+        bow_models = [r[0] for r in cur.execute(
+            "SELECT DISTINCT bow_model FROM bows WHERE user_id = %s",
+            (user_id,)).fetchall() or []]
+
+    progress = _compute_tournament_progress(session_id, user_id, round_def)
+
+    # If a multi-segment round has advanced segments, surface the
+    # current distance to the template.
+    current_distance_m = round_def['distance_m']
+    current_segment_idx = 0
+    if round_def.get('segments'):
+        current_segment_idx = int(session.get('tournament_segment_idx', 0))
+        segs = round_def['segments']
+        if 0 <= current_segment_idx < len(segs):
+            current_distance_m = segs[current_segment_idx]['distance_m']
+
+    target_config = target_to_config(get_target(target_id, user_id))
+    if target_config is not None:
+        target_config['zone_radii_mm'] = _zone_radii_for_target(target_id, user_id)
+        target_config['default_shaft_diameter_mm'] = DEFAULT_SHAFT_DIAMETER_MM
+
+    past_shots = get_past_shots(session_id, arrows_per_end,
+                                session.get('arrows_remaining', arrows_per_end),
+                                user_id)
+
+    return render_template(
+        'tournament.html',
+        view='shoot',
+        session_id=session_id,
+        round_key=round_key,
+        round_def=round_def,
+        face_def=face_def,
+        face_render=_tournament_face_render_payload(face_key),
+        target_config=target_config,
+        past_shots=past_shots,
+        arrow_shaft_diameters=_arrow_shaft_diameters_for_user(user_id),
+        arrow_types=arrow_types,
+        bow_models=bow_models,
+        arrows_per_end=arrows_per_end,
+        arrows_remaining=session.get('arrows_remaining', arrows_per_end),
+        quivers_completed=session.get('quivers_completed', 0),
+        progress=progress,
+        current_distance_m=current_distance_m,
+        current_segment_idx=current_segment_idx,
+    )
+
+
+@app.route('/tournament/start', methods=['POST'])
+@login_required
+def tournament_start():
+    """Begin a new tournament round.
+
+    Hard-requires that the user not have an in-progress regular or
+    tournament session (it would step on the session_id cookie),
+    matching the constraint /sesh implicitly imposes. The user can
+    end the existing session via the modal flow if needed.
+    """
+    user_id = current_user_id()
+    round_key = (request.form.get('round_key') or '').strip()
+    round_def = _tournament_round_def(round_key)
+    if round_def is None:
+        return "Unknown tournament round", 400
+
+    if session.get('session_id'):
+        # An in-progress session is in the cookie. Reuse it only if it
+        # has zero shots (the user clicked something and bounced back);
+        # otherwise refuse and route them through end-session.
+        try:
+            with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
+                existing = cur.execute(
+                    "SELECT COUNT(*) FROM apollo "
+                    "WHERE session_id = %s AND user_id = %s",
+                    (session['session_id'], user_id)
+                ).fetchone()
+                shots = int(existing[0]) if existing and existing[0] is not None else 0
+        except SQLAlchemyError:
+            shots = 0
+        if shots > 0:
+            return ("A session is already in progress. End it first via "
+                    "<a href='/end_session'>End session</a>.", 409)
+        # Reuse the empty session row — clear per-round keys to start
+        # fresh.
+        for k in ('quivers_completed', 'arrows_remaining',
+                  'current_quiver_size', 'record_mode',
+                  'tournament_segment_idx'):
+            session.pop(k, None)
+
+    _seed_tournament_faces(user_id)
+    session['tournament_round_key'] = round_key
+    session['tournament_segment_idx'] = 0
+    session['target_id'] = _tournament_face_target_id(user_id, round_def['face_key'])
+    return redirect(url_for('tournament'))
+
+
 @app.route("/previous_sessions", methods=['GET'])
 @login_required
 def previous_sessions():
@@ -3480,7 +4546,8 @@ def end_session():
                 # Drop the session_id (and other per-round keys) but keep
                 # the user logged in.
                 for k in ('session_id', 'quivers_completed', 'arrows_remaining',
-                          'record_mode', 'target_id'):
+                          'record_mode', 'target_id', 'current_quiver_size',
+                  'tournament_round_key', 'tournament_segment_idx'):
                     session.pop(k, None)
                 return render_template('splash.html')
 
@@ -3585,7 +4652,8 @@ def end_session():
     stats["session_id"] = session_id
     # Clear the in-progress keys but keep the user logged in.
     for k in ('session_id', 'quivers_completed', 'arrows_remaining',
-              'record_mode', 'target_id'):
+              'record_mode', 'target_id', 'current_quiver_size',
+                  'tournament_round_key', 'tournament_segment_idx'):
         session.pop(k, None)
     return render_template('end_session.html', stats=stats, session_id=None, begin_time=None)
 
@@ -3659,7 +4727,8 @@ def end_session_silent():
     # Drop per-round keys but keep the user logged in. session.clear()
     # would log them out, which isn't what the leave-warning modal means.
     for k in ('session_id', 'quivers_completed', 'arrows_remaining',
-              'record_mode', 'target_id'):
+              'record_mode', 'target_id', 'current_quiver_size',
+                  'tournament_round_key', 'tournament_segment_idx'):
         session.pop(k, None)
     return redirect(next_url)
 
