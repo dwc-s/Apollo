@@ -40,6 +40,12 @@ from flask import (
 )
 from flask_wtf.csrf import CSRFProtect
 from datetime import datetime, timedelta
+from zoneinfo import available_timezones
+
+# Sorted IANA timezone list, computed once at import. ~600 entries; cheap
+# to ship into every authenticated page render via the context processor
+# so the /account dropdown doesn't have to recompute it per request.
+_TIMEZONE_CHOICES = sorted(available_timezones())
 from PIL import Image
 from sqlalchemy import (
     create_engine, MetaData, Table, Column, inspect as sa_inspect,
@@ -904,7 +910,7 @@ def get_stats(session_id, user_id):
         days, remainder = divmod(total, 86400)
         hours, remainder = divmod(remainder, 3600)
         minutes, seconds = divmod(remainder, 60)
-        pretty_session_length = f'{days} days, {hours} hours, {minutes} minutes, {seconds} seconds'
+        pretty_session_length = f'{hours + days * 24} hours, {minutes} minutes, {seconds} seconds'
     elif stats["session_end_time"] is None:
         # Incomplete session: zero out the numeric fields so downstream
         # templates and arithmetic don't break on None. The pretty string
@@ -921,9 +927,10 @@ def get_stats(session_id, user_id):
         days, remainder = divmod(total, 86400)
         hours, remainder = divmod(remainder, 3600)
         minutes, seconds = divmod(remainder, 60)
-        pretty_session_length = f'{days} days, {hours} hours, {minutes} minutes, {seconds} seconds'
+        pretty_session_length = f'{hours + days * 24} hours, {minutes} minutes, {seconds} seconds'
     stats.update({"days": days, "hours": hours, "minutes": minutes, "seconds": seconds})
     stats.update({"pretty_session_length": pretty_session_length})
+    stats.update({"session_date": dt1.strftime('%Y-%m-%d')})
     try: # get number of arrows shot
         with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
             res = cur.execute(
@@ -1166,6 +1173,11 @@ users_table = Table('users', metadata,
     # install.py). No UI for granting/revoking root: keep promotion out-of-band
     # to avoid an admin race in the app itself.
     Column('is_root', Integer, server_default=text('0')),
+    # IANA timezone name (e.g. "America/Denver"). The server clock is UTC;
+    # this is the zone we localize *display* timestamps into. Free-text-ish
+    # but validated against zoneinfo.available_timezones() on write, so a
+    # stale row never feeds an invalid name to ZoneInfo().
+    Column('timezone', String(64), server_default=text("'UTC'")),
 )
 
 apollo_table = Table('apollo', metadata,
@@ -1320,6 +1332,28 @@ target_zones_table = Table('target_zones', metadata,
     Column('shape_type', String(32), server_default=text("'circle'")),
     Column('radius_mm', Float),
     Column('display_order', Integer, server_default=text('0')),
+)
+
+
+# Global key/value config rows shared across all users. Currently holds
+# only ``server_timezone`` (set by root from /account) but kept generic so
+# future single-instance settings don't need their own table. ``setting_key``
+# is unique; one row per key, updated in place.
+app_settings_table = Table('app_settings', metadata,
+    Column('id', Integer, primary_key=True, autoincrement=True),
+    Column('setting_key', String(64), unique=True, nullable=False),
+    Column('setting_value', Text),
+    Column('updated_at', DateTime),
+)
+
+
+# Personal scratchpad — one row per user holding free-form notes that aren't
+# tied to a session. Updated in place by /notes.
+user_notes_table = Table('user_notes', metadata,
+    Column('id', Integer, primary_key=True, autoincrement=True),
+    Column('user_id', Integer, unique=True, nullable=False),
+    Column('content', Text),
+    Column('updated_at', DateTime),
 )
 
 
@@ -1784,6 +1818,24 @@ def _ensure_session_tags_column():
         conn.execute(text("ALTER TABLE apollo ADD COLUMN session_tags TEXT"))
 
 
+def _ensure_user_timezone_column():
+    """Add the timezone column to users on DBs that predate timezone support.
+
+    Idempotent: only ALTERs when the column is missing. Default 'UTC' so
+    every existing account keeps the previous behavior (server clock is
+    UTC, display matched server) until the user picks a zone.
+    """
+    insp = sa_inspect(engine)
+    if 'users' not in insp.get_table_names():
+        return
+    cols = {c['name'] for c in insp.get_columns('users')}
+    if 'timezone' in cols:
+        return
+    print("⚙️  Migrating: adding timezone column to users")
+    with engine.begin() as conn:
+        conn.execute(text("ALTER TABLE users ADD COLUMN timezone VARCHAR(64) DEFAULT 'UTC'"))
+
+
 def _ensure_is_root_column():
     """Add the is_root column to users on DBs that predate root support.
 
@@ -1877,6 +1929,59 @@ def _ensure_root_user():
         print(f"⚠️  Root bootstrap failed: {e}")
 
 
+def get_app_setting(key, default=None):
+    """Read a single app_settings row, or ``default`` if missing.
+
+    Callers should be tolerant of a missing/empty value: the table is
+    created by metadata.create_all() but rows only appear once an admin
+    has set the value at least once.
+    """
+    try:
+        with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
+            row = cur.execute(
+                "SELECT setting_value FROM app_settings WHERE setting_key = %s",
+                (key,)
+            ).fetchone()
+            if row is None:
+                return default
+            val = row['setting_value']
+            return val if val not in (None, '') else default
+    except SQLAlchemyError:
+        return default
+
+
+def set_app_setting(key, value):
+    """Upsert one app_settings row. Returns True on success.
+
+    Race-tolerant via SELECT-then-INSERT-or-UPDATE; the unique index on
+    setting_key would surface a duplicate insert anyway, but a second
+    UPDATE is cheaper than an exception path.
+    """
+    try:
+        with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
+            existing = cur.execute(
+                "SELECT id FROM app_settings WHERE setting_key = %s", (key,)
+            ).fetchone()
+            now = _app_now()
+            if existing is None:
+                cur.execute(
+                    "INSERT INTO app_settings (setting_key, setting_value, updated_at) "
+                    "VALUES (%s, %s, %s)",
+                    (key, value, now)
+                )
+            else:
+                cur.execute(
+                    "UPDATE app_settings SET setting_value = %s, updated_at = %s "
+                    "WHERE setting_key = %s",
+                    (value, now, key)
+                )
+            con.commit()
+        return True
+    except SQLAlchemyError as e:
+        print(f"❌ set_app_setting({key!r}) failed: {e}")
+        return False
+
+
 def migrate_db():
     """Create tables if missing, run in-place migrations, and seed defaults.
 
@@ -1894,6 +1999,7 @@ def migrate_db():
     _ensure_shot_snapshot_columns()
     _ensure_session_tags_column()
     _ensure_is_root_column()
+    _ensure_user_timezone_column()
     metadata.create_all(engine)
     _drop_legacy_unique_target_name()
     _ensure_session_times_unique_index()
@@ -2438,7 +2544,7 @@ def current_user():
         with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
             row = cur.execute(
                 "SELECT id AS rowid, username, email, created_at, last_login, "
-                "is_root FROM users WHERE id = %s AND is_active = 1", (uid,)
+                "is_root, timezone FROM users WHERE id = %s AND is_active = 1", (uid,)
             ).fetchone()
             # Stale session: cookie says user 42 but user 42 was deleted
             # or deactivated. Clear the cookie so the next request bumps
@@ -2730,12 +2836,16 @@ def inject_template_globals():
     /login, /register, etc.
     """
     if current_user_id() is None:
-        return dict(default_target=None, current_user=None)
+        return dict(default_target=None, current_user=None,
+                    apollo_backend=APOLLO_BACKEND)
     user = current_user()
     row = get_default_target(user['rowid']) if user is not None else None
     return dict(
         default_target=target_to_config(row),
         current_user=user,
+        timezones=_TIMEZONE_CHOICES,
+        apollo_backend=APOLLO_BACKEND,
+        server_timezone=get_app_setting('server_timezone', 'UTC'),
     )
 
 @app.route('/', methods=['GET'])
@@ -3126,6 +3236,48 @@ def account():
 
     action = request.form.get('action') or ''
     current_pw = request.form.get('current_password') or ''
+
+    # Per-user timezone is a display-only preference — no password re-prompt.
+    if action == 'change_timezone':
+        new_tz = (request.form.get('timezone') or '').strip()
+        if new_tz not in available_timezones():
+            return render_template('account.html',
+                error="Unknown timezone.", success=None), 400
+        try:
+            with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
+                cur.execute(
+                    "UPDATE users SET timezone = %s WHERE id = %s",
+                    (new_tz, user['rowid'])
+                )
+                con.commit()
+        except SQLAlchemyError as e:
+            print(f"❌ Change-timezone error: {e}")
+            return render_template('account.html',
+                error="Could not update timezone — please try again.",
+                success=None), 500
+        # Drop the cached current_user so the new tz is reflected on the
+        # next template render in this same request.
+        g.pop('_current_user', None)
+        return render_template('account.html', error=None,
+                               success=f"Your timezone set to {new_tz}.")
+
+    # Server-wide timezone is admin-only and only meaningful on the
+    # multi-user MySQL flavor; reject from the local SQLite install too.
+    if action == 'change_server_timezone':
+        if APOLLO_BACKEND != 'mysql' or not user.get('is_root'):
+            return render_template('account.html',
+                error="Not authorized to change server timezone.",
+                success=None), 403
+        new_tz = (request.form.get('server_timezone') or '').strip()
+        if new_tz not in available_timezones():
+            return render_template('account.html',
+                error="Unknown server timezone.", success=None), 400
+        if not set_app_setting('server_timezone', new_tz):
+            return render_template('account.html',
+                error="Could not update server timezone — please try again.",
+                success=None), 500
+        return render_template('account.html', error=None,
+                               success=f"Server timezone set to {new_tz}.")
 
     try:
         with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
@@ -7470,6 +7622,68 @@ def analyze():
                            catalog=catalog,
                            selected=selected,
                            results=results,
+                           error=error)
+
+
+@app.route('/notes', methods=['GET', 'POST'])
+@login_required
+def notes():
+    """Per-user scratchpad — free-form text not tied to any session.
+
+    GET renders the current note; POST upserts the textarea contents.
+    Stored as a single row per user in ``user_notes`` (see schema above).
+    """
+    user_id = current_user_id()
+    saved = False
+    error = None
+
+    if request.method == 'POST':
+        content = request.form.get('content') or ''
+        try:
+            with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
+                existing = cur.execute(
+                    "SELECT id FROM user_notes WHERE user_id = %s",
+                    (user_id,)
+                ).fetchone()
+                now = _app_now()
+                if existing is None:
+                    cur.execute(
+                        "INSERT INTO user_notes (user_id, content, updated_at) "
+                        "VALUES (%s, %s, %s)",
+                        (user_id, content, now)
+                    )
+                else:
+                    cur.execute(
+                        "UPDATE user_notes SET content = %s, updated_at = %s "
+                        "WHERE user_id = %s",
+                        (content, now, user_id)
+                    )
+                con.commit()
+            saved = True
+        except SQLAlchemyError as e:
+            print(f"❌ Notes save error: {e}")
+            error = "Could not save notes — please try again."
+
+    content = ''
+    updated_at = None
+    try:
+        with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
+            row = cur.execute(
+                "SELECT content, updated_at FROM user_notes WHERE user_id = %s",
+                (user_id,)
+            ).fetchone()
+            if row is not None:
+                content = row['content'] or ''
+                updated_at = row['updated_at']
+    except SQLAlchemyError as e:
+        print(f"❌ Notes load error: {e}")
+        if error is None:
+            error = "Could not load notes."
+
+    return render_template('notes.html',
+                           content=content,
+                           updated_at=updated_at,
+                           saved=saved,
                            error=error)
 
 

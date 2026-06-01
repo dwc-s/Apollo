@@ -8,6 +8,38 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Apollo::account</title>
+    <style>
+        .account-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+            gap: 32px;
+            width: 90%;
+            max-width: 1100px;
+            margin: 24px auto 32px auto;
+            align-items: start;
+        }
+        .account-grid > form,
+        .account-grid > .form-panel {
+            margin: 0;
+            min-width: 0;
+        }
+        .account-grid .form-panel {
+            width: 100%;
+            max-width: none;
+            margin: 0;
+            padding: 26px;
+            box-sizing: border-box;
+        }
+        .account-grid .form-panel.danger-zone {
+            grid-column: 1 / -1;
+        }
+        .account-tz-note {
+            font-family: 'Quantico', sans-serif;
+            color: #1a3a5c;
+            font-size: 0.85rem;
+            margin: 0 0 10px 0;
+        }
+    </style>
     <script defer src="{{ url_for('static', filename='apollo-nav.js') }}"></script>
 </head>
 <body>
@@ -28,6 +60,7 @@
     <hr class="side-nav-divider">
     <a href="#" id="export-link" class="side-nav-link"><span class="nav-badge">⬇</span>Export data</a>
     <a href="#" id="import-link" class="side-nav-link"><span class="nav-badge">⬆</span>Import data</a>
+    <a href="/notes" class="side-nav-link"><span class="nav-badge">✎</span>Notes</a>
     {% if current_user and current_user.is_root %}
     <hr class="side-nav-divider">
     <a href="/admin" class="side-nav-link"><span class="nav-badge">★</span>Admin</a>
@@ -71,64 +104,115 @@
 <div class="auth-message success">{{ success }}</div>
 {% endif %}
 
-<form action="/account" method="POST" autocomplete="off">
-    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <input type="hidden" name="action" value="change_password">
-    <div class="form-panel">
-        <h4>Change password</h4>
-        <span class="form-label">Current password</span>
-        <input type="password" name="current_password" autocomplete="current-password" required>
+{% set current_tz = (current_user.timezone if current_user else '') or 'UTC' %}
 
-        <span class="form-label">New password (min 8 characters)</span>
-        <input type="password" name="new_password" autocomplete="new-password"
-               minlength="8" maxlength="128" required>
+<div class="account-grid">
 
-        <span class="form-label">Confirm new password</span>
-        <input type="password" name="confirm_new_password" autocomplete="new-password"
-               minlength="8" maxlength="128" required>
+    <form action="/account" method="POST" autocomplete="off">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="action" value="change_password">
+        <div class="form-panel">
+            <h4>Change password</h4>
+            <span class="form-label">Current password</span>
+            <input type="password" name="current_password" autocomplete="current-password" required>
 
-        <div class="submit-row">
-            <input type="submit" value="Update password">
+            <span class="form-label">New password (min 8 characters)</span>
+            <input type="password" name="new_password" autocomplete="new-password"
+                   minlength="8" maxlength="128" required>
+
+            <span class="form-label">Confirm new password</span>
+            <input type="password" name="confirm_new_password" autocomplete="new-password"
+                   minlength="8" maxlength="128" required>
+
+            <div class="submit-row">
+                <input type="submit" value="Update password">
+            </div>
         </div>
-    </div>
-</form>
+    </form>
 
-<form action="/account" method="POST" autocomplete="off">
-    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <input type="hidden" name="action" value="change_email">
-    <div class="form-panel">
-        <h4>Change email</h4>
-        <span class="form-label">Current email</span>
-        <input type="text" value="{{ current_user.email if current_user else '' }}" disabled>
+    <form action="/account" method="POST" autocomplete="off">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="action" value="change_email">
+        <div class="form-panel">
+            <h4>Change email</h4>
+            <span class="form-label">Current email</span>
+            <input type="text" value="{{ current_user.email if current_user else '' }}" disabled>
 
-        <span class="form-label">Current password</span>
-        <input type="password" name="current_password" autocomplete="current-password" required>
+            <span class="form-label">Current password</span>
+            <input type="password" name="current_password" autocomplete="current-password" required>
 
-        <span class="form-label">New email</span>
-        <input type="email" name="new_email" maxlength="255" required>
+            <span class="form-label">New email</span>
+            <input type="email" name="new_email" maxlength="255" required>
 
-        <div class="submit-row">
-            <input type="submit" value="Update email">
+            <div class="submit-row">
+                <input type="submit" value="Update email">
+            </div>
         </div>
-    </div>
-</form>
+    </form>
 
-<form action="/delete_account" method="POST" autocomplete="off"
-      onsubmit="return confirm('Permanently delete your account and ALL your data? This cannot be undone.');">
-    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <div class="form-panel danger-zone">
-        <h4>Delete account</h4>
-        <p style="font-family:'Quantico',sans-serif;color:#1a3a5c;font-size:0.9rem;margin:0 0 10px 0;">
-            Permanently deletes your account and every session, shot, bow, arrow,
-            and target you've recorded. There is no undo.
+    {% if apollo_backend == 'mysql' %}
+    <div class="form-panel">
+        <h4>Time zone</h4>
+        <p class="account-tz-note">
+            Timestamps in Apollo are stored in the server's clock. Use these
+            settings to translate them into your local time.
         </p>
-        <span class="form-label">Current password (to confirm)</span>
-        <input type="password" name="current_password" autocomplete="current-password" required>
-        <div class="submit-row">
-            <input type="submit" value="Delete my account">
-        </div>
+
+        <form action="/account" method="POST" autocomplete="off">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <input type="hidden" name="action" value="change_server_timezone">
+            <span class="form-label">Server time zone</span>
+            {% if current_user and current_user.is_root %}
+            <select name="server_timezone" required>
+                {% for tz in timezones %}
+                <option value="{{ tz }}" {% if tz == server_timezone %}selected{% endif %}>{{ tz }}</option>
+                {% endfor %}
+            </select>
+            <div class="submit-row">
+                <input type="submit" value="Update server time zone">
+            </div>
+            {% else %}
+            <input type="text" value="{{ server_timezone }}" disabled>
+            <p class="account-tz-note" style="margin-top:8px;">
+                Only an administrator can change this.
+            </p>
+            {% endif %}
+        </form>
+
+        <form action="/account" method="POST" autocomplete="off" style="margin-top:18px;">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <input type="hidden" name="action" value="change_timezone">
+            <span class="form-label">Your time zone</span>
+            <select name="timezone" required>
+                {% for tz in timezones %}
+                <option value="{{ tz }}" {% if tz == current_tz %}selected{% endif %}>{{ tz }}</option>
+                {% endfor %}
+            </select>
+            <div class="submit-row">
+                <input type="submit" value="Update your time zone">
+            </div>
+        </form>
     </div>
-</form>
+    {% endif %}
+
+    <form action="/delete_account" method="POST" autocomplete="off"
+          onsubmit="return confirm('Permanently delete your account and ALL your data? This cannot be undone.');">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <div class="form-panel danger-zone">
+            <h4>Delete account</h4>
+            <p style="font-family:'Quantico',sans-serif;color:#1a3a5c;font-size:0.9rem;margin:0 0 10px 0;">
+                Permanently deletes your account and every session, shot, bow, arrow,
+                and target you've recorded. There is no undo.
+            </p>
+            <span class="form-label">Current password (to confirm)</span>
+            <input type="password" name="current_password" autocomplete="current-password" required>
+            <div class="submit-row">
+                <input type="submit" value="Delete my account">
+            </div>
+        </div>
+    </form>
+
+</div>
 
 <script>
 const UNITS_KEY = 'apollo_units';
