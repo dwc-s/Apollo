@@ -84,7 +84,9 @@
     function pickFormatFromName(name) {
         const lower = (name || '').toLowerCase();
         if (lower.endsWith('.xlsx')) return 'xlsx';
-        if (lower.endsWith('.zip') || lower.endsWith('.csv')) return 'csv';
+        // The csv import expects a zip of one csv per table — a single .csv
+        // would not parse, so don't auto-pick 'csv' on a bare .csv file.
+        if (lower.endsWith('.zip')) return 'csv';
         if (lower.endsWith('.sql')) return 'sql';
         return null;
     }

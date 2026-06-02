@@ -39,7 +39,7 @@ from flask import (
     jsonify, g,
 )
 from flask_wtf.csrf import CSRFProtect
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from zoneinfo import available_timezones
 
 # Sorted IANA timezone list, computed once at import. ~600 entries; cheap
@@ -783,7 +783,8 @@ def _compute_tournament_progress(session_id, user_id, round_def):
         if points == out['max_per_arrow']:
             out['ten_count'] += 1
         # X count: inside the X ring (using line-cutter slack).
-        if xraw != MISS_SENTINEL and x_ring_radius > 0:
+        if (xraw != MISS_SENTINEL and yraw != MISS_SENTINEL
+                and x_ring_radius > 0):
             try:
                 x = float(xraw); y = float(yraw)
                 shaft_r = _parse_shaft_diameter_mm(shaft) / 2.0
@@ -828,8 +829,12 @@ def _app_now():
     if both legs were stamped on the same clock. Display-only places
     (form defaults, backup filenames) can still use ``datetime.now()``
     to show the user wall-clock time in their server's local zone.
+
+    Routes through ``datetime.now(timezone.utc).replace(tzinfo=None)`` so
+    we stop emitting Python-3.12 DeprecationWarnings from ``utcnow()``
+    while keeping the value naive (matches existing column shapes).
     """
-    return datetime.utcnow()
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 def _format_session_dt(val):
@@ -1520,6 +1525,16 @@ class CompatConnection:
     def commit(self):
         self._tx.commit()
         self._tx = self._conn.begin()
+    def rollback(self):
+        # Roll back the open transaction and start a fresh one so subsequent
+        # statements on this connection (e.g. a fall-back UPDATE after a race-
+        # condition recount) keep working inside the same `with` block.
+        try:
+            if self._tx.is_active:
+                self._tx.rollback()
+        except Exception:
+            pass
+        self._tx = self._conn.begin()
     def close(self):
         try:
             if self._tx.is_active:
@@ -1928,7 +1943,7 @@ def _ensure_root_user():
                 "INSERT INTO users (username, email, password_hash, created_at, "
                 "is_active, failed_attempts, is_root) "
                 "VALUES (%s, %s, %s, %s, 1, 0, 1)",
-                (username, email, pw_hash, datetime.utcnow())
+                (username, email, pw_hash, _app_now())
             )
             new_row = cur.execute(
                 "SELECT id FROM users WHERE username = %s", (username,)
@@ -2650,7 +2665,7 @@ def _account_is_locked(row):
         return False
     try:
         if isinstance(locked, datetime):
-            return locked > datetime.utcnow()
+            return locked > _app_now()
         s = str(locked)
         # SQLite stores DateTime as ISO string when no type adapter is
         # registered. Try the common shapes — fromisoformat handles
@@ -2669,7 +2684,7 @@ def _account_is_locked(row):
                     continue
             if parsed is None:
                 raise ValueError(f"unparseable locked_until: {s!r}")
-        return parsed > datetime.utcnow()
+        return parsed > _app_now()
     except (ValueError, TypeError) as e:
         print(f"⚠️  Unparseable locked_until for user — failing closed: {e}")
         return True
@@ -2678,27 +2693,57 @@ def _account_is_locked(row):
 def _record_failed_login(user_id):
     """Increment the failed-attempt counter and apply lockout when hit.
 
-    Bump is done as a single ``failed_attempts = failed_attempts + 1``
-    UPDATE so two concurrent failed logins can't both observe attempts=4
-    and write back attempts=5 (which would skip the lockout threshold).
-    We then read the post-increment value back and apply the lock in a
-    second statement when needed.
+    When a previous lockout has already expired the served time counts —
+    reset the attempt window to a fresh 1 instead of leaving
+    ``failed_attempts`` ≥ threshold (which would re-lock immediately on
+    the very next failure). Otherwise increment in a single UPDATE so two
+    concurrent failed logins can't both observe attempts=4 and write
+    back 5 (skipping the lockout threshold).
     """
     if user_id is None:
         return
     try:
         with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
-            cur.execute(
-                "UPDATE users SET failed_attempts = "
-                "COALESCE(failed_attempts, 0) + 1 WHERE id = %s",
+            prior = cur.execute(
+                "SELECT failed_attempts, locked_until FROM users WHERE id = %s",
                 (user_id,)
-            )
-            row = cur.execute(
-                "SELECT failed_attempts FROM users WHERE id = %s", (user_id,)
             ).fetchone()
-            attempts = int(row['failed_attempts']) if row and row['failed_attempts'] else 0
+            now = _app_now()
+            lockout_expired = False
+            if prior is not None:
+                locked = prior['locked_until'] if 'locked_until' in prior else None
+                if locked is not None:
+                    try:
+                        if isinstance(locked, datetime):
+                            locked_dt = locked
+                        else:
+                            locked_dt = datetime.fromisoformat(str(locked))
+                        if locked_dt <= now:
+                            lockout_expired = True
+                    except (ValueError, TypeError):
+                        # Unparseable locked_until — leave it alone; the
+                        # login path's ``_account_is_locked`` fails closed
+                        # on the same input.
+                        pass
+            if lockout_expired:
+                cur.execute(
+                    "UPDATE users SET failed_attempts = 1, locked_until = NULL "
+                    "WHERE id = %s",
+                    (user_id,)
+                )
+                attempts = 1
+            else:
+                cur.execute(
+                    "UPDATE users SET failed_attempts = "
+                    "COALESCE(failed_attempts, 0) + 1 WHERE id = %s",
+                    (user_id,)
+                )
+                row = cur.execute(
+                    "SELECT failed_attempts FROM users WHERE id = %s", (user_id,)
+                ).fetchone()
+                attempts = int(row['failed_attempts']) if row and row['failed_attempts'] else 0
             if attempts >= LOCKOUT_THRESHOLD:
-                locked_until = datetime.utcnow() + timedelta(minutes=LOCKOUT_MINUTES)
+                locked_until = now + timedelta(minutes=LOCKOUT_MINUTES)
                 cur.execute(
                     "UPDATE users SET locked_until = %s WHERE id = %s",
                     (locked_until, user_id)
@@ -2715,7 +2760,7 @@ def _record_successful_login(user_id):
             cur.execute(
                 "UPDATE users SET failed_attempts = 0, locked_until = NULL, "
                 "last_login = %s WHERE id = %s",
-                (datetime.utcnow(), user_id)
+                (_app_now(), user_id)
             )
             con.commit()
     except SQLAlchemyError as e:
@@ -2914,7 +2959,7 @@ def register():
             cur.execute(
                 "INSERT INTO users (username, email, password_hash, created_at, is_active, "
                 "failed_attempts) VALUES (%s, %s, %s, %s, 1, 0)",
-                (username, email, pw_hash, datetime.utcnow())
+                (username, email, pw_hash, _app_now())
             )
             # Read the just-inserted id back. LAST_INSERT_ID() is MySQL;
             # SQLite uses last_insert_rowid(). Easiest cross-dialect path:
@@ -3106,7 +3151,7 @@ def forgot_password():
     # Brute-forcing this within the 60-minute TTL is not realistic.
     token = secrets.token_urlsafe(32)
     token_hash = _hash_reset_token(token)
-    now = datetime.utcnow()
+    now = _app_now()
     expires = now + timedelta(minutes=PASSWORD_RESET_TTL_MINUTES)
 
     try:
@@ -3158,7 +3203,7 @@ def reset_password(token):
         return redirect(url_for('index'))
 
     token_hash = _hash_reset_token(token or '')
-    now = datetime.utcnow()
+    now = _app_now()
     try:
         with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
             row = cur.execute(
@@ -3467,6 +3512,8 @@ def _purge_user(user_id):
             cur.execute(f"DELETE FROM {tbl} WHERE user_id = %s", (user_id,))
         cur.execute("DELETE FROM password_resets WHERE user_id = %s",
                     (user_id,))
+        cur.execute("DELETE FROM user_notes WHERE user_id = %s",
+                    (user_id,))
         cur.execute("DELETE FROM users WHERE id = %s", (user_id,))
         con.commit()
 
@@ -3723,7 +3770,7 @@ def sesh():
                             "INSERT INTO session_times "
                             "(user_id, session_id, session_begin_time) "
                             "VALUES (%s, %s, %s)",
-                            (user_id, candidate, datetime.utcnow())
+                            (user_id, candidate, _app_now())
                         )
                         con.commit()
                         new_session_id = candidate
@@ -4291,7 +4338,7 @@ def tournament():
                         "INSERT INTO session_times "
                         "(user_id, session_id, session_begin_time) "
                         "VALUES (%s, %s, %s)",
-                        (user_id, candidate, datetime.utcnow())
+                        (user_id, candidate, _app_now())
                     )
                     con.commit()
                     new_session_id = candidate
@@ -4768,6 +4815,13 @@ def _ts_date_str(value):
 def delete_session(session_id):
     """Hard-delete a single past session's shots and timing row for this user."""
     user_id = current_user_id()
+    # Refuse to delete the session currently held in the cookie — otherwise
+    # subsequent /sesh POSTs would write shots into a session_id with no
+    # session_times row, and the unique (user_id, session_id) index would
+    # block the user from re-allocating the same id in /end_session.
+    if session.get('session_id') == session_id:
+        flash("Can't delete the session you're currently in — end it first.")
+        return redirect(url_for('previous_sessions'))
     try:
         with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
             owner_row = cur.execute(
@@ -5422,7 +5476,8 @@ def edit_arrows():
                 arrow_data = []
                 for arrow in arrows:
                     rows = cur.execute(
-                        "SELECT id AS rowid, arrow, length, spine, shaft_weight, nock_weight, "
+                        "SELECT id AS rowid, arrow, length, spine, shaft_weight, "
+                        "shaft_diameter, shaft_material, nock_weight, "
                         "tip, tip_weight FROM arrows WHERE arrow = %s AND user_id = %s",
                         (arrow, user_id)
                     ).fetchall()
@@ -5459,12 +5514,14 @@ def edit_arrows():
                 return "Error deleting arrow", 500
             return redirect(url_for('edit_arrows'))
 
-        arrow        = request.form.get('arrow')
-        length       = request.form.get('length')
-        shaft_weight = request.form.get('shaft_weight')
-        nock_weight  = request.form.get('nock_weight')
-        tip          = request.form.get('tip')
-        tip_weight   = request.form.get('tip_weight')
+        arrow          = request.form.get('arrow')
+        length         = request.form.get('length')
+        shaft_weight   = request.form.get('shaft_weight')
+        shaft_diameter = request.form.get('shaft_diameter')
+        shaft_material = request.form.get('shaft_material')
+        nock_weight    = request.form.get('nock_weight')
+        tip            = request.form.get('tip')
+        tip_weight     = request.form.get('tip_weight')
         # NB: ``spine`` is intentionally *not* in the UPDATE — spine is an
         # intrinsic, immutable property of a shaft (a 500-spine doesn't
         # become a 600 because you changed the tip). The form renders it
@@ -5473,9 +5530,11 @@ def edit_arrows():
             with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
                 cur.execute(
                     "UPDATE arrows SET arrow = %s, length = %s, shaft_weight = %s, "
+                    "shaft_diameter = %s, shaft_material = %s, "
                     "nock_weight = %s, tip = %s, tip_weight = %s "
                     "WHERE id = %s AND user_id = %s",
-                    (arrow, length, shaft_weight, nock_weight, tip, tip_weight,
+                    (arrow, length, shaft_weight, shaft_diameter, shaft_material,
+                     nock_weight, tip, tip_weight,
                      rowid, user_id)
                 )
                 con.commit()
@@ -8086,14 +8145,14 @@ def analyze_export():
         if spec.get('categories'):
             valid = {c['key'] for c in spec['categories']}
             chosen = [c for c in request.args.getlist('categories') if c in valid]
-            if chosen:
-                kwargs['categories'] = chosen
+            # Always forward — even an empty list — so the export matches
+            # what the rendered report showed (which also honored an
+            # explicit empty selection).
+            kwargs['categories'] = chosen if chosen else list(valid)
         if spec.get('tag_picker'):
-            # The download link from analyze() includes the tag selection
-            # that built the report on screen, so the CSV/Excel matches.
-            tags = request.args.getlist('tags')
-            if tags:
-                kwargs['tag_filter'] = tags
+            # Always forward the submitted tag list so the export matches
+            # the rendered report; an empty list explicitly means "no tags".
+            kwargs['tag_filter'] = request.args.getlist('tags')
         out = spec['fn'](current_user_id(), **kwargs)
     except ImportError:
         return "matplotlib is not installed on the server.", 500

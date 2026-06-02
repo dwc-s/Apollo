@@ -94,6 +94,12 @@
             <span class="form-label">Shaft weight (grams)</span>
             <input type="text" name="shaft_weight" value="{{ arrow_data[i][0]['shaft_weight'] }}">
 
+            <span class="form-label">Shaft diameter (mm)</span>
+            <input type="text" name="shaft_diameter" value="{{ arrow_data[i][0]['shaft_diameter'] }}">
+
+            <span class="form-label">Shaft material</span>
+            <input type="text" name="shaft_material" value="{{ arrow_data[i][0]['shaft_material'] }}">
+
             <span class="form-label">Nock weight (grams)</span>
             <input type="text" name="nock_weight" value="{{ arrow_data[i][0]['nock_weight'] }}">
 
@@ -136,6 +142,21 @@ function applyUnits() {
         }
     });
 }
+
+// Keep dataset.inches in sync with the user's typed value so toggling
+// units mid-edit doesn't blow away their input. dataset.inches is the
+// canonical inches form; converted on the fly based on current unit.
+document.querySelectorAll('input[name="length"]').forEach(field => {
+    field.addEventListener('input', () => {
+        const imperial = localStorage.getItem(UNITS_KEY) === 'imperial';
+        const v = parseFloat(field.value);
+        if (isNaN(v)) {
+            field.dataset.inches = '';
+        } else {
+            field.dataset.inches = imperial ? String(v) : String(v / CM_PER_IN);
+        }
+    });
+});
 
 document.getElementById('units-toggle').addEventListener('click', () => {
     const current = localStorage.getItem(UNITS_KEY) || 'metric';
