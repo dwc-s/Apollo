@@ -6640,6 +6640,7 @@ def _report_arrows_vs_time(user_id):
             "  ON a.session_id = st.session_id AND a.user_id = st.user_id "
             "WHERE st.user_id = %s AND st.session_begin_time IS NOT NULL "
             "GROUP BY st.session_id, st.session_begin_time "
+            "HAVING COUNT(a.id) > 0 "
             "ORDER BY st.session_begin_time ASC",
             (user_id,)
         ).fetchall()
@@ -7132,121 +7133,6 @@ def _report_all_shots_per_target(user_id, date_from=None, date_to=None):
         'key': 'all_shots_per_target',
         'title': report_title,
         'panels': panels,
-    }
-
-
-def _report_score_per_quiver(user_id):
-    """Per-quiver point tally across every session where scoring is
-    possible — target has zones with point values AND every shot in the
-    quiver was precisely measured. Quivers that don't qualify are
-    silently skipped.
-    """
-    with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
-        session_rows = cur.execute(
-            "SELECT DISTINCT session_id FROM apollo WHERE user_id = %s",
-            (user_id,)
-        ).fetchall()
-    session_ids = sorted({int(r['session_id']) for r in session_rows
-                          if r['session_id'] is not None})
-
-    # Cache zones per target — most users have few targets and many
-    # sessions, so this saves a lot of redundant zone fetches.
-    zones_cache = {}
-
-    def zones_for(target_id):
-        if target_id not in zones_cache:
-            zones_cache[target_id] = _fetch_target_zones(target_id, user_id)
-        return zones_cache[target_id]
-
-    rows_out = []
-    session_totals = {}
-    for session_id in session_ids:
-        with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
-            # Quiver size is per-row (the lock in the session view forbids
-            # mid-quiver changes but allows them between quivers), so we
-            # walk shots in insertion order and group them using each
-            # row's own quiver_size — the first row of each group sets
-            # the size, and we close the group once it's that long.
-            shot_rows = cur.execute(
-                "SELECT quiver_size, target_id, x_coord, y_coord, is_precise, "
-                "       arrow_shaft_diameter "
-                "FROM apollo "
-                "WHERE session_id = %s AND user_id = %s "
-                "ORDER BY id ASC",
-                (session_id, user_id)
-            ).fetchall()
-            if not shot_rows:
-                continue
-            target_id = (int(shot_rows[0]['target_id'])
-                         if shot_rows[0]['target_id'] is not None else None)
-            if target_id is None:
-                continue
-            zones = zones_for(target_id)
-            if not _zones_define_scoring(zones):
-                continue
-            max_zone_points = max(int(z['point_value'] or 0) for z in zones)
-
-            quiver_number = 1
-            buf = []
-            buf_size = 0
-            for r in shot_rows:
-                try:
-                    row_qs = int(r['quiver_size']) if r['quiver_size'] else 0
-                except (TypeError, ValueError):
-                    row_qs = 0
-                if row_qs <= 0:
-                    buf = []
-                    buf_size = 0
-                    continue
-                if not buf:
-                    buf_size = row_qs
-                buf.append(r)
-                if len(buf) >= buf_size:
-                    if all(int(q['is_precise'] or 0) == 1 for q in buf):
-                        score = _compute_quiver_score(buf, zones)
-                        max_score = buf_size * max_zone_points
-                        pct = round(score / max_score * 100, 1) \
-                            if max_score else 0.0
-                        rows_out.append([
-                            session_id, quiver_number, score, max_score,
-                            f'{pct}%', buf_size,
-                        ])
-                        session_totals[session_id] = \
-                            session_totals.get(session_id, 0) + score
-                    quiver_number += 1
-                    buf = []
-                    buf_size = 0
-
-    if not rows_out:
-        return None
-
-    import matplotlib
-    matplotlib.use('Agg')
-    import matplotlib.pyplot as plt
-
-    sessions_sorted = sorted(session_totals.keys())
-    totals_sorted = [session_totals[s] for s in sessions_sorted]
-    fig, ax = plt.subplots(figsize=(8, 4.5))
-    ax.bar([str(s) for s in sessions_sorted], totals_sorted,
-           color='#fcba03', edgecolor='#1a3a5c')
-    ax.set_xlabel('Session ID')
-    ax.set_ylabel('Total points')
-    ax.set_title('Score per session (sum of scored quivers)')
-    ax.grid(True, axis='y', linestyle='--', alpha=0.4)
-    from matplotlib.ticker import MaxNLocator
-    ax.yaxis.set_major_locator(MaxNLocator(integer=True))
-    for i, v in enumerate(totals_sorted):
-        if v > 0:
-            ax.text(i, v, str(v), ha='center', va='bottom', fontsize=9)
-    png_b64 = _render_matplotlib_png(fig)
-
-    columns = ['Session', 'Quiver', 'Score', 'Max', 'Percent', 'Quiver size']
-    return {
-        'key': 'score_per_quiver',
-        'title': 'Score per quiver',
-        'png_b64': png_b64,
-        'columns': columns,
-        'rows': rows_out,
     }
 
 
@@ -7853,6 +7739,278 @@ def _report_equipment_head_to_head(user_id, categories=None, tag_filter=None):
     return sections
 
 
+# ---------------------------------------------------------------------------
+# Accuracy-over-time helpers + report
+# ---------------------------------------------------------------------------
+# "Accuracy" here = radial distance from target center, normalized by that
+# target's half-width. A normalized distance of 1.0 means the shot is at
+# the target's outer edge regardless of target size, so different targets
+# in the same dataset are comparable. Lower numbers = more accurate.
+
+_ACC_NORM_RANGE = 1.2          # heatmap spans [-1.2, 1.2] (slight overshoot
+                               # so just-outside hits still bin)
+_ACC_NORM_BINS  = 20           # 20×20 grid per time bucket
+_ACC_BUCKET_TARGET = (12, 40)  # auto-pick bucket size so count lands here
+
+
+def _accuracy_bucket_period(span_days):
+    """Pick day/week/month so the timeline ends up with ~12–40 buckets.
+
+    Returns a (label, key_fn) pair where key_fn maps a datetime → a
+    bucket-start datetime and label is the human-readable resolution.
+    """
+    lo, hi = _ACC_BUCKET_TARGET
+    if span_days <= hi:
+        return 'day', lambda dt: datetime(dt.year, dt.month, dt.day)
+    if span_days / 7 <= hi:
+        # ISO week starting Monday
+        def week_start(dt):
+            d0 = datetime(dt.year, dt.month, dt.day)
+            return d0 - timedelta(days=d0.weekday())
+        return 'week', week_start
+    return 'month', lambda dt: datetime(dt.year, dt.month, 1)
+
+
+def _report_accuracy_over_time(user_id, date_from=None, date_to=None):
+    """Per-time-bucket 2D shot-density heatmap (interactive) + line graph
+    of mean normalized distance-from-center over time. Misses excluded;
+    only precise/estimated hits with x,y coords contribute.
+    """
+    range_from = None
+    range_to = None
+    if date_from:
+        try:
+            range_from = datetime.strptime(date_from, '%Y-%m-%d')
+        except ValueError:
+            range_from = None
+    if date_to:
+        try:
+            range_to = datetime.strptime(date_to, '%Y-%m-%d') \
+                + timedelta(days=1) - timedelta(microseconds=1)
+        except ValueError:
+            range_to = None
+
+    # Pull every hit shot with its target width and the parent session's
+    # begin time. We join on session_times for the time axis because shot
+    # timestamps can drift if the user edits a session retroactively,
+    # whereas session_begin_time is set at session start and is stable.
+    with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
+        sql = (
+            "SELECT a.x_coord, a.y_coord, t.physical_size_mm AS width_mm, "
+            "       st.session_begin_time "
+            "FROM apollo a "
+            "JOIN session_times st "
+            "  ON st.session_id = a.session_id AND st.user_id = a.user_id "
+            "JOIN targets t "
+            "  ON t.id = a.target_id AND t.user_id = a.user_id "
+            "WHERE a.user_id = %s "
+            "  AND st.session_begin_time IS NOT NULL "
+            "  AND t.physical_size_mm IS NOT NULL"
+        )
+        params = [user_id]
+        if range_from is not None:
+            sql += " AND st.session_begin_time >= %s"
+            params.append(range_from)
+        if range_to is not None:
+            sql += " AND st.session_begin_time <= %s"
+            params.append(range_to)
+        sql += " ORDER BY st.session_begin_time ASC"
+        rows = cur.execute(sql, tuple(params)).fetchall()
+
+    # Parse + normalize. Drop misses and any row whose target has zero
+    # physical size (the normalization would explode).
+    points = []  # list of (begin_dt, nx, ny, ndist)
+    for r in rows:
+        xraw = str(r['x_coord']).strip() if r['x_coord'] is not None else ''
+        yraw = str(r['y_coord']).strip() if r['y_coord'] is not None else ''
+        if xraw == MISS_SENTINEL and yraw == MISS_SENTINEL:
+            continue
+        try:
+            x = float(xraw)
+            y = float(yraw)
+        except ValueError:
+            continue
+        try:
+            width_mm = float(r['width_mm'])
+        except (TypeError, ValueError):
+            continue
+        if width_mm <= 0:
+            continue
+        half = width_mm / 2.0
+        nx = x / half
+        ny = y / half
+        ndist = math.sqrt(nx * nx + ny * ny)
+
+        begin_raw = r['session_begin_time']
+        if isinstance(begin_raw, datetime):
+            begin_dt = begin_raw
+        else:
+            s = str(begin_raw).strip()
+            begin_dt = None
+            for fmt in (SESSION_DT_FMT_WITH_MS, SESSION_DT_FMT):
+                try:
+                    begin_dt = datetime.strptime(s, fmt)
+                    break
+                except ValueError:
+                    continue
+            if begin_dt is None:
+                continue
+        points.append((begin_dt, nx, ny, ndist))
+
+    if not points:
+        return None
+
+    points.sort(key=lambda p: p[0])
+    first_dt = points[0][0]
+    last_dt = points[-1][0]
+    span_days = max(1, (last_dt - first_dt).days + 1)
+    period_label, bucket_fn = _accuracy_bucket_period(span_days)
+
+    # Bucket the points. Preserve ordering of bucket keys so the slider
+    # and line chart share the same x-axis sequence.
+    buckets = {}
+    bucket_order = []
+    for begin_dt, nx, ny, ndist in points:
+        key = bucket_fn(begin_dt)
+        if key not in buckets:
+            buckets[key] = []
+            bucket_order.append(key)
+        buckets[key].append((nx, ny, ndist))
+
+    # Build the 2D histogram grid for each bucket.
+    edges = [
+        -_ACC_NORM_RANGE + i * (2 * _ACC_NORM_RANGE / _ACC_NORM_BINS)
+        for i in range(_ACC_NORM_BINS + 1)
+    ]
+    centers = [(edges[i] + edges[i + 1]) / 2.0 for i in range(_ACC_NORM_BINS)]
+
+    def bin_index(v):
+        if v < edges[0] or v > edges[-1]:
+            return None
+        idx = int((v - edges[0]) / (edges[-1] - edges[0]) * _ACC_NORM_BINS)
+        if idx == _ACC_NORM_BINS:
+            idx -= 1
+        return idx
+
+    frames = []
+    line_means = []
+    line_sigmas = []
+    line_x = []
+    rows_out = []
+    zmax = 0
+    for key in bucket_order:
+        pts = buckets[key]
+        z = [[0 for _ in range(_ACC_NORM_BINS)]
+             for _ in range(_ACC_NORM_BINS)]
+        ndists = []
+        inner_half = 0
+        for nx, ny, ndist in pts:
+            ix = bin_index(nx)
+            iy = bin_index(ny)
+            if ix is not None and iy is not None:
+                z[iy][ix] += 1
+                if z[iy][ix] > zmax:
+                    zmax = z[iy][ix]
+            ndists.append(ndist)
+            if ndist <= 0.5:
+                inner_half += 1
+        n = len(pts)
+        mean = sum(ndists) / n if n else 0.0
+        if n > 1:
+            var = sum((d - mean) ** 2 for d in ndists) / (n - 1)
+            sigma = math.sqrt(var)
+        else:
+            sigma = 0.0
+        if period_label == 'day':
+            label = key.strftime('%Y-%m-%d')
+        elif period_label == 'week':
+            label = 'Wk of ' + key.strftime('%Y-%m-%d')
+        else:
+            label = key.strftime('%Y-%m')
+        frames.append({
+            'name': label,
+            'label': label,
+            'z': z,
+        })
+        line_x.append(key)
+        line_means.append(mean)
+        line_sigmas.append(sigma)
+        inner_pct = round(inner_half / n * 100, 1) if n else 0.0
+        rows_out.append([
+            label, n, round(mean, 3), round(sigma, 3), f'{inner_pct}%'
+        ])
+
+    # Server-side static line chart of mean ± σ over time.
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    import matplotlib.dates as mdates
+
+    fig, ax = plt.subplots(figsize=(9, 4.5))
+    ax.plot(line_x, line_means, color='#1a3a5c', marker='o', linewidth=1.8,
+            markersize=5, label='Mean normalized distance')
+    upper = [m + s for m, s in zip(line_means, line_sigmas)]
+    lower = [max(0.0, m - s) for m, s in zip(line_means, line_sigmas)]
+    ax.fill_between(line_x, lower, upper, color='#4d6da6', alpha=0.20,
+                    label='±1σ')
+    ax.set_xlabel(f'Session start ({period_label} buckets)')
+    ax.set_ylabel('Mean normalized distance from center\n(lower is better)')
+    ax.set_title('Accuracy over time')
+    ax.grid(True, axis='y', linestyle='--', alpha=0.4)
+    ax.axhline(0.5, color='#888', linewidth=0.7, linestyle=':')
+    ax.legend(loc='upper right', fontsize=9)
+    locator = mdates.AutoDateLocator()
+    ax.xaxis.set_major_locator(locator)
+    ax.xaxis.set_major_formatter(mdates.ConciseDateFormatter(locator))
+    fig.autofmt_xdate()
+    png_b64 = _render_matplotlib_png(fig)
+
+    if range_from is not None and range_to is not None:
+        report_title = (f'Accuracy over time '
+                        f'({date_from} → {date_to})')
+    elif range_from is not None:
+        report_title = f'Accuracy over time (from {date_from})'
+    elif range_to is not None:
+        report_title = f'Accuracy over time (through {date_to})'
+    else:
+        report_title = f'Accuracy over time ({period_label} buckets)'
+
+    # Heatmap panel — client-side Plotly with frame slider.
+    heatmap_panel = {
+        'key': 'accuracy_over_time__heatmap',
+        'title': f'Shot density per {period_label}',
+        'is_interactive': True,
+        'plotly_frames': frames,
+        'plotly_layout': {
+            'title': f'Shot density per {period_label} bucket '
+                     '(slider scrubs through time)',
+            'xs': centers,
+            'ys': centers,
+            'zmax': zmax,
+        },
+        # Same table on both panels would be noisy; only the line-graph
+        # panel carries the table. Provide an empty header so the macro
+        # doesn't choke if the user is in interactive-only branch.
+        'columns': [],
+        'rows': [],
+    }
+
+    line_panel = {
+        'key': 'accuracy_over_time__line',
+        'title': 'Mean normalized distance per bucket',
+        'png_b64': png_b64,
+        'columns': ['Bucket', 'Shots', 'Mean (norm)', 'σ (norm)',
+                    'Within inner half'],
+        'rows': rows_out,
+    }
+
+    return {
+        'key': 'accuracy_over_time',
+        'title': report_title,
+        'panels': [heatmap_panel, line_panel],
+    }
+
+
 REPORTS = {
     'arrows_vs_time': {
         'label': 'Arrows shot vs time',
@@ -7885,13 +8043,16 @@ REPORTS = {
                        'every shot on that target.',
         'fn': _report_hits_by_boundaries,
     },
-    'score_per_quiver': {
-        'label': 'Score per quiver',
-        'description': 'Tally points per quiver across all sessions. '
-                       'Only counts quivers where every shot was precisely '
-                       'measured and the target has scoring zones with '
-                       'point values assigned.',
-        'fn': _report_score_per_quiver,
+    'accuracy_over_time': {
+        'label': 'Accuracy over time',
+        'description': 'Interactive shot-density heatmap on the target '
+                       'face with a time slider to scrub between buckets, '
+                       'plus a line graph of mean normalized distance '
+                       'from center over time (lower is better). '
+                       'Distances are normalized by target half-width so '
+                       'mixed targets are comparable.',
+        'fn': _report_accuracy_over_time,
+        'accepts_date_range': True,
     },
     'equipment_head_to_head': {
         'label': 'Head-to-head comparisons',
@@ -8589,6 +8750,10 @@ def analyze_export():
         if item.get('panels'):
             multi = True
             for p in item['panels']:
+                # Interactive / chart-only panels can omit a table —
+                # skip them in the export rather than emit empty sheets.
+                if not p.get('columns'):
+                    continue
                 sections.append((p['title'], p['columns'], p['rows']))
         else:
             sections.append((item['title'], item['columns'], item['rows']))

@@ -269,7 +269,7 @@
             border-radius: 16px;
             padding: 18px;
             margin: 0 auto 24px auto;
-            max-width: 1100px;
+            max-width: 1200px;
             box-shadow: 0 2px 8px rgba(0,0,0,0.06);
         }
         .report-card h3 {
@@ -283,28 +283,49 @@
             font-style: italic;
         }
 
-        .gallery-row {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 14px;
+        /* Two-column panel: table on the left (flexes), chart thumb on
+           the right (fixed narrow). LightGallery zooms the thumb on
+           click so the small render stays readable while details remain
+           one click away. */
+        .panel-row {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) 320px;
+            gap: 18px;
             margin-bottom: 16px;
-            align-items: flex-start;
+            align-items: start;
         }
-        .gallery-row a.chart-thumb {
-            display: inline-block;
+        @media (max-width: 720px) {
+            .panel-row { grid-template-columns: 1fr; }
+        }
+        .panel-text { min-width: 0; }
+        .panel-aside {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 10px;
+        }
+        .panel-aside a.chart-thumb {
+            display: block;
             border: 1px solid #95abcf;
             border-radius: 8px;
             overflow: hidden;
             background: #fff;
-            flex: 1 1 480px;
+            width: 100%;
+            max-width: 320px;
         }
-        .gallery-row a.chart-thumb img {
+        .panel-aside a.chart-thumb img {
             display: block;
             width: 100%;
             height: auto;
         }
+        .panel-aside .thumb-zoom-hint {
+            font-family: 'Quantico', sans-serif;
+            font-size: 0.7rem;
+            letter-spacing: 0.1em;
+            text-transform: uppercase;
+            color: #4a6080;
+        }
         .replay-block {
-            flex: 0 0 auto;
             text-align: center;
         }
         .replay-block .shot-replay {
@@ -325,8 +346,26 @@
 
         .report-table-wrapper {
             overflow-x: auto;
-            margin-top: 8px;
+            margin-top: 0;
         }
+        .panel-text > .report-table-wrapper { margin-top: 0; }
+
+        /* Plotly heatmap container — left column on the interactive
+           accuracy-over-time panel. Plotly fills the host element, so
+           give it a deterministic min-height. */
+        .plotly-heatmap {
+            width: 100%;
+            min-height: 460px;
+            background: #fff;
+            border: 1px solid #95abcf;
+            border-radius: 8px;
+            padding: 6px;
+        }
+        .interactive-row {
+            display: block;
+            margin-bottom: 16px;
+        }
+
         .report-table {
             border-collapse: collapse;
             font-family: "Quantico", sans-serif;
@@ -543,29 +582,16 @@
 </form>
 
 {% macro render_panel(p, title) %}
-    <div class="gallery-row" data-lg-gallery="true">
-        <a class="chart-thumb"
-           href="data:image/png;base64,{{ p.png_b64 }}"
-           data-src="data:image/png;base64,{{ p.png_b64 }}"
-           data-sub-html="<h4>{{ title }}</h4>">
-            <img src="data:image/png;base64,{{ p.png_b64 }}"
-                 alt="{{ title }}">
-        </a>
-        {% if p.replay %}
-        <div class="replay-block">
-            <canvas class="shot-replay"
-                    width="280" height="280"
-                    data-shots='{{ p.replay.shots | tojson }}'
-                    data-record-mode="{{ p.replay.record_mode }}"
-                    data-target-image="{{ p.replay.target_image_url }}"
-                    data-target-width-mm="{{ p.replay.target_width_mm }}"
-                    data-img-width="{{ p.replay.img_width }}"></canvas>
-            <div class="replay-label">2&times; speed
-                {% if p.replay.target_name %}&mdash; {{ p.replay.target_name }}{% endif %}
-            </div>
-        </div>
-        {% endif %}
+    {% if p.is_interactive %}
+    {# Interactive Plotly panel — takes the full row. If the panel
+       carries its own table it renders below the chart; otherwise the
+       sibling panels can be the source of tabular data. #}
+    <div class="interactive-row">
+        <div class="plotly-heatmap"
+             data-frames='{{ p.plotly_frames | tojson }}'
+             data-layout='{{ p.plotly_layout | tojson }}'></div>
     </div>
+    {% if p.columns %}
     <div class="report-table-wrapper">
         <table class="report-table">
             <thead>
@@ -582,6 +608,55 @@
             </tbody>
         </table>
     </div>
+    {% endif %}
+    {% else %}
+    <div class="panel-row" data-lg-gallery="true">
+        <div class="panel-text">
+            <div class="report-table-wrapper">
+                <table class="report-table">
+                    <thead>
+                        <tr>
+                            {% for c in p.columns %}<th>{{ c }}</th>{% endfor %}
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for row in p.rows %}
+                        <tr>
+                            {% for cell in row %}<td>{{ cell }}</td>{% endfor %}
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        <div class="panel-aside">
+            {% if p.png_b64 %}
+            <a class="chart-thumb"
+               href="data:image/png;base64,{{ p.png_b64 }}"
+               data-src="data:image/png;base64,{{ p.png_b64 }}"
+               data-sub-html="<h4>{{ title }}</h4>">
+                <img src="data:image/png;base64,{{ p.png_b64 }}"
+                     alt="{{ title }}">
+            </a>
+            <span class="thumb-zoom-hint">Click to zoom</span>
+            {% endif %}
+            {% if p.replay %}
+            <div class="replay-block">
+                <canvas class="shot-replay"
+                        width="280" height="280"
+                        data-shots='{{ p.replay.shots | tojson }}'
+                        data-record-mode="{{ p.replay.record_mode }}"
+                        data-target-image="{{ p.replay.target_image_url }}"
+                        data-target-width-mm="{{ p.replay.target_width_mm }}"
+                        data-img-width="{{ p.replay.img_width }}"></canvas>
+                <div class="replay-label">2&times; speed
+                    {% if p.replay.target_name %}&mdash; {{ p.replay.target_name }}{% endif %}
+                </div>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+    {% endif %}
 {% endmacro %}
 
 {% if results %}
@@ -646,14 +721,90 @@
 <script src="https://cdn.jsdelivr.net/npm/lightgallery@2.7.2/lightgallery.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/lightgallery@2.7.2/plugins/zoom/lg-zoom.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/lightgallery@2.7.2/plugins/thumbnail/lg-thumbnail.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/plotly.js-dist-min@2.35.2/plotly.min.js"></script>
 <script>
     document.querySelectorAll('[data-lg-gallery]').forEach(el => {
         if (typeof lightGallery !== 'function') return;
+        // Explicit selector — the chart anchor lives inside .panel-aside
+        // rather than being a direct child of the gallery wrapper, so
+        // lightGallery's default `>a` rule would miss it (or worse, pick
+        // up the replay canvas as a slide).
         lightGallery(el, {
+            selector: 'a.chart-thumb',
             speed: 300,
             download: true,
             plugins: [window.lgZoom, window.lgThumbnail].filter(Boolean),
         });
+    });
+
+    // Plotly heatmap + time slider. Each .plotly-heatmap node carries
+    // pre-aggregated per-bucket z grids in data-frames; the slider
+    // animates between them. We render the first bucket as the base
+    // trace so the heatmap is populated before the user touches the
+    // slider.
+    document.querySelectorAll('.plotly-heatmap').forEach(el => {
+        if (typeof Plotly === 'undefined') return;
+        let frames, layoutHints;
+        try {
+            frames = JSON.parse(el.dataset.frames || '[]');
+            layoutHints = JSON.parse(el.dataset.layout || '{}');
+        } catch (e) {
+            console.error('Plotly heatmap: bad data-frames JSON', e);
+            return;
+        }
+        if (!frames.length) return;
+
+        const xs = layoutHints.xs || [];
+        const ys = layoutHints.ys || [];
+        const baseTrace = {
+            type: 'heatmap',
+            x: xs,
+            y: ys,
+            z: frames[0].z,
+            colorscale: 'YlOrRd',
+            zmin: 0,
+            zmax: layoutHints.zmax || undefined,
+            colorbar: { title: 'Shots' },
+            hovertemplate:
+                'x: %{x:.2f}<br>y: %{y:.2f}<br>shots: %{z}<extra></extra>',
+        };
+        const sliderSteps = frames.map((f, i) => ({
+            method: 'animate',
+            label: f.label,
+            args: [[f.name], {
+                mode: 'immediate',
+                frame: { duration: 0, redraw: true },
+                transition: { duration: 0 },
+            }],
+        }));
+        const layout = {
+            title: layoutHints.title || 'Shot density',
+            xaxis: {
+                title: 'X (normalized)',
+                range: [-1.2, 1.2],
+                zeroline: true,
+                scaleanchor: 'y',
+                scaleratio: 1,
+            },
+            yaxis: {
+                title: 'Y (normalized)',
+                range: [-1.2, 1.2],
+                zeroline: true,
+            },
+            margin: { l: 60, r: 20, t: 50, b: 60 },
+            sliders: [{
+                active: 0,
+                pad: { t: 40 },
+                currentvalue: { prefix: 'Bucket: ', xanchor: 'left' },
+                steps: sliderSteps,
+            }],
+        };
+        const plotlyFrames = frames.map(f => ({
+            name: f.name,
+            data: [{ z: f.z }],
+        }));
+        Plotly.newPlot(el, [baseTrace], layout, { displayModeBar: false })
+            .then(() => Plotly.addFrames(el, plotlyFrames));
     });
 </script>
 {% endif %}
