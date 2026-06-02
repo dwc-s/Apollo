@@ -120,6 +120,28 @@
             line-height: 1.4;
             white-space: nowrap;
         }
+        /* Clickable variant — same look as the span chip, but signals
+           interactivity and links to the filtered view. Cursor + hover
+           cue is enough; underlines would clash with the chip shape. */
+        a.tag-chip {
+            text-decoration: none;
+            cursor: pointer;
+            transition: background 0.12s, color 0.12s;
+        }
+        a.tag-chip:hover,
+        a.tag-chip:focus-visible {
+            background: #4d6da6;
+            color: #fff;
+            border-color: #1a3a5c;
+            outline: none;
+        }
+        /* Active tag — the chip whose value matches the current q_tags
+           filter — gets a filled style and a "click again to clear" hint. */
+        a.tag-chip.tag-chip-active {
+            background: #4d6da6;
+            color: #fff;
+            border-color: #1a3a5c;
+        }
         .session-search .result-count {
             margin-left: auto;
             font-size: 0.8rem;
@@ -236,6 +258,26 @@
     window.addEventListener('resize', fitTitle);
 })();
 </script>
+
+{# Clickable tag chip. Clicking sets the q_tags filter to this one tag,
+   preserving every other active filter so the user can drill down
+   without losing their existing date range / bow / etc. context.
+   If the same tag is already the active filter, the link CLEARS the
+   tag filter — toggle behavior so a second click escapes the drill-in. #}
+{% macro tag_link(tag) %}
+{% set already_active = (filters.q_tags|trim|lower) == tag|lower %}
+<a class="tag-chip{% if already_active %} tag-chip-active{% endif %}"
+   href="{{ url_for('previous_sessions',
+                    q_tags=(none if already_active else tag),
+                    q_notes=filters.q_notes or none,
+                    q_target=filters.q_target or none,
+                    q_bow=filters.q_bow or none,
+                    q_arrow=filters.q_arrow or none,
+                    date_from=filters.date_from or none,
+                    date_to=filters.date_to or none) }}"
+   title="{% if already_active %}Click to clear tag filter{% else %}Show only sessions tagged "{{ tag }}"{% endif %}">{{ tag }}</a>
+{% endmacro %}
+
 <table class="sessions-table">
   <thead>
     <tr>
@@ -324,7 +366,7 @@
             <td data-label="Notes">{{ row['session_notes'] }}</td>
             <td class="tags-cell" data-label="Tags">
               {% for tag in (row['session_tags'] or '').split(',') if tag.strip() %}
-                <span class="tag-chip">{{ tag.strip() }}</span>
+                {{ tag_link(tag.strip()) }}
               {% endfor %}
             </td>
             <td data-label="Placement" style="text-align:center;white-space:nowrap;">
@@ -363,7 +405,7 @@
           <td data-label="Notes">{{ row['session_notes'] }}</td>
           <td class="tags-cell" data-label="Tags">
             {% for tag in (row['session_tags'] or '').split(',') if tag.strip() %}
-              <span class="tag-chip">{{ tag.strip() }}</span>
+              {{ tag_link(tag.strip()) }}
             {% endfor %}
           </td>
           <td data-label="Placement" style="text-align:center;white-space:nowrap;">

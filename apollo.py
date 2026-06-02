@@ -7387,6 +7387,111 @@ def _equipment_shot_samples(user_id, column):
     return groups
 
 
+def _is_auto_tag(tag):
+    """True for tags Apollo writes automatically (tournament:<key>, practice).
+
+    The head-to-head picker hides these by default so a user's tag list
+    isn't dominated by tournament round identifiers they never typed.
+    Comparison is case-insensitive — the storage layer is too."""
+    if not tag:
+        return False
+    t = tag.strip().lower()
+    return t == 'practice' or t.startswith('tournament:')
+
+
+def _tag_inventory(user_id):
+    """Per-tag shot counts for the head-to-head tag picker.
+
+    Returns ``[{name, shots, is_auto}, ...]`` sorted by shot count (most
+    first, name tiebreaker). A shot tagged "indoor, morning" contributes
+    +1 to each of "indoor" and "morning". Case-insensitive dedup within
+    a shot; first-seen casing wins the canonical display name."""
+    if user_id is None:
+        return []
+    try:
+        with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
+            rows = cur.execute(
+                "SELECT session_tags FROM apollo "
+                "WHERE user_id = %s AND session_tags IS NOT NULL "
+                "      AND session_tags <> ''",
+                (user_id,)
+            ).fetchall()
+    except SQLAlchemyError:
+        return []
+    counts = {}
+    canonical = {}
+    for row in rows:
+        raw = row[0] or ''
+        seen = set()
+        for part in raw.split(','):
+            t = part.strip()
+            if not t:
+                continue
+            key = t.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            canonical.setdefault(key, t)
+            counts[key] = counts.get(key, 0) + 1
+    inventory = [
+        {'name': canonical[k], 'shots': counts[k], 'is_auto': _is_auto_tag(k)}
+        for k in counts
+    ]
+    inventory.sort(key=lambda x: (-x['shots'], x['name'].lower()))
+    return inventory
+
+
+def _tag_shot_samples(user_id):
+    """Pull every shot for ``user_id`` grouped by each tag in session_tags.
+
+    Unlike _equipment_shot_samples this is many-to-many — a shot tagged
+    "indoor, morning" lands in both the "indoor" and "morning" groups.
+    Tags are deduped case-insensitively within a shot, and the first-seen
+    casing becomes the canonical display name for each group.
+    """
+    with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
+        rows = cur.execute(
+            "SELECT a.session_tags AS tags, a.x_coord, a.y_coord, a.is_precise, "
+            "       a.target_id, t.physical_size_mm "
+            "FROM apollo a "
+            "LEFT JOIN targets t ON t.id = a.target_id "
+            "WHERE a.user_id = %s AND a.session_tags IS NOT NULL "
+            "      AND a.session_tags <> '' ",
+            (user_id,)
+        ).fetchall()
+
+    groups = {}
+    # lowercase → display name, so "Indoor" and "indoor" collapse to one
+    # group with stable casing instead of two silent dupes.
+    canonical = {}
+    for r in rows:
+        try:
+            half_mm = float(r['physical_size_mm']) / 2.0
+        except (TypeError, ValueError):
+            continue
+        if half_mm <= 0:
+            continue
+        shot = {
+            'x_raw': str(r['x_coord']).strip() if r['x_coord'] is not None else '',
+            'y_raw': str(r['y_coord']).strip() if r['y_coord'] is not None else '',
+            'is_precise': int(r['is_precise'] or 0),
+            'target_id': int(r['target_id']) if r['target_id'] is not None else None,
+            'half_mm': half_mm,
+        }
+        seen_in_shot = set()
+        for part in (r['tags'] or '').split(','):
+            t = part.strip()
+            if not t:
+                continue
+            key = t.lower()
+            if key in seen_in_shot:
+                continue
+            seen_in_shot.add(key)
+            display = canonical.setdefault(key, t)
+            groups.setdefault(display, []).append(shot)
+    return groups
+
+
 def _summarize_equipment(shots):
     """Per-equipment summary stats used by the head-to-head report.
 
@@ -7456,10 +7561,10 @@ def _summarize_equipment(shots):
     }
 
 
-def _report_equipment_head_to_head(user_id):
-    """Pairwise head-to-head comparison of bows and arrows.
+def _report_equipment_head_to_head(user_id, categories=None, tag_filter=None):
+    """Pairwise head-to-head comparison of bows, arrows, and session tags.
 
-    For every pair of bows (and every pair of arrows) that the user has
+    For every pair of bows, arrows, and session tags that the user has
     shot at least ``_HEAD_TO_HEAD_MIN_SHOTS`` arrows with, render:
       * a grouped bar chart of the headline accuracy metrics
         (hit rate, mean distance from center, group spread), with
@@ -7473,17 +7578,56 @@ def _report_equipment_head_to_head(user_id):
     import matplotlib
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
+    from matplotlib.patches import Patch
 
-    panels = []
+    # One result section per kind (Bow / Arrow / Tag) so the UI can title
+    # each card by what's actually being compared instead of lumping them
+    # all under a single "Equipment head-to-head" heading.
+    sections = []
+    # Track per-column inventory so we can explain *why* a column produced no
+    # pairs when the whole report ends up empty (e.g. only one bow logged).
+    inventory = {}
 
-    for column, label_singular in (('bow', 'Bow'), ('arrow_type', 'Arrow')):
-        groups = _equipment_shot_samples(user_id, column)
+    # ``categories`` scopes which kinds to compare. ``None`` means "all" so
+    # existing callers (and the report-spec default) keep their old behavior.
+    all_kinds = (('bow', 'Bow'), ('arrow_type', 'Arrow'), ('tag', 'Tag'))
+    if categories is None:
+        wanted = {k for k, _ in all_kinds}
+    else:
+        wanted = set(categories)
+
+    COLOR_A = '#4d6da6'
+    COLOR_B = '#fcba03'
+    EDGE = '#1a3a5c'
+
+    for column, label_singular in all_kinds:
+        if column not in wanted:
+            continue
+        if column == 'tag':
+            groups = _tag_shot_samples(user_id)
+            if tag_filter is not None:
+                # Whitelist applied case-insensitively against the canonical
+                # group names. Empty whitelist = "no tags compared" (e.g.
+                # user explicitly cleared the picker).
+                allowed = {t.strip().lower() for t in tag_filter}
+                groups = {name: shots for name, shots in groups.items()
+                          if name.lower() in allowed}
+        else:
+            groups = _equipment_shot_samples(user_id, column)
         eligible = {
             name: shots for name, shots in groups.items()
             if len(shots) >= _HEAD_TO_HEAD_MIN_SHOTS
         }
+        inventory[column] = {
+            'label': label_singular,
+            'distinct': len(groups),
+            'eligible': len(eligible),
+        }
         if len(eligible) < 2:
             continue
+        # Collect this kind's panels into its own list so we can wrap them
+        # in a section titled "{Kind} head-to-head" at the end of the loop.
+        panels = []
         summaries = {name: _summarize_equipment(shots)
                      for name, shots in eligible.items()}
         # Most-shot first → deterministic ordering and the most-used
@@ -7520,10 +7664,14 @@ def _report_equipment_head_to_head(user_id):
                     b_sum['group_sigma_norm'],
                 ]
                 for ax, title, av, bv in zip(axes, metric_titles, a_vals, b_vals):
-                    bars = ax.bar([a_name, b_name], [av, bv],
-                                  color=['#4d6da6', '#fcba03'],
-                                  edgecolor='#1a3a5c')
+                    bars = ax.bar([0, 1], [av, bv],
+                                  color=[COLOR_A, COLOR_B],
+                                  edgecolor=EDGE)
                     ax.set_title(title, fontsize=10)
+                    # No x-tick labels: full names land in the figure-level
+                    # color key above instead. Avoids the overlap problem
+                    # when names are long.
+                    ax.set_xticks([])
                     ax.grid(True, axis='y', linestyle='--', alpha=0.4)
                     for bar, v in zip(bars, (av, bv)):
                         ax.text(bar.get_x() + bar.get_width() / 2,
@@ -7535,9 +7683,20 @@ def _report_equipment_head_to_head(user_id):
                     ymax = max(av, bv)
                     if ymax > 0:
                         ax.set_ylim(0, ymax * 1.18)
-                fig.suptitle(f'{label_singular}: {a_name} vs {b_name}',
-                             fontsize=12, fontweight='bold')
-                fig.tight_layout(rect=(0, 0, 1, 0.94))
+                # Color key: a small swatch for each side maps color → name
+                # so the bar chart itself stays uncluttered.
+                legend_handles = [
+                    Patch(facecolor=COLOR_A, edgecolor=EDGE, label=a_name),
+                    Patch(facecolor=COLOR_B, edgecolor=EDGE, label=b_name),
+                ]
+                fig.legend(handles=legend_handles,
+                           loc='upper center',
+                           bbox_to_anchor=(0.5, 0.90),
+                           ncol=2, frameon=False, fontsize=10)
+                fig.suptitle(f'{label_singular} head-to-head',
+                             fontsize=12, fontweight='bold', y=0.99)
+                # Leave room at the top for both the suptitle and the legend.
+                fig.tight_layout(rect=(0, 0, 1, 0.86))
                 png_b64 = _render_matplotlib_png(fig)
 
                 # Significance verdict — uses the conventional α=0.05
@@ -7601,14 +7760,58 @@ def _report_equipment_head_to_head(user_id):
                     'rows': rows_out,
                 })
 
-    if not panels:
-        return None
+        if panels:
+            # ``key`` stays as the catalog key so the template's per-report
+            # lookups (date_ranges, categories, tag_selections, download
+            # URL) all resolve. ``title`` is what changes per section.
+            sections.append({
+                'key': 'equipment_head_to_head',
+                'title': f'{label_singular} head-to-head',
+                'panels': panels,
+            })
 
-    return {
-        'key': 'equipment_head_to_head',
-        'title': 'Equipment head-to-head',
-        'panels': panels,
-    }
+    if not sections:
+        # Build a precise explanation so users know what to add (a second bow
+        # or arrow type, more shots on one they already have, etc.) instead
+        # of the generic "shoot a session first" fallback.
+        bits = []
+        for col in ('bow', 'arrow_type', 'tag'):
+            info = inventory.get(col) or {}
+            label = info.get('label', col)
+            distinct = info.get('distinct', 0)
+            eligible = info.get('eligible', 0)
+            noun = label.lower()
+            if distinct == 0:
+                bits.append(f'no {noun}s logged on any shot')
+            elif distinct == 1:
+                bits.append(
+                    f'only 1 {noun} logged — need at least 2 to compare'
+                )
+            elif eligible < 2:
+                bits.append(
+                    f'{distinct} {noun}s logged but fewer than 2 '
+                    f'have ≥{_HEAD_TO_HEAD_MIN_SHOTS} shots'
+                )
+            else:
+                # Eligible pairs existed but every pair had <2 hits to compare.
+                bits.append(
+                    f'{noun} pairs had too few hits for a t-test'
+                )
+        reason = (
+            'Nothing to compare yet — ' + '; '.join(bits) + '. '
+            'Log shots with a second bow, arrow type, or session tag to '
+            'enable this report.'
+        )
+        return {
+            'key': 'equipment_head_to_head',
+            'title': 'Head-to-head comparisons',
+            'empty': True,
+            'empty_reason': reason,
+        }
+
+    # List return — the route flattens this into the per-kind result cards
+    # (one ``<section>`` per Bow / Arrow / Tag head-to-head).
+    return sections
 
 
 REPORTS = {
@@ -7652,14 +7855,27 @@ REPORTS = {
         'fn': _report_score_per_quiver,
     },
     'equipment_head_to_head': {
-        'label': 'Equipment head-to-head',
-        'description': 'Pairwise comparison of every bow (and every arrow) '
-                       'you have shot with. Reports per-piece accuracy '
-                       'metrics plus Welch\'s t-test and Cohen\'s d so you '
-                       'can see whether a difference between two pieces is '
-                       'real or just noise. Distances are normalized by '
-                       'target size so mixed targets are comparable.',
+        'label': 'Head-to-head comparisons',
+        'description': 'Pairwise comparison of every bow, arrow, and '
+                       'session tag you have shot with. Reports per-group '
+                       'accuracy metrics plus Welch\'s t-test and Cohen\'s '
+                       'd so you can see whether a difference between two '
+                       'groups is real or just noise. Distances are '
+                       'normalized by target size so mixed targets are '
+                       'comparable.',
         'fn': _report_equipment_head_to_head,
+        # Sub-options revealed when this report is ticked. Each entry is
+        # forwarded into the report fn as ``categories=[...]``. Defaults
+        # are applied when the form omits the field (e.g. first GET).
+        'categories': [
+            {'key': 'bow',        'label': 'Bows'},
+            {'key': 'arrow_type', 'label': 'Arrows'},
+            {'key': 'tag',        'label': 'Tags'},
+        ],
+        # Tags can grow into the dozens; render an in-form picker so the
+        # user can scope the comparison instead of generating C(n,2) panels
+        # for every tag they've ever used. See ``_tag_inventory``.
+        'tag_picker': True,
     },
 }
 
@@ -7675,6 +7891,13 @@ def analyze():
     # accepts them; using a per-key naming convention (`<key>_date_from`)
     # keeps the wiring extensible if other reports adopt the same option.
     date_ranges = {}
+    # Per-report category checkboxes (e.g. which kinds to compare in the
+    # head-to-head report). Same naming convention: `<key>_categories`.
+    categories = {}
+    # Per-report tag selections for reports that expose a tag picker.
+    # Populated only on POST so the template can distinguish "submitted
+    # nothing" (explicit empty) from "first GET" (use defaults).
+    tag_selections = {}
     if request.method == 'POST':
         selected = [k for k in request.form.getlist('reports') if k in REPORTS]
         for k, spec in REPORTS.items():
@@ -7683,6 +7906,17 @@ def analyze():
                     'date_from': (request.form.get(f'{k}_date_from') or '').strip(),
                     'date_to':   (request.form.get(f'{k}_date_to')   or '').strip(),
                 }
+            if spec.get('categories'):
+                valid = {c['key'] for c in spec['categories']}
+                chosen = [c for c in request.form.getlist(f'{k}_categories')
+                          if c in valid]
+                # No box ticked → fall back to "all" so the user gets a
+                # report instead of a silent empty.
+                if not chosen:
+                    chosen = list(valid)
+                categories[k] = chosen
+            if spec.get('tag_picker'):
+                tag_selections[k] = request.form.getlist(f'{k}_tags')
         if not selected:
             error = 'Pick at least one report to generate.'
         else:
@@ -7690,15 +7924,20 @@ def analyze():
                 user_id = current_user_id()
                 for key in selected:
                     spec = REPORTS[key]
+                    kwargs = {}
                     if spec.get('accepts_date_range'):
                         dr = date_ranges.get(key) or {}
-                        out = spec['fn'](
-                            user_id,
-                            date_from=dr.get('date_from') or None,
-                            date_to=dr.get('date_to') or None,
-                        )
-                    else:
-                        out = spec['fn'](user_id)
+                        kwargs['date_from'] = dr.get('date_from') or None
+                        kwargs['date_to']   = dr.get('date_to') or None
+                    if spec.get('categories'):
+                        kwargs['categories'] = categories.get(key)
+                    if spec.get('tag_picker'):
+                        # Submitted list is the source of truth — even an
+                        # empty list means "user picked no tags" (no
+                        # default fill-in here; the template handles the
+                        # first-GET case by pre-checking the top-N).
+                        kwargs['tag_filter'] = tag_selections.get(key, [])
+                    out = spec['fn'](user_id, **kwargs)
                     if out is None:
                         results.append({
                             'key': key,
@@ -7708,9 +7947,22 @@ def analyze():
                             'rows': [],
                             'empty': True,
                         })
-                    else:
-                        out['empty'] = False
-                        results.append(out)
+                        continue
+                    # Reports may return a single result-dict OR a list of
+                    # them (head-to-head splits per-kind sections). Normalize
+                    # so each item gets the same post-processing.
+                    items = out if isinstance(out, list) else [out]
+                    for item in items:
+                        if item.get('empty'):
+                            # Report ran but found nothing worth rendering
+                            # and supplied its own diagnostic message — pass
+                            # it through with sensible defaults.
+                            item.setdefault('title', REPORTS[key]['label'])
+                            item.setdefault('key', key)
+                            results.append(item)
+                        else:
+                            item['empty'] = False
+                            results.append(item)
             except ImportError as e:
                 print(f"❌ Analyze missing dependency: {e}")
                 error = ('matplotlib is not installed. Install it with '
@@ -7726,13 +7978,29 @@ def analyze():
             'label': v['label'],
             'description': v['description'],
             'accepts_date_range': v.get('accepts_date_range', False),
+            'categories': v.get('categories', []),
+            'tag_picker': v.get('tag_picker', False),
         }
         for k, v in REPORTS.items()
     ]
+    # The picker UI needs the user's tag inventory regardless of POST
+    # state. Cheap one-query call; no-op if no report uses the picker.
+    if any(v.get('tag_picker') for v in REPORTS.values()):
+        tag_inventory = _tag_inventory(current_user_id())
+    else:
+        tag_inventory = []
+    # Default selection = top 5 most-shot *user* tags (auto-tags excluded
+    # so the picker doesn't open with tournament:* pre-selected).
+    default_top_tags = [t['name'] for t in tag_inventory
+                        if not t['is_auto']][:5]
     return render_template('analyze.html',
                            catalog=catalog,
                            selected=selected,
                            date_ranges=date_ranges,
+                           categories=categories,
+                           tag_selections=tag_selections,
+                           tag_inventory=tag_inventory,
+                           default_top_tags=default_top_tags,
                            results=results,
                            error=error)
 
@@ -7811,14 +8079,22 @@ def analyze_export():
         return "Format must be csv or xlsx", 400
     try:
         spec = REPORTS[key]
+        kwargs = {}
         if spec.get('accepts_date_range'):
-            out = spec['fn'](
-                current_user_id(),
-                date_from=(request.args.get('date_from') or '').strip() or None,
-                date_to=(request.args.get('date_to')   or '').strip() or None,
-            )
-        else:
-            out = spec['fn'](current_user_id())
+            kwargs['date_from'] = (request.args.get('date_from') or '').strip() or None
+            kwargs['date_to']   = (request.args.get('date_to')   or '').strip() or None
+        if spec.get('categories'):
+            valid = {c['key'] for c in spec['categories']}
+            chosen = [c for c in request.args.getlist('categories') if c in valid]
+            if chosen:
+                kwargs['categories'] = chosen
+        if spec.get('tag_picker'):
+            # The download link from analyze() includes the tag selection
+            # that built the report on screen, so the CSV/Excel matches.
+            tags = request.args.getlist('tags')
+            if tags:
+                kwargs['tag_filter'] = tags
+        out = spec['fn'](current_user_id(), **kwargs)
     except ImportError:
         return "matplotlib is not installed on the server.", 500
     except SQLAlchemyError as e:
@@ -7827,15 +8103,26 @@ def analyze_export():
     if out is None:
         return "No data to export for this report yet.", 404
 
-    # Reports either return a single chart+table or a list of panels (one
-    # per target, etc.). Normalize to a list of (title, columns, rows) so
-    # one writer branch handles both shapes.
-    if out.get('panels'):
-        sections = [(p['title'], p['columns'], p['rows']) for p in out['panels']]
-        multi = True
-    else:
-        sections = [(out['title'], out['columns'], out['rows'])]
-        multi = False
+    # Reports can return:
+    #   * a single dict with `panels` (per-target style, head-to-head pre-split)
+    #   * a single dict with columns/rows (single chart+table)
+    #   * a list of dicts, each with `panels` (head-to-head per-kind)
+    #   * a single dict flagged `empty: True`
+    # Flatten everything into one list of (title, columns, rows) sections.
+    raw_items = out if isinstance(out, list) else [out]
+    sections = []
+    multi = False
+    for item in raw_items:
+        if item.get('empty'):
+            continue
+        if item.get('panels'):
+            multi = True
+            for p in item['panels']:
+                sections.append((p['title'], p['columns'], p['rows']))
+        else:
+            sections.append((item['title'], item['columns'], item['rows']))
+    if not sections:
+        return "No data to export for this report yet.", 404
 
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
     filename_base = f'apollo_{key}_{timestamp}'
