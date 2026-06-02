@@ -1,0 +1,540 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Bungee+Shade&family=Quantico:ital,wght@0,400;0,700;1,400;1,700&family=Rubik+Iso&display=swap" rel="stylesheet">
+    <link rel="stylesheet" type="text/css" href="{{ url_for('static', filename='style.css') }}">
+
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Apollo::predict</title>
+    <style>
+        .predict-panel {
+            background-color: #b3c6e3;
+            border-radius: 25px;
+            padding: 22px 28px;
+            max-width: 980px;
+            margin: 0 auto 24px auto;
+        }
+        .predict-panel h3 {
+            font-family: "Quantico", sans-serif;
+            color: #1a3a5c;
+            margin: 0 0 12px 0;
+        }
+        .predict-panel h4 {
+            font-family: "Quantico", sans-serif;
+            color: #1a3a5c;
+            margin: 18px 0 6px 0;
+            font-size: 0.95rem;
+            letter-spacing: 0.04em;
+            text-transform: uppercase;
+        }
+        .predict-error {
+            background: #f8d7da;
+            border: 1px solid #c0392b;
+            color: #6e1f17;
+            padding: 10px 14px;
+            border-radius: 6px;
+            font-family: "Quantico", sans-serif;
+            margin: 0 auto 16px auto;
+            max-width: 980px;
+        }
+        .predict-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 12px 18px;
+            margin-bottom: 12px;
+            font-family: "Quantico", sans-serif;
+            color: #1a3a5c;
+        }
+        .predict-row label {
+            display: inline-flex;
+            flex-direction: column;
+            font-size: 0.72rem;
+            letter-spacing: 0.06em;
+            text-transform: uppercase;
+            font-weight: 700;
+            gap: 4px;
+        }
+        .predict-row input[type="date"],
+        .predict-row input[type="number"],
+        .predict-row select {
+            font-family: "Quantico", sans-serif;
+            font-size: 0.9rem;
+            padding: 4px 8px;
+            border: 1px solid #6b80a8;
+            border-radius: 4px;
+            background: #eef2f9;
+            color: #1a3a5c;
+            text-transform: none;
+            letter-spacing: 0;
+            font-weight: 400;
+        }
+        .multi-pill-grid {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px 8px;
+            margin: 4px 0 8px 0;
+            max-height: 160px;
+            overflow-y: auto;
+            padding: 6px;
+            background: rgba(255, 255, 255, 0.35);
+            border: 1px solid #95abcf;
+            border-radius: 6px;
+        }
+        .multi-pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            background: #eef2f9;
+            border: 1px solid #95abcf;
+            color: #1a3a5c;
+            padding: 3px 9px;
+            border-radius: 999px;
+            font-family: "Quantico", sans-serif;
+            font-size: 0.78rem;
+            cursor: pointer;
+            user-select: none;
+        }
+        .multi-pill input[type="checkbox"] { margin: 0; }
+        .multi-pill:has(input:checked) {
+            background: #4d6da6;
+            color: #fff;
+            border-color: #1a3a5c;
+        }
+        .multi-pill .pill-count {
+            opacity: 0.7;
+            font-size: 0.68rem;
+        }
+        .practice-radio-row {
+            display: flex;
+            gap: 14px;
+            margin: 4px 0 6px 0;
+        }
+        .practice-radio-row label {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            font-family: "Quantico", sans-serif;
+            font-size: 0.85rem;
+            font-weight: 700;
+            color: #1a3a5c;
+            text-transform: none;
+            letter-spacing: 0;
+        }
+        .endpoint-sub {
+            background: rgba(255, 255, 255, 0.35);
+            border: 1px solid #95abcf;
+            border-radius: 6px;
+            padding: 10px 14px;
+            margin: 6px 0 12px 0;
+        }
+        .endpoint-sub[hidden] { display: none; }
+        .predict-submit-row {
+            display: flex;
+            justify-content: flex-end;
+            margin-top: 16px;
+        }
+        .predict-submit-row button {
+            font-family: "Quantico", sans-serif;
+            font-weight: 700;
+            font-size: 1rem;
+            background: #1a3a5c;
+            color: #fff;
+            padding: 10px 22px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+        }
+        .predict-submit-row button:hover { background: #2c4a6b; }
+
+        .results-panel {
+            background-color: #eef3fa;
+            border-radius: 16px;
+            padding: 22px;
+            margin: 0 auto 24px auto;
+            max-width: 1100px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+        }
+        .results-panel h3 {
+            font-family: "Quantico", sans-serif;
+            color: #1a3a5c;
+            margin: 0 0 6px 0;
+        }
+        .results-meta {
+            font-family: "Quantico", sans-serif;
+            color: #2c4a6b;
+            font-size: 0.9rem;
+            margin-bottom: 14px;
+        }
+        .histogram-wrap {
+            position: relative;
+            width: 100%;
+            height: 360px;
+            background: #fff;
+            border: 1px solid #c9d3e3;
+            border-radius: 8px;
+            padding: 8px;
+            box-sizing: border-box;
+        }
+        #predict-histogram { display: block; }
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+            gap: 8px 16px;
+            margin: 12px 0;
+            font-family: "Quantico", sans-serif;
+            font-size: 0.9rem;
+            color: #1a3a5c;
+        }
+        .stats-grid .stat {
+            background: #fff;
+            border: 1px solid #c9d3e3;
+            padding: 8px 12px;
+            border-radius: 6px;
+        }
+        .stats-grid .stat-label {
+            font-size: 0.7rem;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            color: #4a6080;
+            display: block;
+        }
+        .stats-grid .stat-value {
+            font-size: 1.1rem;
+            font-weight: 700;
+        }
+        .fit-details {
+            font-family: "Quantico", sans-serif;
+            font-size: 0.85rem;
+            color: #1a3a5c;
+            background: #fff;
+            border: 1px solid #c9d3e3;
+            border-radius: 6px;
+            padding: 8px 12px;
+            margin-top: 10px;
+        }
+        .fit-details summary { cursor: pointer; font-weight: 700; }
+        .fit-details pre {
+            margin: 8px 0 0 0;
+            white-space: pre-wrap;
+            font-size: 0.78rem;
+        }
+        .run-progress {
+            font-family: "Quantico", sans-serif;
+            color: #2c4a6b;
+            font-size: 0.85rem;
+            margin-top: 6px;
+        }
+    </style>
+
+    <script defer src="{{ url_for('static', filename='apollo-nav.js') }}"></script>
+    {% if payload %}
+    <script defer src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    <script defer src="{{ url_for('static', filename='apollo-predict.js') }}"></script>
+    {% endif %}
+</head>
+<body>
+<nav class="side-nav">
+    <a href="/" class="side-nav-brand">Apollo</a>
+    {% if current_user %}
+    <a href="/sesh" class="side-nav-link"><span class="nav-badge">→</span>Start session</a>
+    <a href="/tournament" class="side-nav-link"><span class="nav-badge">★</span>Tournament</a>
+    <a href="/previous_sessions" class="side-nav-link"><span class="nav-badge">→</span>Previous sessions</a>
+    <hr class="side-nav-divider">
+    <a href="/analyze" class="side-nav-link"><span class="nav-badge">→</span>Analyze data</a>
+    <a href="/predict" class="side-nav-link"><span class="nav-badge">→</span>Predict performance</a>
+    <hr class="side-nav-divider">
+    <a href="/add_bow" class="side-nav-link"><span class="nav-badge">→</span>Add bow</a>
+    <a href="/add_arrow" class="side-nav-link"><span class="nav-badge">→</span>Add arrow</a>
+    <a href="/edit_bows" class="side-nav-link"><span class="nav-badge">→</span>Edit bows</a>
+    <a href="/edit_arrows" class="side-nav-link"><span class="nav-badge">→</span>Edit arrows</a>
+    <a href="/add_target" class="side-nav-link"><span class="nav-badge">→</span>Add target</a>
+    <a href="/edit_targets" class="side-nav-link"><span class="nav-badge">→</span>Edit targets</a>
+    <hr class="side-nav-divider">
+    <a href="/notes" class="side-nav-link"><span class="nav-badge">✎</span>Notes</a>
+    {% if current_user and current_user.is_root %}
+    <hr class="side-nav-divider">
+    <a href="/admin" class="side-nav-link"><span class="nav-badge">★</span>Admin</a>
+    {% endif %}
+    <hr class="side-nav-divider">
+    {% endif %}
+    <button type="button" id="units-toggle" class="side-nav-units-btn">⇄ Imperial</button>
+    <div class="side-nav-spacer"></div>
+    {% if current_user %}
+    <div class="side-nav-user">
+        <span class="username">{{ current_user.username }}</span>
+        <a href="/account">Account</a>
+        <form action="/logout" method="POST">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <button type="submit" class="logout-btn">Sign out</button>
+        </form>
+    </div>
+    {% endif %}
+</nav>
+
+<h1 class="title">Predict</h1>
+<script>
+(function fitTitleInit() {
+    function fitTitle() {
+        document.querySelectorAll('.title').forEach(el => {
+            el.style.fontSize = '200px';
+            let fs = 200;
+            while (el.scrollWidth > el.clientWidth && fs > 14) {
+                fs -= 2;
+                el.style.fontSize = fs + 'px';
+            }
+        });
+    }
+    window.addEventListener('load', fitTitle);
+    window.addEventListener('resize', fitTitle);
+})();
+</script>
+
+{% if error %}
+<div class="predict-error">{{ error }}</div>
+{% endif %}
+
+<form method="POST" action="{{ url_for('predict') }}" class="predict-panel" id="predict-form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+
+    <h3>1 · Data source</h3>
+    <p style="font-family:Quantico,sans-serif;color:#2c4a6b;font-size:0.85rem;margin:0 0 10px 0;">
+        Pick which of your historical shots the prediction should be fitted on.
+        Leave any filter empty to include everything.
+    </p>
+
+    <h4>Date range</h4>
+    <div class="predict-row">
+        <label>From
+            <input type="date" name="date_from" value="{{ form.date_from or '' }}">
+        </label>
+        <label>To
+            <input type="date" name="date_to" value="{{ form.date_to or '' }}">
+        </label>
+    </div>
+
+    <h4>Bows</h4>
+    <div class="multi-pill-grid">
+        {% for b in user_bows %}
+        <label class="multi-pill">
+            <input type="checkbox" name="bows" value="{{ b }}"
+                   {% if b in (form.bows or []) %}checked{% endif %}>
+            {{ b }}
+        </label>
+        {% else %}
+        <span style="font-family:Quantico,sans-serif;font-size:0.8rem;color:#6c7a93;font-style:italic;">No bows registered.</span>
+        {% endfor %}
+    </div>
+
+    <h4>Arrows</h4>
+    <div class="multi-pill-grid">
+        {% for a in user_arrows %}
+        <label class="multi-pill">
+            <input type="checkbox" name="arrows" value="{{ a }}"
+                   {% if a in (form.arrows or []) %}checked{% endif %}>
+            {{ a }}
+        </label>
+        {% else %}
+        <span style="font-family:Quantico,sans-serif;font-size:0.8rem;color:#6c7a93;font-style:italic;">No arrows registered.</span>
+        {% endfor %}
+    </div>
+
+    <h4>Tags</h4>
+    <div class="multi-pill-grid">
+        {% for t in tag_inventory %}
+        <label class="multi-pill">
+            <input type="checkbox" name="tags" value="{{ t.name }}"
+                   {% if t.name in (form.tags or []) %}checked{% endif %}>
+            {{ t.name }} <span class="pill-count">({{ t.shots }})</span>
+        </label>
+        {% else %}
+        <span style="font-family:Quantico,sans-serif;font-size:0.8rem;color:#6c7a93;font-style:italic;">No tags yet.</span>
+        {% endfor %}
+    </div>
+
+    <h4>Practice / tournament</h4>
+    <div class="practice-radio-row">
+        <label><input type="radio" name="practice_mode" value="all"
+            {% if (form.practice_mode or 'all') == 'all' %}checked{% endif %}> All shots</label>
+        <label><input type="radio" name="practice_mode" value="practice_only"
+            {% if form.practice_mode == 'practice_only' %}checked{% endif %}> Practice only</label>
+        <label><input type="radio" name="practice_mode" value="tournament_only"
+            {% if form.practice_mode == 'tournament_only' %}checked{% endif %}> Tournament only</label>
+    </div>
+
+    <h3 style="margin-top:24px;">2 · Endpoint</h3>
+    <p style="font-family:Quantico,sans-serif;color:#2c4a6b;font-size:0.85rem;margin:0 0 10px 0;">
+        What round are we simulating?
+    </p>
+
+    <div class="practice-radio-row">
+        <label><input type="radio" name="endpoint_mode" value="round" id="ep-round"
+            {% if (form.endpoint_mode or 'round') == 'round' %}checked{% endif %}> Known tournament round</label>
+        <label><input type="radio" name="endpoint_mode" value="custom" id="ep-custom"
+            {% if form.endpoint_mode == 'custom' %}checked{% endif %}> Custom endpoint</label>
+    </div>
+
+    <div class="endpoint-sub" id="ep-round-sub"
+         {% if form.endpoint_mode == 'custom' %}hidden{% endif %}>
+        <div class="predict-row">
+            <label>Round
+                <select name="round_key">
+                    {% for r in rounds %}
+                    <option value="{{ r.key }}"
+                        {% if form.round_key == r.key %}selected{% endif %}>
+                        {{ r.name }} ({{ r.org }})
+                    </option>
+                    {% endfor %}
+                </select>
+            </label>
+        </div>
+    </div>
+
+    <div class="endpoint-sub" id="ep-custom-sub"
+         {% if (form.endpoint_mode or 'round') != 'custom' %}hidden{% endif %}>
+        <div class="practice-radio-row">
+            <label><input type="radio" name="custom_face_source" value="tournament"
+                {% if (form.custom_face_source or 'tournament') == 'tournament' %}checked{% endif %}> Standard face</label>
+            <label><input type="radio" name="custom_face_source" value="user"
+                {% if form.custom_face_source == 'user' %}checked{% endif %}> My target</label>
+        </div>
+        <div class="predict-row">
+            <label>Standard face
+                <select name="custom_face_key">
+                    {% for f in faces %}
+                    <option value="{{ f.key }}"
+                        {% if form.custom_face_key == f.key %}selected{% endif %}>
+                        {{ f.name }} ({{ f.physical_size_mm | int }} mm)
+                    </option>
+                    {% endfor %}
+                </select>
+            </label>
+            <label>My target
+                <select name="custom_target_id">
+                    <option value="">— pick —</option>
+                    {% for t in user_targets %}
+                    <option value="{{ t.id }}"
+                        {% if form.custom_target_id == (t.id | string) %}selected{% endif %}>
+                        {{ t.name }} ({{ t.physical_size_mm | int }} mm)
+                    </option>
+                    {% endfor %}
+                </select>
+            </label>
+        </div>
+        <div class="predict-row">
+            <label>Distance (m)
+                <input type="number" name="custom_distance_m" min="1" step="0.01"
+                       value="{{ form.custom_distance_m or '' }}">
+            </label>
+            <label>Ends
+                <input type="number" name="custom_ends" min="1" step="1"
+                       value="{{ form.custom_ends or '' }}">
+            </label>
+            <label>Arrows/end
+                <input type="number" name="custom_arrows_per_end" min="1" step="1"
+                       value="{{ form.custom_arrows_per_end or '' }}">
+            </label>
+        </div>
+    </div>
+
+    <h3 style="margin-top:24px;">3 · Simulation</h3>
+    <div class="predict-row">
+        <label>Runs
+            <input type="number" name="n_runs" min="1" step="1"
+                   value="{{ form.n_runs or '200' }}">
+        </label>
+        <label>Score target (optional)
+            <input type="number" name="score_target" min="0" step="1"
+                   value="{{ form.score_target or '' }}">
+        </label>
+        <span style="font-family:Quantico,sans-serif;font-size:0.75rem;color:#2c4a6b;align-self:flex-end;padding-bottom:4px;">
+            Each run plays the full round once. Runs in your browser — bigger numbers just take longer.
+        </span>
+    </div>
+
+    <div class="predict-submit-row">
+        <button type="submit">Run simulation</button>
+    </div>
+</form>
+
+{% if payload %}
+<div class="results-panel">
+    <h3>Results — {{ endpoint_label }}</h3>
+    <div class="results-meta">
+        Endpoint max: {{ endpoint_max }} points · Runs: {{ payload.n_runs }}
+        {% if payload.score_target is not none %} · Target: {{ payload.score_target }}{% endif %}
+        · Fit from {{ payload.dist.n_hits }} hits ({{ payload.dist.n_misses }} misses).
+    </div>
+
+    <div class="histogram-wrap">
+        <canvas id="predict-histogram"></canvas>
+    </div>
+    <div class="run-progress" id="run-progress">Starting…</div>
+
+    <div class="stats-grid" id="stats-grid">
+        <div class="stat"><span class="stat-label">Runs done</span><span class="stat-value" data-stat="n">0</span></div>
+        <div class="stat"><span class="stat-label">Mean</span><span class="stat-value" data-stat="mean">—</span></div>
+        <div class="stat"><span class="stat-label">Median</span><span class="stat-value" data-stat="median">—</span></div>
+        <div class="stat"><span class="stat-label">Std dev</span><span class="stat-value" data-stat="std">—</span></div>
+        <div class="stat"><span class="stat-label">P10</span><span class="stat-value" data-stat="p10">—</span></div>
+        <div class="stat"><span class="stat-label">P50</span><span class="stat-value" data-stat="p50">—</span></div>
+        <div class="stat"><span class="stat-label">P90</span><span class="stat-value" data-stat="p90">—</span></div>
+        <div class="stat"><span class="stat-label">Min</span><span class="stat-value" data-stat="min">—</span></div>
+        <div class="stat"><span class="stat-label">Max</span><span class="stat-value" data-stat="max">—</span></div>
+        {% if payload.score_target is not none %}
+        <div class="stat"><span class="stat-label">P(score ≥ {{ payload.score_target }})</span><span class="stat-value" data-stat="p_target">—</span></div>
+        {% endif %}
+    </div>
+
+    <details class="fit-details">
+        <summary>Fitted distribution (advanced)</summary>
+<pre>μ (mrad)         : x={{ '%.3f' % payload.dist.mean_mrad[0] }}, y={{ '%.3f' % payload.dist.mean_mrad[1] }}
+σ x (mrad)       : {{ '%.3f' % ((payload.dist.cov_mrad[0][0]) ** 0.5) }}
+σ y (mrad)       : {{ '%.3f' % ((payload.dist.cov_mrad[1][1]) ** 0.5) }}
+cov xy (mrad²)   : {{ '%.4f' % payload.dist.cov_mrad[0][1] }}
+miss rate        : {{ '%.2f%%' % (payload.dist.miss_rate * 100) }}
+hits used        : {{ payload.dist.n_hits }}
+misses observed  : {{ payload.dist.n_misses }}
+distances (m)    : {{ payload.dist.distances_m | join(', ') }}</pre>
+    </details>
+
+    <script id="predict-payload" type="application/json">{{ payload | tojson }}</script>
+</div>
+{% endif %}
+
+<script>
+(function endpointToggles() {
+    function show(id, on) {
+        const el = document.getElementById(id);
+        if (el) el.hidden = !on;
+    }
+    function sync() {
+        const round = document.getElementById('ep-round');
+        show('ep-round-sub', round && round.checked);
+        show('ep-custom-sub', !(round && round.checked));
+    }
+    document.querySelectorAll('input[name="endpoint_mode"]').forEach(r => {
+        r.addEventListener('change', sync);
+    });
+    sync();
+})();
+</script>
+
+<script>
+const UNITS_KEY = 'apollo_units';
+function applyUnits() {
+    const imperial = localStorage.getItem(UNITS_KEY) === 'imperial';
+    const btn = document.getElementById('units-toggle');
+    if (btn) btn.textContent = imperial ? '⇄ Metric' : '⇄ Imperial';
+}
+document.getElementById('units-toggle').addEventListener('click', () => {
+    const current = localStorage.getItem(UNITS_KEY) || 'metric';
+    localStorage.setItem(UNITS_KEY, current === 'metric' ? 'imperial' : 'metric');
+    applyUnits();
+});
+applyUnits();
+</script>
+</body>
+</html>

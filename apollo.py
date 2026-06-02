@@ -7939,6 +7939,440 @@ REPORTS = {
 }
 
 
+# ---------------------------------------------------------------------------
+# Monte-Carlo performance prediction (/predict)
+# ---------------------------------------------------------------------------
+# Fit an angular-dispersion distribution to a slice of the user's shot data,
+# then hand the parameters + target zones to the browser, which runs the
+# simulation in JS (so the histogram can grow live). The server only fits.
+#
+# The angular-dispersion model: treat each historical hit as a sample from a
+# 2D Gaussian in milliradians (linear mm divided by the shot's distance in
+# metres ≈ mrad). To extrapolate to a different distance D', multiply the
+# sampled mrad offset by D' (in mm) — that's the standard linear-with-range
+# spread an angular dispersion produces. Gravity drop and wind aren't
+# modelled; the user sees the σ-mrad in the results so they can sanity-check.
+
+# Minimum number of hits the fitter needs before it'll produce a covariance.
+# Below this the sample covariance is too noisy to be worth simulating.
+_PREDICT_MIN_HITS = 30
+
+
+def _predict_user_bows(user_id):
+    """List of distinct bow_model names the user has registered."""
+    try:
+        with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
+            rows = cur.execute(
+                "SELECT DISTINCT bow_model FROM bows "
+                "WHERE user_id = %s ORDER BY bow_model",
+                (user_id,)
+            ).fetchall()
+    except SQLAlchemyError:
+        return []
+    return [r[0] for r in rows if r[0]]
+
+
+def _predict_user_arrows(user_id):
+    """List of distinct arrow names the user has registered."""
+    try:
+        with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
+            rows = cur.execute(
+                "SELECT DISTINCT arrow FROM arrows "
+                "WHERE user_id = %s ORDER BY arrow",
+                (user_id,)
+            ).fetchall()
+    except SQLAlchemyError:
+        return []
+    return [r[0] for r in rows if r[0]]
+
+
+def _predict_user_targets(user_id):
+    """User's custom targets (with physical size) for the custom endpoint."""
+    try:
+        with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
+            rows = cur.execute(
+                "SELECT id, name, physical_size_mm FROM targets "
+                "WHERE user_id = %s ORDER BY name",
+                (user_id,)
+            ).fetchall()
+    except SQLAlchemyError:
+        return []
+    out = []
+    for r in rows:
+        zones = _fetch_target_zones(int(r['id']), user_id)
+        if not _zones_define_scoring(zones):
+            continue
+        out.append({
+            'id': int(r['id']),
+            'name': r['name'] or f'Target {r["id"]}',
+            'physical_size_mm': float(r['physical_size_mm'] or 0),
+        })
+    return out
+
+
+def _predict_session_matches_practice(tags_raw, mode):
+    """Tournament/practice filter applied to a shot's session_tags string.
+
+    ``mode`` is one of 'all', 'practice_only', 'tournament_only'.
+      - 'practice_only': the row carries the ``practice`` tag (set both on
+        explicit practice tournament sessions and on regular sessions the
+        user tagged practice), OR it carries no tournament:* tag (a normal
+        session is implicitly practice in this UI).
+      - 'tournament_only': the row carries a ``tournament:*`` tag AND does
+        not carry the ``practice`` tag.
+    """
+    if mode == 'all':
+        return True
+    tags = [t.strip().lower() for t in (tags_raw or '').split(',')]
+    has_tournament = any(t.startswith('tournament:') for t in tags)
+    has_practice = 'practice' in tags
+    if mode == 'tournament_only':
+        return has_tournament and not has_practice
+    if mode == 'practice_only':
+        return has_practice or not has_tournament
+    return True
+
+
+def _fit_shot_distribution(user_id, bows=None, arrows=None, tags=None,
+                            date_from=None, date_to=None,
+                            practice_mode='all'):
+    """Return a 2D-Gaussian angular dispersion fit over the filtered shots.
+
+    Output shape::
+
+        {'ok': True,
+         'mean_mrad': [mx, my],
+         'cov_mrad': [[vxx, vxy], [vxy, vyy]],
+         'miss_rate': float,
+         'n_hits': int,
+         'n_misses': int,
+         'distances_m': [d1, d2, ...]}
+
+    or ``{'ok': False, 'reason': str}`` when the slice is too small.
+    """
+    # Single query, then filter in Python — the filter combinations
+    # (multi-bow, multi-arrow, tag intersection, practice/tournament mode)
+    # are awkward to express as parameterized SQL across both backends, and
+    # the row volumes here are well within memory.
+    try:
+        with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
+            rows = cur.execute(
+                "SELECT x_coord, y_coord, distance, bow, arrow_type, "
+                "       session_tags, is_precise, timestamp "
+                "FROM apollo WHERE user_id = %s",
+                (user_id,)
+            ).fetchall()
+    except SQLAlchemyError as e:
+        return {'ok': False, 'reason': f'database error: {e}'}
+
+    bow_set = {b for b in (bows or []) if b}
+    arr_set = {a for a in (arrows or []) if a}
+    tag_set = {t.strip().lower() for t in (tags or []) if t and t.strip()}
+
+    # Date bounds — strings 'YYYY-MM-DD' compare lexicographically against
+    # the timestamp string prefix without any datetime parsing.
+    df = (date_from or '').strip() or None
+    dt = (date_to or '').strip() or None
+
+    xs_mrad = []
+    ys_mrad = []
+    distances = set()
+    n_hits = 0
+    n_misses = 0
+    for r in rows:
+        # Equipment / tag / date filters
+        if bow_set and (_row_get(r, 'bow') or '') not in bow_set:
+            continue
+        if arr_set and (_row_get(r, 'arrow_type') or '') not in arr_set:
+            continue
+        if tag_set:
+            row_tags = {t.strip().lower()
+                        for t in (_row_get(r, 'session_tags') or '').split(',')
+                        if t.strip()}
+            if not (tag_set & row_tags):
+                continue
+        if not _predict_session_matches_practice(
+                _row_get(r, 'session_tags'), practice_mode):
+            continue
+        ts = _row_get(r, 'timestamp')
+        if df or dt:
+            ts_str = str(ts) if ts is not None else ''
+            if df and ts_str[:10] < df:
+                continue
+            if dt and ts_str[:10] > dt:
+                continue
+
+        xraw = _row_get(r, 'x_coord')
+        yraw = _row_get(r, 'y_coord')
+        xs = str(xraw).strip() if xraw is not None else ''
+        ys = str(yraw).strip() if yraw is not None else ''
+        if xs == MISS_SENTINEL and ys == MISS_SENTINEL:
+            n_misses += 1
+            continue
+        try:
+            x_mm = float(xs)
+            y_mm = float(ys)
+            dist_m = float(str(_row_get(r, 'distance') or '').strip())
+        except (TypeError, ValueError):
+            continue
+        if dist_m <= 0:
+            continue
+        # 1 mm at 1 m ≈ 1 mrad. The small-angle approximation is exact at
+        # the magnitudes we care about (the worst-case offset is a few mm
+        # at tens of metres → tens of mrad, well within the linear regime).
+        xs_mrad.append(x_mm / dist_m)
+        ys_mrad.append(y_mm / dist_m)
+        distances.add(round(dist_m, 2))
+        n_hits += 1
+
+    if n_hits < _PREDICT_MIN_HITS:
+        return {'ok': False,
+                'reason': (f'Need at least {_PREDICT_MIN_HITS} hits to fit '
+                           f'a distribution; only found {n_hits} with the '
+                           f'current filters.')}
+
+    mx = sum(xs_mrad) / n_hits
+    my = sum(ys_mrad) / n_hits
+    # Sample covariance (Bessel-corrected).
+    vxx = sum((x - mx) ** 2 for x in xs_mrad) / (n_hits - 1)
+    vyy = sum((y - my) ** 2 for y in ys_mrad) / (n_hits - 1)
+    vxy = sum((x - mx) * (y - my)
+              for x, y in zip(xs_mrad, ys_mrad)) / (n_hits - 1)
+
+    total = n_hits + n_misses
+    miss_rate = n_misses / total if total > 0 else 0.0
+
+    return {
+        'ok':         True,
+        'mean_mrad':  [mx, my],
+        'cov_mrad':   [[vxx, vxy], [vxy, vyy]],
+        'miss_rate':  miss_rate,
+        'n_hits':     n_hits,
+        'n_misses':   n_misses,
+        'distances_m': sorted(distances),
+    }
+
+
+def _predict_zones_for_face(face_key):
+    """Normalize TOURNAMENT_FACES[face_key]['zones'] into the JSON shape the
+    JS simulator expects: ``[{radius_mm, point_value}, ...]`` sorted
+    innermost-out. Returns ``(zones_norm, target_physical_mm)`` or
+    ``(None, None)`` for an unknown face.
+    """
+    face = _tournament_face_def(face_key)
+    if not face:
+        return None, None
+    raw = face['zones']
+    # Tournament face zones are tuples (point_value, radius_mm, color)
+    # already sorted innermost-out by construction.
+    zones_norm = [{'radius_mm': float(z[1]), 'point_value': int(z[0])}
+                  for z in raw]
+    return zones_norm, float(face['physical_size_mm'])
+
+
+def _build_predict_segments(form, user_id):
+    """Construct the list of simulation segments from POST form fields.
+
+    Returns ``(segments, label, max_score)`` or raises ``ValueError`` with
+    a user-readable message.
+
+    Each segment is::
+        {'distance_m', 'ends', 'arrows_per_end', 'target_physical_mm',
+         'zones': [{'radius_mm', 'point_value'}, ...]}
+    """
+    mode = (form.get('endpoint_mode') or 'round').strip()
+
+    if mode == 'round':
+        key = (form.get('round_key') or '').strip()
+        rd = _tournament_round_def(key)
+        if not rd:
+            raise ValueError(f'Unknown tournament round: {key!r}')
+        segs_in = rd.get('segments') or [{
+            'distance_m':    rd['distance_m'],
+            'ends':          rd['ends'],
+            'face_key':      rd['face_key'],
+        }]
+        out = []
+        for s in segs_in:
+            zones, phys = _predict_zones_for_face(s['face_key'])
+            if zones is None:
+                raise ValueError(f'Unknown face: {s["face_key"]!r}')
+            out.append({
+                'distance_m':         float(s['distance_m']),
+                'ends':               int(s['ends']),
+                'arrows_per_end':     int(rd['arrows_per_end']),
+                'target_physical_mm': phys,
+                'zones':              zones,
+            })
+        return out, rd['name'], int(rd.get('max_score') or 0)
+
+    # Custom endpoint
+    try:
+        distance_m = float(form.get('custom_distance_m') or '')
+        ends = int(form.get('custom_ends') or '')
+        arrows_per_end = int(form.get('custom_arrows_per_end') or '')
+    except ValueError:
+        raise ValueError('Custom endpoint: distance, ends, and arrows '
+                         'per end must all be positive numbers.')
+    if distance_m <= 0 or ends <= 0 or arrows_per_end <= 0:
+        raise ValueError('Custom endpoint: distance, ends, and arrows '
+                         'per end must all be positive numbers.')
+
+    face_source = (form.get('custom_face_source') or 'tournament').strip()
+    if face_source == 'tournament':
+        face_key = (form.get('custom_face_key') or '').strip()
+        zones, phys = _predict_zones_for_face(face_key)
+        if zones is None:
+            raise ValueError(f'Unknown face: {face_key!r}')
+        face_name = _tournament_face_def(face_key)['name']
+    else:
+        try:
+            target_id = int(form.get('custom_target_id') or 0)
+        except ValueError:
+            target_id = 0
+        if target_id <= 0:
+            raise ValueError('Pick one of your targets for the custom face.')
+        zone_rows = _fetch_target_zones(target_id, user_id)
+        if not _zones_define_scoring(zone_rows):
+            raise ValueError('That target has no scoring zones with point '
+                             'values — it can\'t be simulated.')
+        zones = [{'radius_mm': float(z['radius_mm']),
+                  'point_value': int(z['point_value'] or 0)}
+                 for z in zone_rows]
+        with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
+            t = cur.execute(
+                "SELECT name, physical_size_mm FROM targets "
+                "WHERE id = %s AND user_id = %s",
+                (target_id, user_id)
+            ).fetchone()
+        if not t:
+            raise ValueError('That target doesn\'t exist.')
+        phys = float(t['physical_size_mm'] or 0)
+        face_name = t['name'] or f'Target {target_id}'
+
+    seg = {
+        'distance_m':         distance_m,
+        'ends':               ends,
+        'arrows_per_end':     arrows_per_end,
+        'target_physical_mm': phys,
+        'zones':              zones,
+    }
+    label = (f'Custom: {face_name} @ {distance_m:g} m '
+             f'({ends} × {arrows_per_end})')
+    max_zone = max((z['point_value'] for z in zones), default=0)
+    max_score = max_zone * ends * arrows_per_end
+    return [seg], label, max_score
+
+
+@app.route('/predict', methods=['GET', 'POST'])
+@login_required
+def predict():
+    """Performance-prediction wizard. Fits a 2D angular Gaussian to the
+    user's filtered shot data, then hands the parameters + endpoint config
+    to a client-side Monte-Carlo simulator (templates/predict.html +
+    static/apollo-predict.js)."""
+    user_id = current_user_id()
+    rounds = [
+        {'key': k,
+         'name': v['name'],
+         'org':  v.get('org', ''),
+         'description': v.get('description', '')}
+        for k, v in TOURNAMENT_ROUNDS.items()
+    ]
+    faces = [
+        {'key': k,
+         'name': v['name'],
+         'physical_size_mm': v['physical_size_mm']}
+        for k, v in TOURNAMENT_FACES.items()
+    ]
+    ctx = {
+        'rounds':         rounds,
+        'faces':          faces,
+        'user_bows':      _predict_user_bows(user_id),
+        'user_arrows':    _predict_user_arrows(user_id),
+        'user_targets':   _predict_user_targets(user_id),
+        'tag_inventory':  _tag_inventory(user_id),
+        # Echo back POSTed selections so the form sticks across the
+        # render. On GET these are empty / defaulted.
+        'form':           {},
+        'error':          None,
+        'payload':        None,
+        'endpoint_label': None,
+        'endpoint_max':   None,
+    }
+
+    if request.method != 'POST':
+        return render_template('predict.html', **ctx)
+
+    form = request.form
+    ctx['form'] = {
+        'bows':         form.getlist('bows'),
+        'arrows':       form.getlist('arrows'),
+        'tags':         form.getlist('tags'),
+        'date_from':    (form.get('date_from') or '').strip(),
+        'date_to':      (form.get('date_to') or '').strip(),
+        'practice_mode': (form.get('practice_mode') or 'all').strip(),
+        'endpoint_mode': (form.get('endpoint_mode') or 'round').strip(),
+        'round_key':    (form.get('round_key') or '').strip(),
+        'custom_face_source': (form.get('custom_face_source') or 'tournament').strip(),
+        'custom_face_key':  (form.get('custom_face_key') or '').strip(),
+        'custom_target_id': (form.get('custom_target_id') or '').strip(),
+        'custom_distance_m': (form.get('custom_distance_m') or '').strip(),
+        'custom_ends':      (form.get('custom_ends') or '').strip(),
+        'custom_arrows_per_end': (form.get('custom_arrows_per_end') or '').strip(),
+        'score_target':     (form.get('score_target') or '').strip(),
+        'n_runs':           (form.get('n_runs') or '').strip(),
+    }
+
+    # Build the endpoint first so a bad endpoint is reported even when
+    # the filters would also fail.
+    try:
+        segments, endpoint_label, endpoint_max = _build_predict_segments(
+            form, user_id)
+    except ValueError as e:
+        ctx['error'] = str(e)
+        return render_template('predict.html', **ctx)
+
+    fit = _fit_shot_distribution(
+        user_id,
+        bows=ctx['form']['bows'],
+        arrows=ctx['form']['arrows'],
+        tags=ctx['form']['tags'],
+        date_from=ctx['form']['date_from'],
+        date_to=ctx['form']['date_to'],
+        practice_mode=ctx['form']['practice_mode'],
+    )
+    if not fit['ok']:
+        ctx['error'] = fit['reason']
+        return render_template('predict.html', **ctx)
+
+    # Sim runs entirely in the browser, so no server-side capacity cap.
+    # Floor at 1; trust the user not to type something silly.
+    try:
+        n_runs = int(ctx['form']['n_runs'])
+    except ValueError:
+        n_runs = 100
+    n_runs = max(1, n_runs)
+
+    try:
+        score_target = (int(ctx['form']['score_target'])
+                        if ctx['form']['score_target'] else None)
+    except ValueError:
+        score_target = None
+
+    ctx['payload'] = {
+        'dist':          fit,
+        'segments':      segments,
+        'n_runs':        n_runs,
+        'score_target':  score_target,
+        'endpoint_label': endpoint_label,
+        'endpoint_max':  endpoint_max,
+    }
+    ctx['endpoint_label'] = endpoint_label
+    ctx['endpoint_max'] = endpoint_max
+    return render_template('predict.html', **ctx)
+
+
 @app.route('/analyze', methods=['GET', 'POST'])
 @login_required
 def analyze():

@@ -31,6 +31,7 @@ apolloshoots.org-ssl-bundle.zip
 apollo.db
 static/targets/
 wsgi_snippet.py
+inject_gtag.py
 venv/
 
 # Legacy (old layout, kept for reference)
