@@ -70,6 +70,88 @@
             font-family: "Quantico", sans-serif;
             font-weight: 700;
         }
+        .practice-badge {
+            display: inline-block;
+            background: #c97a4a;
+            color: #fff;
+            border-radius: 6px;
+            padding: 2px 10px;
+            margin-left: 8px;
+            font-family: "Quantico", sans-serif;
+            font-size: 0.8rem;
+            letter-spacing: 0.1em;
+            text-transform: uppercase;
+            vertical-align: middle;
+        }
+        /* ── Per-end shot clock ────────────────────────────────────────
+           Mirrors a range-light shot clock: green > 30s, yellow ≤ 30s,
+           red at 0. The countdown is informational — Apollo does not
+           refuse late shots, since enforcement on a single-archer app
+           would be punitive and there's no way to distinguish a late
+           shot from a slow tap. */
+        .shot-clock {
+            background: #1a3a5c;
+            color: #fff;
+            border-radius: 16px;
+            padding: 10px 16px;
+            font-family: "Quantico", sans-serif;
+            margin-bottom: 12px;
+            display: flex;
+            align-items: center;
+            gap: 14px;
+            flex-wrap: wrap;
+        }
+        .shot-clock .clock-readout {
+            font-size: 2rem;
+            font-weight: 700;
+            min-width: 5.5ch;
+            text-align: center;
+            font-variant-numeric: tabular-nums;
+            padding: 2px 10px;
+            border-radius: 8px;
+            background: #0d2742;
+            transition: background 0.25s, color 0.25s;
+        }
+        .shot-clock.warn .clock-readout {
+            background: #ffd23a;
+            color: #3a2a00;
+        }
+        .shot-clock.expired .clock-readout {
+            background: #c0392b;
+            color: #fff;
+            animation: shotClockBlink 0.9s steps(2, end) infinite;
+        }
+        @keyframes shotClockBlink {
+            0%, 100% { opacity: 1; }
+            50%      { opacity: 0.35; }
+        }
+        .shot-clock .clock-label {
+            font-size: 0.7rem;
+            letter-spacing: 0.12em;
+            text-transform: uppercase;
+            opacity: 0.85;
+        }
+        .shot-clock .clock-buttons {
+            margin-left: auto;
+            display: flex;
+            gap: 6px;
+        }
+        .shot-clock .clock-buttons button {
+            font-family: "Quantico", sans-serif;
+            font-size: 0.75rem;
+            font-weight: 700;
+            letter-spacing: 0.1em;
+            text-transform: uppercase;
+            background: #95abcf;
+            color: #1a3a5c;
+            border: none;
+            border-radius: 6px;
+            padding: 5px 12px;
+            cursor: pointer;
+        }
+        .shot-clock .clock-buttons button:hover {
+            background: #b3c6e3;
+        }
     </style>
     {% endif %}
     {% if view == 'selector' %}
@@ -106,6 +188,16 @@
             font-weight: 700;
             cursor: pointer;
         }
+        .practice-toggle {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 0.8rem;
+            margin: 8px 0 0 0;
+            cursor: pointer;
+            user-select: none;
+        }
+        .practice-toggle input { margin: 0; }
         .org-header {
             font-family: "Quantico", sans-serif;
             font-weight: 700;
@@ -200,6 +292,11 @@
         <form action="/tournament/start" method="POST">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <input type="hidden" name="round_key" value="{{ r.key }}">
+            <label class="practice-toggle"
+                   title="Practice runs are not counted as actual competitions. Every shot is tagged 'practice' so the session is marked in your history.">
+                <input type="checkbox" name="practice" value="1">
+                Practice (not a real competition)
+            </label>
             <button type="submit">Start round</button>
         </form>
     </div>
@@ -212,8 +309,9 @@
 {% if view == 'shoot' %}
 
 <h4 class="quantico">
-    Tournament: {{ round_def.name }} (#{{ session_id }}) /
-    <a href="/end_session" data-no-warn="1">End round</a>
+    Tournament: {{ round_def.name }} (#{{ session_id }})
+    {% if is_practice %}<span class="practice-badge" title="This round is flagged as practice — it will not count as an actual competition.">Practice</span>{% endif %}
+    / <a href="/end_session" data-no-warn="1">End round</a>
 </h4>
 
 <!-- Leave-session warning modal — same wiring as session.html -->
@@ -309,6 +407,26 @@
 
         <!-- RIGHT: round status & equipment selectors -->
         <div class="form-panel form-panel-session">
+
+            {% if round_def.end_time_s %}
+            {# Per-end shot clock — only rendered when the round defines a
+               time limit. JS in this template owns the countdown; the
+               server only supplies the seed value and the current end
+               number so the timer can detect end transitions. #}
+            <div class="shot-clock" id="shot-clock"
+                 data-end-time-s="{{ round_def.end_time_s }}"
+                 data-end-index="{{ current_end_index }}"
+                 data-session-id="{{ session_id }}">
+                <div>
+                    <div class="clock-label">End {{ current_end_index }} timer</div>
+                    <div class="clock-readout" id="clock-readout">--:--</div>
+                </div>
+                <div class="clock-buttons">
+                    <button type="button" id="clock-toggle">Pause</button>
+                    <button type="button" id="clock-reset" title="Reset to {{ round_def.end_time_s }}s">Reset</button>
+                </div>
+            </div>
+            {% endif %}
 
             <div class="progress-card">
                 <div class="row">
@@ -955,6 +1073,138 @@ leaveModal.addEventListener('click', evt => {
 document.addEventListener('keydown', evt => {
     if (evt.key === 'Escape' && leaveModal.classList.contains('open')) closeLeaveModal();
 });
+
+// ── Per-end shot clock ──────────────────────────────────────────────────
+// The shot-clock element is only present when the round defines
+// end_time_s. State is kept in sessionStorage so reloads (every shot
+// POSTs and redirects) don't reset the countdown — keyed by session id
+// so re-entering a different tournament starts clean. The end index
+// advances when /tournament writes `quivers_completed`; the JS resets
+// the countdown to the round's full time whenever that index changes.
+(function shotClockInit() {
+    const el = document.getElementById('shot-clock');
+    if (!el) return;
+    if (ROUND_COMPLETE) {                  // hide once the round is done
+        el.style.display = 'none';
+        return;
+    }
+    const endTimeS = parseInt(el.dataset.endTimeS, 10) || 0;
+    if (endTimeS <= 0) { el.style.display = 'none'; return; }
+    const endIndex = parseInt(el.dataset.endIndex, 10) || 1;
+    const sessionId = el.dataset.sessionId || '0';
+    const STORAGE_KEY = `apollo_shot_clock_${sessionId}`;
+    const readout = document.getElementById('clock-readout');
+    const toggleBtn = document.getElementById('clock-toggle');
+    const resetBtn  = document.getElementById('clock-reset');
+
+    // Stored shape: { endIndex, remainingMs, runningSince, paused }
+    //   - runningSince: epoch ms the timer last started; remaining is
+    //     computed live from (runningSince + remainingMs - now()).
+    //   - paused: when true, remainingMs is the source of truth.
+    function loadState() {
+        try {
+            const raw = sessionStorage.getItem(STORAGE_KEY);
+            if (!raw) return null;
+            const obj = JSON.parse(raw);
+            if (!obj || typeof obj !== 'object') return null;
+            return obj;
+        } catch (_) { return null; }
+    }
+    function saveState(st) {
+        try { sessionStorage.setItem(STORAGE_KEY, JSON.stringify(st)); }
+        catch (_) {}
+    }
+    function freshState(paused) {
+        const now = Date.now();
+        return {
+            endIndex: endIndex,
+            remainingMs: endTimeS * 1000,
+            runningSince: paused ? null : now,
+            paused: !!paused,
+        };
+    }
+
+    let state = loadState();
+    // Reset whenever a new end has started — the server-supplied
+    // endIndex is the authority. Also reset on first load. New ends
+    // come up *paused* so the archer's footwork at the line doesn't
+    // burn seconds before they're ready; the Start button kicks it off.
+    if (!state || state.endIndex !== endIndex) {
+        state = freshState(true);
+        saveState(state);
+    }
+
+    function currentRemainingMs() {
+        if (state.paused) return state.remainingMs;
+        const elapsed = Date.now() - (state.runningSince || Date.now());
+        return Math.max(0, state.remainingMs - elapsed);
+    }
+
+    function fmt(ms) {
+        const total = Math.ceil(ms / 1000);
+        const m = Math.floor(total / 60);
+        const s = total % 60;
+        return `${m}:${s.toString().padStart(2, '0')}`;
+    }
+
+    function render() {
+        const rem = currentRemainingMs();
+        readout.textContent = fmt(rem);
+        el.classList.remove('warn', 'expired');
+        if (rem <= 0) {
+            el.classList.add('expired');
+        } else if (rem <= 30 * 1000) {
+            el.classList.add('warn');
+        }
+        toggleBtn.textContent = state.paused ? 'Start' : 'Pause';
+    }
+
+    function pause() {
+        if (state.paused) return;
+        state.remainingMs = currentRemainingMs();
+        state.runningSince = null;
+        state.paused = true;
+        saveState(state);
+        render();
+    }
+    function start() {
+        if (!state.paused && state.runningSince) return;
+        state.runningSince = Date.now();
+        state.paused = false;
+        saveState(state);
+        render();
+    }
+    toggleBtn.addEventListener('click', () => {
+        if (state.paused) start(); else pause();
+    });
+    resetBtn.addEventListener('click', () => {
+        // Reset always leaves the clock paused at full time — the user
+        // explicitly hits Start when they're ready for the next end.
+        state = freshState(true);
+        saveState(state);
+        render();
+    });
+
+    // 4 Hz tick so the readout never lags more than a quarter-second
+    // behind real time, without burning CPU on a 60 fps redraw.
+    render();
+    setInterval(() => {
+        // Persist a fresh snapshot so the reload after each shot POST
+        // continues seamlessly even if the user reloads mid-end.
+        if (!state.paused) {
+            const rem = currentRemainingMs();
+            saveState({
+                endIndex: endIndex,
+                remainingMs: rem,
+                runningSince: Date.now(),
+                paused: false,
+            });
+            state.remainingMs = rem;
+            state.runningSince = Date.now();
+        }
+        render();
+    }, 250);
+})();
 
 // Units toggle (label only — the tournament readout never shows coords,
 // so the hint stays unit-less; the toggle still flips localStorage so

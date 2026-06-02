@@ -519,11 +519,18 @@ def _tournament_face_def(face_key):
     return TOURNAMENT_FACES.get(face_key)
 
 
-def _tournament_tag_for_round(round_key):
+def _tournament_tag_for_round(round_key, practice=False):
     """Session-tag string Apollo stamps on every shot in a tournament
     session so finalization and the analytics page can recover the
-    round identity without a schema migration."""
-    return f'tournament:{round_key}'
+    round identity without a schema migration.
+
+    When `practice` is set, also append the `practice` tag so the round
+    is recognizable as a non-competition run in past-session listings and
+    analytics queries."""
+    base = f'tournament:{round_key}'
+    if practice:
+        return f'{base}, practice'
+    return base
 
 
 def _round_key_from_tags(tags):
@@ -538,6 +545,18 @@ def _round_key_from_tags(tags):
             if key in TOURNAMENT_ROUNDS:
                 return key
     return None
+
+
+def _practice_from_tags(tags):
+    """True when a `practice` tag appears in a comma-separated tag string.
+    Used to recover the practice flag for an in-progress tournament after
+    a cookie wipe, and to badge past sessions in the listing."""
+    if not tags:
+        return False
+    for part in tags.split(','):
+        if part.strip().lower() == 'practice':
+            return True
+    return False
 
 
 def _migrate_legacy_tournament_prefix(user_id):
@@ -4189,9 +4208,14 @@ def tournament():
     if not active_round_key and session.get('session_id') is not None:
         latest_tags = _last_session_tags(user_id, session['session_id'])
         active_round_key = _round_key_from_tags(latest_tags)
+        # Recover practice flag the same way — if the cookie was wiped
+        # mid-round, the last shot row still carries the `practice` tag.
+        if active_round_key and _practice_from_tags(latest_tags):
+            session['tournament_practice'] = True
     if active_round_key and active_round_key not in TOURNAMENT_ROUNDS:
         # Stale key from an older deploy — clear and bounce to selector.
         session.pop('tournament_round_key', None)
+        session.pop('tournament_practice', None)
         active_round_key = None
     if active_round_key:
         session['tournament_round_key'] = active_round_key
@@ -4284,7 +4308,8 @@ def tournament():
         session['record_mode'] = 0
 
     session_id = session['session_id']
-    tournament_tag = _tournament_tag_for_round(round_key)
+    is_practice = bool(session.get('tournament_practice'))
+    tournament_tag = _tournament_tag_for_round(round_key, practice=is_practice)
 
     # ── POST: record a shot ─────────────────────────────────────────────
     if request.method == 'POST':
@@ -4482,6 +4507,11 @@ def tournament():
         progress=progress,
         current_distance_m=current_distance_m,
         current_segment_idx=current_segment_idx,
+        is_practice=is_practice,
+        # End index used by the shot-clock to detect when a new end has
+        # started — JS resets the countdown when this number changes.
+        # 1-based so the on-screen label matches the scorecard rows.
+        current_end_index=int(session.get('quivers_completed', 0) or 0) + 1,
     )
 
 
@@ -4526,8 +4556,13 @@ def tournament_start():
             session.pop(k, None)
 
     _seed_tournament_faces(user_id)
+    # Practice flag is a per-round opt-in: the round still runs with the
+    # same arrows/ends/scoring, but every shot is tagged `practice` so the
+    # session is excluded from real competition history.
+    practice = request.form.get('practice') in ('1', 'on', 'true', 'yes')
     session['tournament_round_key'] = round_key
     session['tournament_segment_idx'] = 0
+    session['tournament_practice'] = practice
     session['target_id'] = _tournament_face_target_id(user_id, round_def['face_key'])
     return redirect(url_for('tournament'))
 
@@ -4972,7 +5007,7 @@ def end_session():
                 # the user logged in.
                 for k in ('session_id', 'quivers_completed', 'arrows_remaining',
                           'record_mode', 'target_id', 'current_quiver_size',
-                  'tournament_round_key', 'tournament_segment_idx'):
+                  'tournament_round_key', 'tournament_segment_idx', 'tournament_practice'):
                     session.pop(k, None)
                 return render_template('splash.html')
 
@@ -5078,7 +5113,7 @@ def end_session():
     # Clear the in-progress keys but keep the user logged in.
     for k in ('session_id', 'quivers_completed', 'arrows_remaining',
               'record_mode', 'target_id', 'current_quiver_size',
-                  'tournament_round_key', 'tournament_segment_idx'):
+                  'tournament_round_key', 'tournament_segment_idx', 'tournament_practice'):
         session.pop(k, None)
     return render_template('end_session.html', stats=stats, session_id=None, begin_time=None)
 
@@ -5153,7 +5188,7 @@ def end_session_silent():
     # would log them out, which isn't what the leave-warning modal means.
     for k in ('session_id', 'quivers_completed', 'arrows_remaining',
               'record_mode', 'target_id', 'current_quiver_size',
-                  'tournament_round_key', 'tournament_segment_idx'):
+                  'tournament_round_key', 'tournament_segment_idx', 'tournament_practice'):
         session.pop(k, None)
     return redirect(next_url)
 
@@ -6859,10 +6894,33 @@ def _report_hits_by_boundaries(user_id):
     }
 
 
-def _report_all_shots_per_target(user_id):
+def _report_all_shots_per_target(user_id, date_from=None, date_to=None):
     """Scatter every shot the user has ever taken on each target, with
     centroid + dispersion overlay so trends (left bias, vertical stringing,
-    grouping size) jump out at a glance."""
+    grouping size) jump out at a glance.
+
+    Optional `date_from` / `date_to` (YYYY-MM-DD strings) restrict the
+    scatter to shots whose `timestamp` falls within the inclusive range.
+    Either side may be omitted for an open-ended range; both omitted
+    reproduces the original "all shots ever" behavior.
+    """
+    # Parse the date bounds once. Invalid input is silently ignored —
+    # an out-of-format date shouldn't kill the report.
+    range_from = None
+    range_to = None
+    if date_from:
+        try:
+            range_from = datetime.strptime(date_from, '%Y-%m-%d')
+        except ValueError:
+            range_from = None
+    if date_to:
+        try:
+            # Inclusive upper bound — include the whole "to" day.
+            range_to = datetime.strptime(date_to, '%Y-%m-%d') \
+                + timedelta(days=1) - timedelta(microseconds=1)
+        except ValueError:
+            range_to = None
+
     with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
         target_rows = cur.execute(
             "SELECT id AS rowid, name, image_filename, "
@@ -6887,12 +6945,17 @@ def _report_all_shots_per_target(user_id):
         target_cfg = target_to_config(trow)
 
         with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
-            shots = cur.execute(
-                "SELECT x_coord, y_coord FROM apollo "
-                "WHERE user_id = %s AND target_id = %s "
-                "ORDER BY id ASC",
-                (user_id, target_id)
-            ).fetchall()
+            sql = ("SELECT x_coord, y_coord FROM apollo "
+                   "WHERE user_id = %s AND target_id = %s")
+            params = [user_id, target_id]
+            if range_from is not None:
+                sql += " AND timestamp >= %s"
+                params.append(range_from)
+            if range_to is not None:
+                sql += " AND timestamp <= %s"
+                params.append(range_to)
+            sql += " ORDER BY id ASC"
+            shots = cur.execute(sql, tuple(params)).fetchall()
 
         if not shots:
             continue
@@ -6964,7 +7027,17 @@ def _report_all_shots_per_target(user_id):
         # Crosshair through target center for left/right and high/low bias.
         ax.axhline(0, color=(1, 1, 1, 0.25), linewidth=0.6, linestyle=':')
         ax.axvline(0, color=(1, 1, 1, 0.25), linewidth=0.6, linestyle=':')
-        ax.set_title(f'{target_name} — every shot ({hits} hit'
+        # Title suffix reflects the active date range so the chart is
+        # self-describing once exported / zoomed in lightGallery.
+        if range_from is not None and range_to is not None:
+            range_label = f' [{date_from} → {date_to}]'
+        elif range_from is not None:
+            range_label = f' [from {date_from}]'
+        elif range_to is not None:
+            range_label = f' [through {date_to}]'
+        else:
+            range_label = ''
+        ax.set_title(f'{target_name} — every shot{range_label} ({hits} hit'
                      f'{"" if miss == 0 else f", {miss} missed"})')
         ax.set_xlabel('X (mm from center)')
         ax.set_ylabel('Y (mm from center)')
@@ -6994,7 +7067,7 @@ def _report_all_shots_per_target(user_id):
 
         panels.append({
             'key': f'all_shots_per_target__{target_id}',
-            'title': f'{target_name} — every shot',
+            'title': f'{target_name} — every shot{range_label}',
             'png_b64': png_b64,
             'columns': columns,
             'rows': rows_out,
@@ -7006,9 +7079,19 @@ def _report_all_shots_per_target(user_id):
     if not panels:
         return None
 
+    # Mirror the per-panel range label on the report card heading.
+    if range_from is not None and range_to is not None:
+        report_title = f'Shots per target ({date_from} → {date_to})'
+    elif range_from is not None:
+        report_title = f'Shots per target (from {date_from})'
+    elif range_to is not None:
+        report_title = f'Shots per target (through {date_to})'
+    else:
+        report_title = 'Shots per target (all time)'
+
     return {
         'key': 'all_shots_per_target',
-        'title': 'All shots ever, per target',
+        'title': report_title,
         'panels': panels,
     }
 
@@ -7542,12 +7625,16 @@ REPORTS = {
         'fn': _report_sessions_per_day,
     },
     'all_shots_per_target': {
-        'label': 'All shots ever, per target',
-        'description': 'Every shot you have ever taken on each target, '
-                       'overlaid on the target face with centroid and '
-                       'group-spread circle so trends (left/right bias, '
-                       'cluster size) are obvious.',
+        'label': 'Shots per target (date range)',
+        'description': 'Every shot you have taken on each target — overlaid '
+                       'on the target face with centroid and group-spread '
+                       'circle so trends (left/right bias, cluster size) are '
+                       'obvious. Optionally restrict to a date range; leave '
+                       'both empty to include all shots ever.',
         'fn': _report_all_shots_per_target,
+        # Marker used by the template to render the date-range inputs and
+        # by analyze() / analyze_export() to forward dates into the report.
+        'accepts_date_range': True,
     },
     'hits_by_boundaries': {
         'label': 'Hits by boundaries',
@@ -7584,15 +7671,34 @@ def analyze():
     selected = []
     results = []
     error = None
+    # Per-report date-range inputs. Currently only `all_shots_per_target`
+    # accepts them; using a per-key naming convention (`<key>_date_from`)
+    # keeps the wiring extensible if other reports adopt the same option.
+    date_ranges = {}
     if request.method == 'POST':
         selected = [k for k in request.form.getlist('reports') if k in REPORTS]
+        for k, spec in REPORTS.items():
+            if spec.get('accepts_date_range'):
+                date_ranges[k] = {
+                    'date_from': (request.form.get(f'{k}_date_from') or '').strip(),
+                    'date_to':   (request.form.get(f'{k}_date_to')   or '').strip(),
+                }
         if not selected:
             error = 'Pick at least one report to generate.'
         else:
             try:
                 user_id = current_user_id()
                 for key in selected:
-                    out = REPORTS[key]['fn'](user_id)
+                    spec = REPORTS[key]
+                    if spec.get('accepts_date_range'):
+                        dr = date_ranges.get(key) or {}
+                        out = spec['fn'](
+                            user_id,
+                            date_from=dr.get('date_from') or None,
+                            date_to=dr.get('date_to') or None,
+                        )
+                    else:
+                        out = spec['fn'](user_id)
                     if out is None:
                         results.append({
                             'key': key,
@@ -7615,12 +7721,18 @@ def analyze():
                 error = 'Database error while building report.'
                 results = []
     catalog = [
-        {'key': k, 'label': v['label'], 'description': v['description']}
+        {
+            'key': k,
+            'label': v['label'],
+            'description': v['description'],
+            'accepts_date_range': v.get('accepts_date_range', False),
+        }
         for k, v in REPORTS.items()
     ]
     return render_template('analyze.html',
                            catalog=catalog,
                            selected=selected,
+                           date_ranges=date_ranges,
                            results=results,
                            error=error)
 
@@ -7698,7 +7810,15 @@ def analyze_export():
     if fmt not in ('csv', 'xlsx'):
         return "Format must be csv or xlsx", 400
     try:
-        out = REPORTS[key]['fn'](current_user_id())
+        spec = REPORTS[key]
+        if spec.get('accepts_date_range'):
+            out = spec['fn'](
+                current_user_id(),
+                date_from=(request.args.get('date_from') or '').strip() or None,
+                date_to=(request.args.get('date_to')   or '').strip() or None,
+            )
+        else:
+            out = spec['fn'](current_user_id())
     except ImportError:
         return "matplotlib is not installed on the server.", 500
     except SQLAlchemyError as e:

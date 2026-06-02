@@ -72,6 +72,48 @@
             color: #2c4a6b;
             margin-top: 2px;
         }
+        .date-range-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 12px 18px;
+            margin-top: 8px;
+            font-size: 0.8rem;
+            color: #1a3a5c;
+        }
+        .date-range-row label {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            background: transparent;
+            border: none;
+            padding: 0;
+            cursor: default;
+            font-weight: 700;
+            letter-spacing: 0.05em;
+            text-transform: uppercase;
+            font-size: 0.7rem;
+        }
+        .date-range-row label:hover { background: transparent; }
+        .date-range-row input[type="date"] {
+            font-family: "Quantico", sans-serif;
+            font-size: 0.85rem;
+            padding: 4px 6px;
+            border: 1px solid #6b80a8;
+            border-radius: 4px;
+            background: #eef2f9;
+            color: #1a3a5c;
+            text-transform: none;
+            letter-spacing: 0;
+        }
+        .date-range-hint {
+            flex-basis: 100%;
+            font-weight: 400;
+            font-size: 0.75rem;
+            color: #2c4a6b;
+            margin-top: -2px;
+            text-transform: none;
+            letter-spacing: 0;
+        }
 
         .report-card {
             background-color: #eef3fa;
@@ -249,9 +291,29 @@
         <label>
             <input type="checkbox" name="reports" value="{{ item.key }}"
                    {% if item.key in selected %}checked{% endif %}>
-            <span>
+            <span style="flex:1;">
                 <span class="label-text">{{ item.label }}</span>
                 <span class="label-desc">{{ item.description }}</span>
+                {% if item.accepts_date_range %}
+                {# Prompt rendered directly under the report label so the date
+                   inputs feel like a sub-option of this report. Both fields
+                   are optional; blank = no bound on that side. #}
+                <div class="date-range-row">
+                    <label>From
+                        <input type="date"
+                               name="{{ item.key }}_date_from"
+                               value="{{ (date_ranges.get(item.key) or {}).get('date_from', '') }}">
+                    </label>
+                    <label>To
+                        <input type="date"
+                               name="{{ item.key }}_date_to"
+                               value="{{ (date_ranges.get(item.key) or {}).get('date_to', '') }}">
+                    </label>
+                    <span class="date-range-hint">
+                        Leave both blank to include every shot ever recorded.
+                    </span>
+                </div>
+                {% endif %}
             </span>
         </label>
         {% endfor %}
@@ -318,21 +380,31 @@
                 </h4>
                 {{ render_panel(p, p.title) }}
             {% endfor %}
+            {% set dr = date_ranges.get(r.key) or {} %}
             <div class="download-row">
-                <a href="{{ url_for('analyze_export', report=r.key, format='csv') }}">
+                <a href="{{ url_for('analyze_export', report=r.key, format='csv',
+                                     date_from=dr.get('date_from') or none,
+                                     date_to=dr.get('date_to')   or none) }}">
                     ⬇ Download CSV
                 </a>
-                <a href="{{ url_for('analyze_export', report=r.key, format='xlsx') }}">
+                <a href="{{ url_for('analyze_export', report=r.key, format='xlsx',
+                                     date_from=dr.get('date_from') or none,
+                                     date_to=dr.get('date_to')   or none) }}">
                     ⬇ Download Excel
                 </a>
             </div>
         {% else %}
             {{ render_panel(r, r.title) }}
+            {% set dr = date_ranges.get(r.key) or {} %}
             <div class="download-row">
-                <a href="{{ url_for('analyze_export', report=r.key, format='csv') }}">
+                <a href="{{ url_for('analyze_export', report=r.key, format='csv',
+                                     date_from=dr.get('date_from') or none,
+                                     date_to=dr.get('date_to')   or none) }}">
                     ⬇ Download CSV
                 </a>
-                <a href="{{ url_for('analyze_export', report=r.key, format='xlsx') }}">
+                <a href="{{ url_for('analyze_export', report=r.key, format='xlsx',
+                                     date_from=dr.get('date_from') or none,
+                                     date_to=dr.get('date_to')   or none) }}">
                     ⬇ Download Excel
                 </a>
             </div>

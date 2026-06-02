@@ -94,6 +94,19 @@
         .tags-cell {
             max-width: 180px;
         }
+        .practice-badge {
+            display: inline-block;
+            background: #c97a4a;
+            color: #fff;
+            border-radius: 6px;
+            padding: 1px 8px;
+            margin-left: 8px;
+            font-family: 'Quantico', sans-serif;
+            font-size: 0.7rem;
+            letter-spacing: 0.1em;
+            text-transform: uppercase;
+            vertical-align: middle;
+        }
         .tag-chip {
             display: inline-block;
             background: #757a9c;
@@ -242,6 +255,12 @@
       {% set rows = data['rows'] %}
       {% set stats = data['stats'] %}
       {% set qs = (rows[0]['quiver_size'] | string | int) if rows else 0 %}
+      {% set is_practice = namespace(v=False) %}
+      {% for row in rows %}
+        {% for tag in (row['session_tags'] or '').split(',') %}
+          {% if tag.strip()|lower == 'practice' %}{% set is_practice.v = True %}{% endif %}
+        {% endfor %}
+      {% endfor %}
       {# Fall back to the global default target when this session's target row
          was hard-deleted — without this the replay canvas paints black. #}
       {% set replay_target = data['target'] or default_target %}
@@ -250,6 +269,7 @@
           <div class="session-header-row">
             <span>
               Session {{ session_id }} &mdash; {{ stats['session_date'] }} &mdash; {{ stats['pretty_session_length'] }}
+              {% if is_practice.v %}<span class="practice-badge" title="Tournament round flagged as practice — not counted as a real competition.">Practice</span>{% endif %}
               &nbsp;&nbsp;|&nbsp;&nbsp;
               {{ stats['arrows_shot'] }} arrows &nbsp;&mdash;&nbsp;
               {{ stats['hit_shots'] }} hit ({{ stats['percent_hit'] }}%),
