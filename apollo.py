@@ -2693,55 +2693,35 @@ def _account_is_locked(row):
 def _record_failed_login(user_id):
     """Increment the failed-attempt counter and apply lockout when hit.
 
-    When a previous lockout has already expired the served time counts —
-    reset the attempt window to a fresh 1 instead of leaving
-    ``failed_attempts`` ≥ threshold (which would re-lock immediately on
-    the very next failure). Otherwise increment in a single UPDATE so two
-    concurrent failed logins can't both observe attempts=4 and write
-    back 5 (skipping the lockout threshold).
+    Reset-on-expiry and increment happen in a single CASE-driven UPDATE so
+    two concurrent failed logins can't both observe attempts=4 and write
+    back 5 (skipping the lockout threshold). When a previous lockout has
+    already expired the served time counts — the CASE branch resets to 1
+    instead of leaving ``failed_attempts`` ≥ threshold (which would re-lock
+    immediately on the very next failure).
     """
     if user_id is None:
         return
     try:
         with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
-            prior = cur.execute(
-                "SELECT failed_attempts, locked_until FROM users WHERE id = %s",
-                (user_id,)
-            ).fetchone()
             now = _app_now()
-            lockout_expired = False
-            if prior is not None:
-                locked = prior['locked_until'] if 'locked_until' in prior else None
-                if locked is not None:
-                    try:
-                        if isinstance(locked, datetime):
-                            locked_dt = locked
-                        else:
-                            locked_dt = datetime.fromisoformat(str(locked))
-                        if locked_dt <= now:
-                            lockout_expired = True
-                    except (ValueError, TypeError):
-                        # Unparseable locked_until — leave it alone; the
-                        # login path's ``_account_is_locked`` fails closed
-                        # on the same input.
-                        pass
-            if lockout_expired:
-                cur.execute(
-                    "UPDATE users SET failed_attempts = 1, locked_until = NULL "
-                    "WHERE id = %s",
-                    (user_id,)
-                )
-                attempts = 1
-            else:
-                cur.execute(
-                    "UPDATE users SET failed_attempts = "
-                    "COALESCE(failed_attempts, 0) + 1 WHERE id = %s",
-                    (user_id,)
-                )
-                row = cur.execute(
-                    "SELECT failed_attempts FROM users WHERE id = %s", (user_id,)
-                ).fetchone()
-                attempts = int(row['failed_attempts']) if row and row['failed_attempts'] else 0
+            cur.execute(
+                "UPDATE users SET "
+                "  failed_attempts = CASE "
+                "    WHEN locked_until IS NOT NULL AND locked_until <= %s THEN 1 "
+                "    ELSE COALESCE(failed_attempts, 0) + 1 "
+                "  END, "
+                "  locked_until = CASE "
+                "    WHEN locked_until IS NOT NULL AND locked_until <= %s THEN NULL "
+                "    ELSE locked_until "
+                "  END "
+                "WHERE id = %s",
+                (now, now, user_id)
+            )
+            row = cur.execute(
+                "SELECT failed_attempts FROM users WHERE id = %s", (user_id,)
+            ).fetchone()
+            attempts = int(row['failed_attempts']) if row and row['failed_attempts'] else 0
             if attempts >= LOCKOUT_THRESHOLD:
                 locked_until = now + timedelta(minutes=LOCKOUT_MINUTES)
                 cur.execute(
@@ -8014,10 +7994,8 @@ def _predict_session_matches_practice(tags_raw, mode):
     """Tournament/practice filter applied to a shot's session_tags string.
 
     ``mode`` is one of 'all', 'practice_only', 'tournament_only'.
-      - 'practice_only': the row carries the ``practice`` tag (set both on
-        explicit practice tournament sessions and on regular sessions the
-        user tagged practice), OR it carries no tournament:* tag (a normal
-        session is implicitly practice in this UI).
+      - 'practice_only': the row carries an explicit ``practice`` tag.
+        Untagged sessions are excluded — use 'all' to include those.
       - 'tournament_only': the row carries a ``tournament:*`` tag AND does
         not carry the ``practice`` tag.
     """
@@ -8029,7 +8007,7 @@ def _predict_session_matches_practice(tags_raw, mode):
     if mode == 'tournament_only':
         return has_tournament and not has_practice
     if mode == 'practice_only':
-        return has_practice or not has_tournament
+        return has_practice
     return True
 
 
