@@ -147,6 +147,22 @@
             font-size: 0.8rem;
             color: #1a3a5c;
         }
+        /* Collapsed session bodies stay in the DOM but render as nothing
+           so the header rows pack together. Click the header to expand. */
+        tr.session-collapsed { display: none; }
+        tr.session-group-header { cursor: pointer; }
+        tr.session-group-header .session-toggle {
+            display: inline-block;
+            width: 1em;
+            margin-right: 6px;
+            font-family: 'Quantico', sans-serif;
+            color: #cfe0f7;
+            user-select: none;
+            transition: transform 0.15s;
+        }
+        tr.session-group-header.expanded .session-toggle {
+            transform: rotate(90deg);
+        }
     </style>
     <script defer src="{{ url_for('static', filename='apollo-nav.js') }}"></script>
     <script defer src="{{ url_for('static', filename='apollo-replay.js') }}"></script>
@@ -159,6 +175,7 @@
     <a href="/previous_sessions" class="side-nav-link"><span class="nav-badge">→</span>Previous sessions</a>
     <hr class="side-nav-divider">
     <a href="/analyze" class="side-nav-link"><span class="nav-badge">→</span>Analyze data</a>
+    <a href="/predict" class="side-nav-link"><span class="nav-badge">→</span>Predict performance</a>
     <hr class="side-nav-divider">
     <a href="/add_bow" class="side-nav-link"><span class="nav-badge">→</span>Add bow</a>
     <a href="/add_arrow" class="side-nav-link"><span class="nav-badge">→</span>Add arrow</a>
@@ -306,23 +323,17 @@
       {# Fall back to the global default target when this session's target row
          was hard-deleted — without this the replay canvas paints black. #}
       {% set replay_target = data['target'] or default_target %}
-      <tr class="session-group-header">
+      <tr class="session-group-header" data-session-id="{{ session_id }}">
         <td colspan="9">
           <div class="session-header-row">
             <span>
+              <span class="session-toggle" aria-hidden="true">&#9656;</span>
               Session {{ session_id }} &mdash; {{ stats['session_date'] }} &mdash; {{ stats['pretty_session_length'] }}
               {% if is_practice.v %}<span class="practice-badge" title="Tournament round flagged as practice — not counted as a real competition.">Practice</span>{% endif %}
               &nbsp;&nbsp;|&nbsp;&nbsp;
               {{ stats['arrows_shot'] }} arrows &nbsp;&mdash;&nbsp;
               {{ stats['hit_shots'] }} hit ({{ stats['percent_hit'] }}%),
               {{ stats['missed_shots'] }} missed ({{ stats['percent_missed'] }}%)
-              {% if stats['scored_quiver_count'] %}
-                &nbsp;&nbsp;|&nbsp;&nbsp;
-                <strong>Score:</strong>
-                {{ stats['session_total_score'] }} / {{ stats['session_max_score'] }} pts
-                ({{ stats['scored_quiver_count'] }}
-                 quiver{{ '' if stats['scored_quiver_count'] == 1 else 's' }} scored)
-              {% endif %}
             </span>
             <div class="session-actions" style="display:flex;gap:8px;align-items:center;">
               <a href="{{ url_for('edit_session', session_id=session_id) }}"
@@ -346,7 +357,7 @@
           {% set q_stat = stats["stats_by_quiver"][quiver_num] if quiver_num in stats["stats_by_quiver"] else None %}
           {% set quiver_shots = data["replay_shots"][((quiver_num - 1) * qs):(quiver_num * qs)] %}
           {% for row in quiver_rows %}
-          <tr class="shot-row">
+          <tr class="shot-row session-collapsed" data-session-id="{{ session_id }}">
             <td data-label="Bow">{{ row['bow'] }}</td>
             <td data-label="Arrow">{{ row['arrow_type'] }}</td>
             {% if loop.first %}
@@ -389,7 +400,7 @@
                 data-target-width-mm="{{ replay_target['target_width_mm'] if replay_target else 0 }}"
                 data-img-width="{{ replay_target['img_width'] if replay_target else 0 }}"
               ></canvas>
-              <div class="replay-label">Quiver #{{ quiver_num }} &mdash; 2&times; speed{% if replay_target %} &mdash; {{ replay_target['name'] }}{% endif %}</div>
+              <div class="replay-label">Quiver #{{ quiver_num }}{% if replay_target %} &mdash; {{ replay_target['name'] }}{% endif %}</div>
             </td>
             {% endif %}
           </tr>
@@ -398,7 +409,7 @@
       {% else %}
         {# No quiver size set — render rows without quiver breakdown #}
         {% for row in rows %}
-        <tr class="shot-row">
+        <tr class="shot-row session-collapsed" data-session-id="{{ session_id }}">
           <td data-label="Bow">{{ row['bow'] }}</td>
           <td data-label="Arrow">{{ row['arrow_type'] }}</td>
           <td class="quiver-cell">&mdash;</td>
@@ -428,7 +439,7 @@
               data-target-width-mm="{{ replay_target['target_width_mm'] if replay_target else 0 }}"
               data-img-width="{{ replay_target['img_width'] if replay_target else 0 }}"
             ></canvas>
-            <div class="replay-label">2&times; speed{% if replay_target %} &mdash; {{ replay_target['name'] }}{% endif %}</div>
+            <div class="replay-label">{% if replay_target %}{{ replay_target['name'] }}{% endif %}</div>
           </td>
           {% endif %}
         </tr>
@@ -493,6 +504,23 @@ document.getElementById('units-toggle').addEventListener('click', () => {
 });
 
 document.addEventListener('DOMContentLoaded', applyUnits);
+
+// ── Collapsible session bodies ────────────────────────────────────────────
+// Sessions start collapsed; clicking the header row toggles its rows.
+// Clicks on the inline Edit/Delete controls are ignored so they still work.
+document.querySelectorAll('tr.session-group-header').forEach(header => {
+    header.addEventListener('click', evt => {
+        if (evt.target.closest('a, button, form')) return;
+        const sid = header.dataset.sessionId;
+        if (!sid) return;
+        const expanded = header.classList.toggle('expanded');
+        document.querySelectorAll(
+            `tr.shot-row[data-session-id="${sid}"]`
+        ).forEach(r => {
+            r.classList.toggle('session-collapsed', !expanded);
+        });
+    });
+});
 
 // ── Tag autocomplete (search filter) ─────────────────────────────────────
 (function () {

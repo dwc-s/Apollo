@@ -26,6 +26,42 @@
             color: #1a3a5c;
             margin: 0 0 12px 0;
         }
+        /* Collapsible wrapper around the report-pick form. After a POST the
+           menu collapses so the results take center stage; clicking the
+           summary expands it again to tweak picks and re-submit. */
+        details.analyze-collapse {
+            max-width: 880px;
+            margin: 0 auto 24px auto;
+        }
+        details.analyze-collapse > summary {
+            cursor: pointer;
+            background-color: #b3c6e3;
+            border-radius: 25px;
+            padding: 14px 28px;
+            font-family: "Quantico", sans-serif;
+            color: #1a3a5c;
+            font-weight: 700;
+            list-style: none;
+            user-select: none;
+        }
+        details.analyze-collapse > summary::-webkit-details-marker { display: none; }
+        details.analyze-collapse > summary::before {
+            content: '\25B8';
+            display: inline-block;
+            margin-right: 8px;
+            transition: transform 0.15s;
+        }
+        details.analyze-collapse[open] > summary::before {
+            transform: rotate(90deg);
+        }
+        details.analyze-collapse[open] > summary {
+            border-radius: 25px 25px 0 0;
+            margin-bottom: 0;
+        }
+        details.analyze-collapse[open] > .analyze-panel {
+            border-radius: 0 0 25px 25px;
+            margin-top: 0;
+        }
         .analyze-error {
             background: #f8d7da;
             border: 1px solid #c0392b;
@@ -513,9 +549,10 @@
 <div class="analyze-error">{{ error }}</div>
 {% endif %}
 
+<details class="analyze-collapse" {% if not results %}open{% endif %}>
+<summary>Pick the reports to generate</summary>
 <form method="POST" action="{{ url_for('analyze') }}" class="analyze-panel">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <h3>Pick the reports to generate</h3>
     <div class="report-options">
         {% for item in catalog %}
         {% set is_checked = item.key in selected %}
@@ -643,6 +680,7 @@
         <button type="submit">Generate</button>
     </div>
 </form>
+</details>
 
 {% macro render_panel(p, title) %}
     {% if p.is_interactive %}
@@ -712,8 +750,8 @@
                         data-target-image="{{ p.replay.target_image_url }}"
                         data-target-width-mm="{{ p.replay.target_width_mm }}"
                         data-img-width="{{ p.replay.img_width }}"></canvas>
-                <div class="replay-label">2&times; speed
-                    {% if p.replay.target_name %}&mdash; {{ p.replay.target_name }}{% endif %}
+                <div class="replay-label">
+                    {% if p.replay.target_name %}{{ p.replay.target_name }}{% endif %}
                 </div>
             </div>
             {% endif %}

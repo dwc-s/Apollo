@@ -1709,10 +1709,15 @@ def _ensure_session_times_unique_index():
     and move on rather than crashing the import.
     """
     try:
+        insp = sa_inspect(engine)
+        if 'session_times' not in set(insp.get_table_names()):
+            return
+        existing = {ix.get('name') for ix in insp.get_indexes('session_times')}
+        if 'ux_session_times_user_session' in existing:
+            return
         with engine.begin() as conn:
             conn.execute(text(
-                "CREATE UNIQUE INDEX IF NOT EXISTS "
-                "ux_session_times_user_session "
+                "CREATE UNIQUE INDEX ux_session_times_user_session "
                 "ON session_times(user_id, session_id)"
             ))
     except SQLAlchemyError as e:
@@ -1733,10 +1738,15 @@ def _ensure_targets_user_name_unique_index():
     CREATE; we log and move on rather than crashing startup.
     """
     try:
+        insp = sa_inspect(engine)
+        if 'targets' not in set(insp.get_table_names()):
+            return
+        existing = {ix.get('name') for ix in insp.get_indexes('targets')}
+        if 'ux_targets_user_name' in existing:
+            return
         with engine.begin() as conn:
             conn.execute(text(
-                "CREATE UNIQUE INDEX IF NOT EXISTS "
-                "ux_targets_user_name "
+                "CREATE UNIQUE INDEX ux_targets_user_name "
                 "ON targets(user_id, name)"
             ))
     except SQLAlchemyError as e:
@@ -8658,6 +8668,7 @@ def analyze():
                            tag_selections=tag_selections,
                            tag_inventory=tag_inventory,
                            default_top_tags=default_top_tags,
+                           numeric_options={},
                            results=results,
                            error=error)
 

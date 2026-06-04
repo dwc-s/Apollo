@@ -46,6 +46,7 @@
     <a href="/previous_sessions" class="side-nav-link"><span class="nav-badge">→</span>Previous sessions</a>
     <hr class="side-nav-divider">
     <a href="/analyze" class="side-nav-link"><span class="nav-badge">→</span>Analyze data</a>
+    <a href="/predict" class="side-nav-link"><span class="nav-badge">→</span>Predict performance</a>
     <hr class="side-nav-divider">
     <a href="/add_bow" class="side-nav-link"><span class="nav-badge">→</span>Add bow</a>
     <a href="/add_arrow" class="side-nav-link"><span class="nav-badge">→</span>Add arrow</a>
@@ -101,29 +102,16 @@
     <input type="hidden" name="x_coord" id="x_coord" value="{{ x_coord }}">
     <input type="hidden" name="y_coord" id="y_coord" value="{{ y_coord }}">
     <input type="hidden" name="arrow_shot" value="arrow_shot">
-    <input type="hidden" name="is_precise" id="is_precise" value="{{ is_precise }}">
-    <input type="hidden" name="record_mode" id="record_mode_hidden" value="{{ record_mode }}">
+    {# Placement and recording mode used to be user-selectable but are now
+       hard-coded to Precise + End-of-quiver. Hidden inputs preserve the
+       POST shape the server-side handler expects. #}
+    <input type="hidden" name="is_precise" id="is_precise" value="1">
+    <input type="hidden" name="record_mode" id="record_mode_hidden" value="1">
 
     <div class="session-layout">
 
         <!-- ── LEFT: Clickable target ── -->
         <div class="target-panel">
-
-            <!-- Precision toggle -->
-            <div class="autosubmit-bar" style="margin-top:4px;">
-                <span class="autosubmit-label has-tooltip"
-                      data-tooltip="Estimated — you're roughly placing the shot by eye or . Precise — you're using a paper target or you really care about the exact position on the target.">Placement:</span>
-                <div class="radio-group" style="margin:0;">
-                    <label class="radio-option">
-                        <input type="radio" name="precision_mode" value="0" checked>
-                        <span>Estimated</span>
-                    </label>
-                    <label class="radio-option">
-                        <input type="radio" name="precision_mode" value="1">
-                        <span>Precise</span>
-                    </label>
-                </div>
-            </div>
 
             <!-- Touch input mode toggle (mobile only) -->
             <div class="autosubmit-bar" id="touch-input-bar" style="margin-top:4px;display:none;">
@@ -175,19 +163,6 @@
 
         <!-- ── RIGHT: Session form ── -->
         <div class="form-panel form-panel-session">
-
-            <span class="form-label has-tooltip"
-                  data-tooltip="Should arrows be recorded in the sequence in which they hit the target? Stored in the database for data analysis purposes only. Does not affect session behavior.">Recording mode</span>
-            <div class="radio-group" style="margin:0 0 6px 0;">
-                <label class="radio-option">
-                    <input type="radio" name="record_mode_radio" value="0">
-                    <span>Per shot</span>
-                </label>
-                <label class="radio-option">
-                    <input type="radio" name="record_mode_radio" value="1">
-                    <span>End of quiver</span>
-                </label>
-            </div>
 
             <span class="form-label">Target
                 {% if target_locked %}
@@ -271,39 +246,8 @@ const yInput  = document.getElementById('y_coord');
 const readout = document.getElementById('coord-readout');
 const form    = document.getElementById('shot-form');
 
-const UNITS_KEY             = 'apollo_units';
-const PRECISION_STORAGE_KEY = 'apollo_precision_mode';
-const RECORD_MODE_KEY       = 'apollo_record_mode';
-
-const recordModeRadios = document.querySelectorAll('input[name="record_mode_radio"]');
-const recordModeHidden = document.getElementById('record_mode_hidden');
-
-function applyRecordMode(value) {
-    recordModeRadios.forEach(r => { r.checked = (r.value === value); });
-    recordModeHidden.value = value;
-    localStorage.setItem(RECORD_MODE_KEY, value);
-}
-
-const savedRecordMode = localStorage.getItem(RECORD_MODE_KEY) || '{{ record_mode }}';
-applyRecordMode(savedRecordMode);
-
-recordModeRadios.forEach(r => r.addEventListener('change', () => applyRecordMode(r.value)));
-
-// ── Precision mode ───────────────────────────────────────────────────────
-const precisionRadios = document.querySelectorAll('input[name="precision_mode"]');
-const isPreciseInput  = document.getElementById('is_precise');
-
-function applyPrecision(value) {
-    precisionRadios.forEach(r => { r.checked = (r.value === value); });
-    isPreciseInput.value = value;
-    localStorage.setItem(PRECISION_STORAGE_KEY, value);
-    if (value !== '1') removePrecisionCursor();
-}
-
-const savedPrecision = localStorage.getItem(PRECISION_STORAGE_KEY) || '0';
-applyPrecision(savedPrecision);
-
-precisionRadios.forEach(r => r.addEventListener('change', () => applyPrecision(r.value)));
+const UNITS_KEY      = 'apollo_units';
+const isPreciseInput = document.getElementById('is_precise');
 
 // ── mm → display-unit conversion ─────────────────────────────────────────
 function mmToUnit(mmX, mmY) {

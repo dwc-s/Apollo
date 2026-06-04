@@ -1,7 +1,7 @@
-/* Shared shot-replay canvas animation.
+/* Shared shot-display canvas — all arrows drawn at once, no animation.
  *
  * Each canvas carries its own target params (image URL + physical mm per
- * edge) as data-attrs so multiple replays on one page can coexist:
+ * edge) as data-attrs so multiple displays on one page can coexist:
  *   <canvas class="shot-replay"
  *           data-shots='[{"x":"-12.4","y":"40.0"}, ...]'
  *           data-record-mode="0"
@@ -15,13 +15,6 @@
  */
 (function () {
     'use strict';
-
-    // Canvas size used to be a global constant; it now comes from each
-    // <canvas>'s own width attr so the same JS works for the 360px replays
-    // on /previous_sessions and the smaller side-by-side ones on /analyze.
-    const SHOT_INTERVAL_MS   = 400;   // 2x speed (800 = 1x)
-    const IMPACT_DURATION_MS = 1000;
-    const LOOP_PAUSE_MS      = 500;
 
     // Cache loaded Image objects by URL so multiple canvases pointing at
     // the same target don't refetch the file each time.
@@ -107,104 +100,36 @@
         ctx.restore();
     }
 
-    function animateImpact(ctx, targetImg, cx, cy, isMiss, placedShots, showSeq, size, shotIndex, onDone) {
-        const start = performance.now();
-        function frame(now) {
-            const t    = Math.min((now - start) / IMPACT_DURATION_MS, 1);
-            const ease = 1 - Math.pow(1 - t, 3);
-            drawBase(ctx, targetImg, size);
-            placedShots.forEach(s => {
-                if (s.miss) drawMissMarker(ctx, s.index, size);
-                else        drawSettledMarker(ctx, s.cx, s.cy, s.index, showSeq);
-            });
-            if (isMiss) {
-                ctx.save();
-                ctx.fillStyle = `rgba(229,57,53,${(1 - ease) * 0.45})`;
-                ctx.fillRect(0, 0, size, size);
-                ctx.restore();
-            } else {
-                const ringR   = 6 + ease * 20;
-                const ringAlp = (1 - ease) * 0.9;
-                ctx.save();
-                ctx.beginPath();
-                ctx.arc(cx, cy, ringR, 0, Math.PI * 2);
-                ctx.strokeStyle = `rgba(252,186,3,${ringAlp})`;
-                ctx.lineWidth   = 2.5;
-                ctx.stroke();
-                ctx.globalAlpha = ease;
-                drawSettledMarker(ctx, cx, cy, shotIndex, showSeq);
-                ctx.restore();
-            }
-            if (t < 1) requestAnimationFrame(frame);
-            else       onDone();
-        }
-        requestAnimationFrame(frame);
-    }
-
     function startReplay(canvas, shots) {
         const ctx       = canvas.getContext('2d');
         const size      = canvas.width || 360;
-        const placed    = [];
-        let   idx       = 0;
         const showSeq   = parseInt(canvas.dataset.recordMode || '0') === 0;
         const mmPerEdge = parseFloat(canvas.dataset.targetWidthMm) || 0;
         const imgUrl    = canvas.dataset.targetImage || '';
         const targetImg = imgUrl ? getTargetImage(imgUrl) : null;
 
-        function redrawAll() {
+        function drawAll() {
             drawBase(ctx, targetImg, size);
-            placed.forEach(s => {
-                if (s.miss) drawMissMarker(ctx, s.index, size);
-                else        drawSettledMarker(ctx, s.cx, s.cy, s.index, showSeq);
-            });
-        }
-
-        function next() {
-            if (idx >= shots.length) {
-                setTimeout(() => {
-                    placed.length = 0;
-                    idx = 0;
-                    drawBase(ctx, targetImg, size);
-                    setTimeout(next, 500);
-                }, LOOP_PAUSE_MS);
-                return;
-            }
-            const raw       = shots[idx];
-            const xVal      = parseFloat(raw.x);
-            const yVal      = parseFloat(raw.y);
-            const shotIndex = idx++;
-
-            if (raw.x === '' || isNaN(xVal) || isNaN(yVal)) {
-                setTimeout(next, SHOT_INTERVAL_MS / 2);
-                return;
-            }
-
-            // The server may pre-flag a shot as a miss when it landed
-            // outside the outermost scoring zone (line-cutter rule
-            // applied). Fall back to the sentinel check when the flag
-            // isn't set so older payloads still behave.
-            const isMiss     = raw.miss === true
+            shots.forEach((raw, i) => {
+                const xVal = parseFloat(raw.x);
+                const yVal = parseFloat(raw.y);
+                if (raw.x === '' || isNaN(xVal) || isNaN(yVal)) return;
+                const isMiss = raw.miss === true
                             || (xVal === 100000 && yVal === 100000);
-            const { cx, cy } = isMiss
-                ? { cx: size / 2, cy: size / 2 }
-                : cartToCanvas(xVal, yVal, mmPerEdge, size);
-
-            animateImpact(ctx, targetImg, cx, cy, isMiss, placed, showSeq, size, shotIndex, () => {
-                placed.push({ cx, cy, miss: isMiss, index: shotIndex });
-                redrawAll();
-                setTimeout(next, SHOT_INTERVAL_MS);
+                if (isMiss) {
+                    drawMissMarker(ctx, i, size);
+                } else {
+                    const { cx, cy } = cartToCanvas(xVal, yVal, mmPerEdge, size);
+                    drawSettledMarker(ctx, cx, cy, i, showSeq);
+                }
             });
         }
 
-        function kick() {
-            drawBase(ctx, targetImg, size);
-            setTimeout(next, 600);
-        }
         if (!targetImg || (targetImg.complete && targetImg.naturalWidth > 0)) {
-            kick();
+            drawAll();
         } else {
-            targetImg.addEventListener('load',  kick, { once: true });
-            targetImg.addEventListener('error', kick, { once: true });
+            targetImg.addEventListener('load',  drawAll, { once: true });
+            targetImg.addEventListener('error', drawAll, { once: true });
         }
     }
 
