@@ -1719,6 +1719,30 @@ def _ensure_session_times_unique_index():
         print(f"⚠️  Could not add unique index on session_times: {e}")
 
 
+def _ensure_targets_user_name_unique_index():
+    """Add a UNIQUE index on targets(user_id, name).
+
+    Closes the /add_target race: the route does a SELECT-then-INSERT to
+    enforce per-user unique target names, which isn't atomic across
+    concurrent requests (two tabs from the same user could both pass the
+    check and create duplicates). With this index a colliding insert
+    raises IntegrityError, which /add_target already catches and
+    translates to the friendly "already exists" message.
+
+    Best-effort: a legacy DB with pre-existing duplicates will fail the
+    CREATE; we log and move on rather than crashing startup.
+    """
+    try:
+        with engine.begin() as conn:
+            conn.execute(text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS "
+                "ux_targets_user_name "
+                "ON targets(user_id, name)"
+            ))
+    except SQLAlchemyError as e:
+        print(f"⚠️  Could not add unique index on targets(user_id, name): {e}")
+
+
 def _ensure_arrow_dimension_columns():
     """Add shaft_diameter to arrows and nock_height to bows if missing.
 
@@ -2037,6 +2061,7 @@ def migrate_db():
     metadata.create_all(engine)
     _drop_legacy_unique_target_name()
     _ensure_session_times_unique_index()
+    _ensure_targets_user_name_unique_index()
     _ensure_root_user()
 
 
