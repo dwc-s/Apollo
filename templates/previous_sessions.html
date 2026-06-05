@@ -13,14 +13,14 @@
             vertical-align: middle;
             text-align: center;
             padding: 10px 14px;
-            background: #0d1117;
-            border-left: 1px solid #1e2533;
+            background: #d6e4f0;
+            border-left: 1px solid #b6c8df;
         }
         .shot-replay {
             display: block;
             border-radius: 50%;
-            box-shadow: 0 0 0 2px #1e2d40, 0 0 16px rgba(28,90,160,0.35);
-            background: #000;
+            box-shadow: 0 0 0 2px #95abcf, 0 0 12px rgba(149,171,207,0.45);
+            background: #d6e4f0;
         }
         .replay-label {
             font-family: 'Quantico', sans-serif;
@@ -163,6 +163,134 @@
         tr.session-group-header.expanded .session-toggle {
             transform: rotate(90deg);
         }
+        /* Collapsible search panel — same toggle pattern as session rows.
+           The panel body is hidden by default; clicking the bar reveals it. */
+        .session-search-toggle {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            cursor: pointer;
+            user-select: none;
+            font-family: 'Quantico', sans-serif;
+            font-weight: 700;
+            font-size: 0.85rem;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            color: #1a3a5c;
+        }
+        .session-search-toggle .session-search-caret {
+            display: inline-block;
+            width: 1em;
+            transition: transform 0.15s;
+        }
+        .session-search.expanded .session-search-toggle .session-search-caret {
+            transform: rotate(90deg);
+        }
+        .session-search-body { margin-top: 12px; }
+        .session-search.collapsed .session-search-body { display: none; }
+        .session-search-toggle .result-count {
+            margin-left: auto;
+            font-weight: 400;
+            text-transform: none;
+            letter-spacing: 0;
+            font-size: 0.8rem;
+            color: #1a3a5c;
+        }
+        /* Quiver thumbnail grid — shown when a session header is expanded. */
+        .quiver-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+            gap: 14px;
+            padding: 12px 6px;
+        }
+        .quiver-thumb {
+            background: #d6e4f0;
+            border: 1px solid #8aa0c4;
+            border-radius: 8px;
+            padding: 10px;
+            text-align: center;
+            cursor: pointer;
+            transition: border-color 0.12s, box-shadow 0.12s;
+        }
+        .quiver-thumb:hover,
+        .quiver-thumb.expanded {
+            border-color: #1a3a5c;
+            box-shadow: 0 0 0 1px #1a3a5c, 0 0 12px rgba(26,58,92,0.25);
+        }
+        .quiver-thumb canvas.shot-replay {
+            display: block;
+            margin: 0 auto;
+            border-radius: 50%;
+            background: #d6e4f0;
+            max-width: 100%;
+            height: auto;
+        }
+        .quiver-thumb .quiver-thumb-label {
+            font-family: 'Quantico', sans-serif;
+            color: #1a3a5c;
+            font-size: 0.8rem;
+            margin-top: 8px;
+            line-height: 1.35;
+        }
+        .quiver-thumb .quiver-thumb-label strong { color: #1a3a5c; }
+        /* Per-quiver stats panel under each canvas — populated by JS so
+           the unit toggle keeps it in sync. Single-column flow keeps the
+           thumb card narrow. */
+        .quiver-stats {
+            font-family: 'Quantico', sans-serif;
+            color: #1a3a5c;
+            font-size: 0.78rem;
+            margin-top: 8px;
+            padding-top: 6px;
+            border-top: 1px solid #b6c8df;
+            display: grid;
+            grid-template-columns: auto 1fr;
+            gap: 2px 10px;
+            text-align: left;
+        }
+        .quiver-stats .stat-label {
+            color: #6b80a8;
+            text-transform: uppercase;
+            font-size: 0.65rem;
+            letter-spacing: 0.06em;
+            white-space: nowrap;
+        }
+        .quiver-stats .stat-value {
+            text-align: right;
+            font-variant-numeric: tabular-nums;
+        }
+        /* CSS tooltip — appears immediately, no browser delay. Used for
+           the per-quiver stat hints; data-tip carries the explanation. */
+        .quiver-stats [data-tip] {
+            position: relative;
+            cursor: help;
+        }
+        .quiver-stats .stat-label[data-tip] {
+            border-bottom: 1px dotted #6b80a8;
+        }
+        .quiver-stats [data-tip]:hover::after,
+        .quiver-stats [data-tip]:focus-visible::after {
+            content: attr(data-tip);
+            position: absolute;
+            left: 0;
+            bottom: calc(100% + 6px);
+            background: #1a3a5c;
+            color: #eef2f9;
+            font-family: 'Quantico', sans-serif;
+            font-size: 0.75rem;
+            font-weight: 400;
+            letter-spacing: 0;
+            text-transform: none;
+            padding: 6px 10px;
+            border-radius: 4px;
+            white-space: normal;
+            width: max-content;
+            max-width: 240px;
+            line-height: 1.35;
+            z-index: 10;
+            pointer-events: none;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.25);
+        }
     </style>
     <script defer src="{{ url_for('static', filename='apollo-nav.js') }}"></script>
     <script defer src="{{ url_for('static', filename='apollo-replay.js') }}"></script>
@@ -206,57 +334,67 @@
     {% endif %}
 </nav>
 <h1 class="title">Previous Sessions</h1>
-<form class="session-search" method="GET" action="{{ url_for('previous_sessions') }}">
-    <div class="session-search-fields">
-        <label>Notes
-            <input type="text" name="q_notes" value="{{ filters.q_notes }}" placeholder="text in session notes">
-        </label>
-        <label>Tags
-            <div class="tag-input-wrap" style="position:relative;">
-                <input type="text" id="q_tags" name="q_tags"
-                       value="{{ filters.q_tags }}"
-                       autocomplete="off"
-                       placeholder="comma-separated tags">
-                <ul id="q-tag-suggestions" class="tag-suggestions" hidden></ul>
-            </div>
-        </label>
-        <label>Target
-            <select name="q_target">
-                <option value="">Any target</option>
-                {% for opt in target_options %}
-                <option value="{{ opt }}" {% if filters.q_target == opt %}selected{% endif %}>{{ opt }}</option>
-                {% endfor %}
-            </select>
-        </label>
-        <label>Bow
-            <select name="q_bow">
-                <option value="">Any bow</option>
-                {% for opt in bow_options %}
-                <option value="{{ opt }}" {% if filters.q_bow == opt %}selected{% endif %}>{{ opt }}</option>
-                {% endfor %}
-            </select>
-        </label>
-        <label>Arrow
-            <select name="q_arrow">
-                <option value="">Any arrow</option>
-                {% for opt in arrow_options %}
-                <option value="{{ opt }}" {% if filters.q_arrow == opt %}selected{% endif %}>{{ opt }}</option>
-                {% endfor %}
-            </select>
-        </label>
-        <label>Date from
-            <input type="date" name="date_from" value="{{ filters.date_from }}">
-        </label>
-        <label>Date to
-            <input type="date" name="date_to" value="{{ filters.date_to }}">
-        </label>
-    </div>
-    <div class="session-search-actions">
-        <button type="submit">Search</button>
-        <a class="clear-btn" href="{{ url_for('previous_sessions') }}">Clear</a>
+{% set has_active_filter = filters.q_notes or filters.q_tags or filters.q_target
+                            or filters.q_bow or filters.q_arrow
+                            or filters.date_from or filters.date_to %}
+<form class="session-search {% if has_active_filter %}expanded{% else %}collapsed{% endif %}"
+      method="GET" action="{{ url_for('previous_sessions') }}">
+    <div class="session-search-toggle" role="button" tabindex="0" aria-expanded="{{ 'true' if has_active_filter else 'false' }}">
+        <span class="session-search-caret" aria-hidden="true">&#9656;</span>
+        <span>Search &amp; filter{% if has_active_filter %} <em style="font-weight:400;text-transform:none;letter-spacing:0;">(active)</em>{% endif %}</span>
         <span class="result-count">
             {{ session_data|length }} session{{ '' if session_data|length == 1 else 's' }} shown
         </span>
+    </div>
+    <div class="session-search-body">
+        <div class="session-search-fields">
+            <label>Notes
+                <input type="text" name="q_notes" value="{{ filters.q_notes }}" placeholder="text in session notes">
+            </label>
+            <label>Tags
+                <div class="tag-input-wrap" style="position:relative;">
+                    <input type="text" id="q_tags" name="q_tags"
+                           value="{{ filters.q_tags }}"
+                           autocomplete="off"
+                           placeholder="comma-separated tags">
+                    <ul id="q-tag-suggestions" class="tag-suggestions" hidden></ul>
+                </div>
+            </label>
+            <label>Target
+                <select name="q_target">
+                    <option value="">Any target</option>
+                    {% for opt in target_options %}
+                    <option value="{{ opt }}" {% if filters.q_target == opt %}selected{% endif %}>{{ opt }}</option>
+                    {% endfor %}
+                </select>
+            </label>
+            <label>Bow
+                <select name="q_bow">
+                    <option value="">Any bow</option>
+                    {% for opt in bow_options %}
+                    <option value="{{ opt }}" {% if filters.q_bow == opt %}selected{% endif %}>{{ opt }}</option>
+                    {% endfor %}
+                </select>
+            </label>
+            <label>Arrow
+                <select name="q_arrow">
+                    <option value="">Any arrow</option>
+                    {% for opt in arrow_options %}
+                    <option value="{{ opt }}" {% if filters.q_arrow == opt %}selected{% endif %}>{{ opt }}</option>
+                    {% endfor %}
+                </select>
+            </label>
+            <label>Date from
+                <input type="date" name="date_from" value="{{ filters.date_from }}">
+            </label>
+            <label>Date to
+                <input type="date" name="date_to" value="{{ filters.date_to }}">
+            </label>
+        </div>
+        <div class="session-search-actions">
+            <button type="submit">Search</button>
+            <a class="clear-btn" href="{{ url_for('previous_sessions') }}">Clear</a>
+        </div>
     </div>
 </form>
 <script>
@@ -296,35 +434,27 @@
 {% endmacro %}
 
 <table class="sessions-table">
-  <thead>
-    <tr>
-      <th>Bow</th>
-      <th>Arrow</th>
-      <th>Stats</th>
-      <th>Session Notes</th>
-      <th>Tags</th>
-      <th title="Estimated or precisely measured placement">Placement</th>
-      <th id="th-x">X (cm)</th>
-      <th id="th-y">Y (cm)</th>
-      <th>Replay</th>
-    </tr>
-  </thead>
   <tbody>
     {% for session_id, data in session_data.items()|reverse %}
       {% set rows = data['rows'] %}
       {% set stats = data['stats'] %}
       {% set qs = (rows[0]['quiver_size'] | string | int) if rows else 0 %}
       {% set is_practice = namespace(v=False) %}
+      {% set is_tournament = namespace(v=False) %}
       {% for row in rows %}
         {% for tag in (row['session_tags'] or '').split(',') %}
           {% if tag.strip()|lower == 'practice' %}{% set is_practice.v = True %}{% endif %}
+          {% if tag.strip().lower().startswith('tournament:') %}{% set is_tournament.v = True %}{% endif %}
         {% endfor %}
       {% endfor %}
       {# Fall back to the global default target when this session's target row
          was hard-deleted — without this the replay canvas paints black. #}
       {% set replay_target = data['target'] or default_target %}
+      {% set session_notes = (rows[0]['session_notes'] if rows else '') %}
+      {% set session_tags  = (rows[0]['session_tags']  if rows else '') %}
+
       <tr class="session-group-header" data-session-id="{{ session_id }}">
-        <td colspan="9">
+        <td>
           <div class="session-header-row">
             <span>
               <span class="session-toggle" aria-hidden="true">&#9656;</span>
@@ -351,106 +481,90 @@
           </div>
         </td>
       </tr>
-      {% if qs > 0 %}
-        {% for quiver_rows in rows | batch(qs) %}
-          {% set quiver_num = loop.index %}
-          {% set q_stat = stats["stats_by_quiver"][quiver_num] if quiver_num in stats["stats_by_quiver"] else None %}
-          {% set quiver_shots = data["replay_shots"][((quiver_num - 1) * qs):(quiver_num * qs)] %}
-          {% for row in quiver_rows %}
-          <tr class="shot-row session-collapsed" data-session-id="{{ session_id }}">
-            <td data-label="Bow">{{ row['bow'] }}</td>
-            <td data-label="Arrow">{{ row['arrow_type'] }}</td>
-            {% if loop.first %}
-            <td class="quiver-cell" rowspan="{{ quiver_rows | length }}">
-              {% if q_stat %}
-                <strong>Quiver #{{ q_stat["quiver_number"] }}</strong><br>
-                Hit: {{ q_stat["number_hit"] }} ({{ q_stat["percent_hit"] }}%)<br>
-                Missed: {{ q_stat["number_missed"] }} ({{ q_stat["percent_missed"] }}%)
-                {% if 'score_points' in q_stat %}
-                  <br>Score: {{ q_stat["score_points"] }} / {{ q_stat["max_score"] }} pts
-                {% endif %}
-              {% else %}
-                Quiver #{{ quiver_num }}<br><em>incomplete</em>
-              {% endif %}
-            </td>
+
+      {# Quiver thumbnail grid — collapsed by default; toggled by the
+         header row above. One thumbnail per quiver when quiver size is
+         set, otherwise one thumbnail for the whole session. #}
+      <tr class="session-grid-row session-collapsed" data-session-id="{{ session_id }}">
+        <td>
+          {% if session_notes or session_tags %}
+          <div class="quiver-meta" style="margin-left:6px;">
+            {% if session_notes %}
+              <span class="quiver-meta-label">Notes</span>{{ session_notes }}
             {% endif %}
-            <td data-label="Notes">{{ row['session_notes'] }}</td>
-            <td class="tags-cell" data-label="Tags">
-              {% for tag in (row['session_tags'] or '').split(',') if tag.strip() %}
+            {% if session_tags %}
+              <span class="quiver-meta-label" style="margin-left:14px;">Tags</span>
+              {% for tag in session_tags.split(',') if tag.strip() %}
                 {{ tag_link(tag.strip()) }}
               {% endfor %}
-            </td>
-            <td data-label="Placement" style="text-align:center;white-space:nowrap;">
-              {% if row['is_precise'] == 1 %}
-                <span style="color:#4caf50;font-weight:700;" title="Precisely measured">Precise</span>
-              {% else %}
-                <span style="color:#888;" title="Estimated placement">Est.</span>
-              {% endif %}
-            </td>
-            <td class="x-coord" data-label="X">{{ row['x_coord'] }}</td>
-            <td class="y-coord" data-label="Y">{{ row['y_coord'] }}</td>
-            {% if loop.first %}
-            <td class="replay-cell" rowspan="{{ quiver_rows | length }}">
-              <canvas
-                class="shot-replay"
-                width="360" height="360"
-                data-shots='{{ quiver_shots | tojson }}'
-                data-record-mode="{{ stats['record_mode'] }}"
-                data-target-image="{{ url_for('static', filename=replay_target['target_image']) if replay_target else '' }}"
-                data-target-width-mm="{{ replay_target['target_width_mm'] if replay_target else 0 }}"
-                data-img-width="{{ replay_target['img_width'] if replay_target else 0 }}"
-              ></canvas>
-              <div class="replay-label">Quiver #{{ quiver_num }}{% if replay_target %} &mdash; {{ replay_target['name'] }}{% endif %}</div>
-            </td>
             {% endif %}
-          </tr>
-          {% endfor %}
-        {% endfor %}
-      {% else %}
-        {# No quiver size set — render rows without quiver breakdown #}
-        {% for row in rows %}
-        <tr class="shot-row session-collapsed" data-session-id="{{ session_id }}">
-          <td data-label="Bow">{{ row['bow'] }}</td>
-          <td data-label="Arrow">{{ row['arrow_type'] }}</td>
-          <td class="quiver-cell">&mdash;</td>
-          <td data-label="Notes">{{ row['session_notes'] }}</td>
-          <td class="tags-cell" data-label="Tags">
-            {% for tag in (row['session_tags'] or '').split(',') if tag.strip() %}
-              {{ tag_link(tag.strip()) }}
-            {% endfor %}
-          </td>
-          <td data-label="Placement" style="text-align:center;white-space:nowrap;">
-            {% if row['is_precise'] == 1 %}
-              <span style="color:#4caf50;font-weight:700;" title="Precisely measured">Precise</span>
-            {% else %}
-              <span style="color:#888;" title="Estimated placement">Est.</span>
-            {% endif %}
-          </td>
-          <td class="x-coord" data-label="X">{{ row['x_coord'] }}</td>
-          <td class="y-coord" data-label="Y">{{ row['y_coord'] }}</td>
-          {% if loop.first %}
-          <td class="replay-cell" rowspan="{{ rows | length }}">
-            <canvas
-              class="shot-replay"
-              width="360" height="360"
-              data-shots='{{ data["replay_shots"] | tojson }}'
-              data-record-mode="{{ stats['record_mode'] }}"
-              data-target-image="{{ url_for('static', filename=replay_target['target_image']) if replay_target else '' }}"
-              data-target-width-mm="{{ replay_target['target_width_mm'] if replay_target else 0 }}"
-              data-img-width="{{ replay_target['img_width'] if replay_target else 0 }}"
-            ></canvas>
-            <div class="replay-label">{% if replay_target %}{{ replay_target['name'] }}{% endif %}</div>
-          </td>
+          </div>
           {% endif %}
-        </tr>
-        {% endfor %}
-      {% endif %}
+          <div class="quiver-grid">
+            {% if qs > 0 %}
+              {% for quiver_rows in rows | batch(qs) %}
+                {% set quiver_num = loop.index %}
+                {% set q_stat = stats["stats_by_quiver"][quiver_num] if quiver_num in stats["stats_by_quiver"] else None %}
+                {% set quiver_shots = data["replay_shots"][((quiver_num - 1) * qs):(quiver_num * qs)] %}
+                <div class="quiver-thumb"
+                     data-session-id="{{ session_id }}"
+                     data-quiver-num="{{ quiver_num }}">
+                  <canvas
+                    class="shot-replay"
+                    width="220" height="220"
+                    data-shots='{{ quiver_shots | tojson }}'
+                    data-record-mode="{{ stats['record_mode'] }}"
+                    data-target-image="{{ url_for('static', filename=replay_target['target_image']) if replay_target else '' }}"
+                    data-target-width-mm="{{ replay_target['target_width_mm'] if replay_target else 0 }}"
+                    data-img-width="{{ replay_target['img_width'] if replay_target else 0 }}"
+                  ></canvas>
+                  <div class="quiver-thumb-label">
+                    <strong>Quiver #{{ quiver_num }}</strong>
+                    &nbsp;&middot;&nbsp; {{ quiver_rows[0]['bow'] }} &middot; {{ quiver_rows[0]['arrow_type'] }}
+                    {% if q_stat %}
+                      <br>Hit {{ q_stat["number_hit"] }} ({{ q_stat["percent_hit"] }}%)
+                      {% if is_tournament.v and 'score_points' in q_stat %}
+                        &nbsp;&middot;&nbsp; Score {{ q_stat["score_points"] }}/{{ q_stat["max_score"] }}
+                      {% endif %}
+                    {% else %}
+                      <br><em>incomplete</em>
+                    {% endif %}
+                  </div>
+                  <div class="quiver-stats" data-stats-target></div>
+                </div>
+              {% endfor %}
+            {% else %}
+              <div class="quiver-thumb"
+                   data-session-id="{{ session_id }}"
+                   data-quiver-num="1">
+                <canvas
+                  class="shot-replay"
+                  width="220" height="220"
+                  data-shots='{{ data["replay_shots"] | tojson }}'
+                  data-record-mode="{{ stats['record_mode'] }}"
+                  data-target-image="{{ url_for('static', filename=replay_target['target_image']) if replay_target else '' }}"
+                  data-target-width-mm="{{ replay_target['target_width_mm'] if replay_target else 0 }}"
+                  data-img-width="{{ replay_target['img_width'] if replay_target else 0 }}"
+                ></canvas>
+                <div class="quiver-thumb-label">
+                  <strong>All shots</strong>
+                  &nbsp;&middot;&nbsp; {{ rows[0]['bow'] }} &middot; {{ rows[0]['arrow_type'] }}
+                  {% if replay_target %}<br>{{ replay_target['name'] }}{% endif %}
+                </div>
+                <div class="quiver-stats" data-stats-target></div>
+              </div>
+            {% endif %}
+          </div>
+        </td>
+      </tr>
+
     {% endfor %}
   </tbody>
 </table>
 
 <script>
 const UNITS_KEY = 'apollo_units';
+const MISS_SENTINEL_MM = 100000;
 
 // Stored coords are physical mm (see apollo.py docstring), so display
 // conversion is just mm→cm or mm→inches — no per-target scaling needed.
@@ -463,38 +577,97 @@ function mmToUnit(mmX, mmY) {
     return [cmX, cmY, 'cm'];
 }
 
-function convertTableCoords() {
-    document.querySelectorAll('.sessions-table tbody tr:not(.session-group-header)').forEach(row => {
-        const xCell = row.querySelector('.x-coord');
-        const yCell = row.querySelector('.y-coord');
-        if (!xCell || !yCell) return;
-        // Stash raw mm values on first pass so we can re-convert on unit toggle.
-        if (xCell.dataset.rawX === undefined) {
-            xCell.dataset.rawX = xCell.textContent.trim();
-            yCell.dataset.rawY = yCell.textContent.trim();
+// Convert a single mm scalar (e.g. an aggregate σ) to current units.
+function mmScalarToUnit(mm) {
+    const cm = mm / 10;
+    if (localStorage.getItem(UNITS_KEY) === 'imperial') {
+        return Math.round(cm / 2.54 * 10) / 10;
+    }
+    return Math.round(cm * 10) / 10;
+}
+
+// Pull raw mm shot coordinates from a thumb's canvas data-shots JSON.
+// Returns parallel x[] / y[] arrays of hits plus a separate miss count.
+function readShots(thumb) {
+    const canvas = thumb.querySelector('canvas.shot-replay');
+    if (!canvas) return { xs: [], ys: [], misses: 0 };
+    let shots;
+    try { shots = JSON.parse(canvas.dataset.shots || '[]'); }
+    catch (e) { return { xs: [], ys: [], misses: 0 }; }
+    const xs = [], ys = [];
+    let misses = 0;
+    for (const s of shots) {
+        const x = parseFloat(s.x);
+        const y = parseFloat(s.y);
+        if (isNaN(x) || isNaN(y)) continue;
+        if (s.miss === true ||
+            (x === MISS_SENTINEL_MM && y === MISS_SENTINEL_MM)) {
+            misses++;
+            continue;
         }
-        const xRaw = parseFloat(xCell.dataset.rawX);
-        const yRaw = parseFloat(yCell.dataset.rawY);
-        if (isNaN(xRaw) || isNaN(yRaw)) return;
-        if (xRaw === 100000 && yRaw === 100000) {
-            xCell.textContent = '—';
-            yCell.textContent = '—';
-        } else {
-            const [cx, cy] = mmToUnit(xRaw, yRaw);
-            xCell.textContent = cx;
-            yCell.textContent = cy;
+        xs.push(x);
+        ys.push(y);
+    }
+    return { xs, ys, misses };
+}
+
+// Render the per-quiver stats panel under each thumbnail's canvas.
+// Computed from raw mm so the unit toggle keeps everything in sync.
+function renderQuiverStats() {
+    const u = (localStorage.getItem(UNITS_KEY) === 'imperial') ? 'in' : 'cm';
+    const fmt = mm => mmScalarToUnit(mm);
+    document.querySelectorAll('.quiver-thumb').forEach(thumb => {
+        const slot = thumb.querySelector('[data-stats-target]');
+        if (!slot) return;
+        const { xs, ys, misses } = readShots(thumb);
+        const n = xs.length;
+        if (n === 0) {
+            slot.innerHTML =
+                `<span class="stat-label">Misses</span><span class="stat-value">${misses}</span>`;
+            return;
         }
+        const mean = arr => arr.reduce((a, b) => a + b, 0) / arr.length;
+        const mx = mean(xs), my = mean(ys);
+        let sumSq0 = 0, sumSqM = 0;
+        let best = Infinity, worst = 0, maxFromMPI = 0;
+        for (let i = 0; i < n; i++) {
+            const d0 = Math.sqrt(xs[i] * xs[i] + ys[i] * ys[i]);
+            sumSq0 += d0 * d0;
+            const dxm = xs[i] - mx, dym = ys[i] - my;
+            const dm  = Math.sqrt(dxm * dxm + dym * dym);
+            sumSqM += dm * dm;
+            if (d0 < best)  best  = d0;
+            if (d0 > worst) worst = d0;
+            if (dm > maxFromMPI) maxFromMPI = dm;
+        }
+        const sigma0 = Math.sqrt(sumSq0 / n);
+        const sigmaM = Math.sqrt(sumSqM / n);
+        const mpi    = `(${fmt(mx)}, ${fmt(my)})`;
+        // Two-column grid: label, value. Tooltips live on the labels.
+        slot.innerHTML = `
+            <span class="stat-label">Shots</span>
+              <span class="stat-value">${n}${misses ? ` &middot; ${misses} miss` : ''}</span>
+            <span class="stat-label" data-tip="Mean point of impact — the group's centroid (X̄, Ȳ).">MPI (${u})</span>
+              <span class="stat-value">${mpi}</span>
+            <span class="stat-label" data-tip="Standard deviation of shot coordinates from (0,0). Combines aim error and precision.">σ ctr (${u})</span>
+              <span class="stat-value">${fmt(sigma0)}</span>
+            <span class="stat-label" data-tip="Standard deviation from the group's MPI — pure precision, independent of where the group is centered.">σ MPI (${u})</span>
+              <span class="stat-value">${fmt(sigmaM)}</span>
+            <span class="stat-label" data-tip="Largest distance from MPI — group radius / extreme spread.">Grp rad (${u})</span>
+              <span class="stat-value">${fmt(maxFromMPI)}</span>
+            <span class="stat-label" data-tip="Closest shot to center (0,0).">Best (${u})</span>
+              <span class="stat-value">${fmt(best)}</span>
+            <span class="stat-label" data-tip="Farthest hit from center (0,0).">Worst (${u})</span>
+              <span class="stat-value">${fmt(worst)}</span>
+        `;
     });
 }
 
 function applyUnits() {
     const imperial   = localStorage.getItem(UNITS_KEY) === 'imperial';
-    const unitLabel  = imperial ? 'in' : 'cm';
     const toggleText = imperial ? '⇄ Metric' : '⇄ Imperial';
-    document.getElementById('th-x').textContent = `X (${unitLabel})`;
-    document.getElementById('th-y').textContent = `Y (${unitLabel})`;
     document.getElementById('units-toggle').textContent = toggleText;
-    convertTableCoords();
+    renderQuiverStats();
 }
 
 document.getElementById('units-toggle').addEventListener('click', () => {
@@ -505,20 +678,38 @@ document.getElementById('units-toggle').addEventListener('click', () => {
 
 document.addEventListener('DOMContentLoaded', applyUnits);
 
-// ── Collapsible session bodies ────────────────────────────────────────────
-// Sessions start collapsed; clicking the header row toggles its rows.
-// Clicks on the inline Edit/Delete controls are ignored so they still work.
+// ── Collapsible search panel ──────────────────────────────────────────────
+(function () {
+    const form = document.querySelector('form.session-search');
+    const bar  = form && form.querySelector('.session-search-toggle');
+    if (!form || !bar) return;
+    function toggle() {
+        const collapsed = form.classList.toggle('collapsed');
+        form.classList.toggle('expanded', !collapsed);
+        bar.setAttribute('aria-expanded', String(!collapsed));
+    }
+    bar.addEventListener('click', toggle);
+    bar.addEventListener('keydown', evt => {
+        if (evt.key === 'Enter' || evt.key === ' ') {
+            evt.preventDefault();
+            toggle();
+        }
+    });
+})();
+
+// ── Two-level disclosure ──────────────────────────────────────────────────
+// Level 1: session header (always visible).
+// Level 2: click header → reveal the quiver thumbnail grid, each thumb
+// showing its canvas plus the per-quiver stats panel underneath.
 document.querySelectorAll('tr.session-group-header').forEach(header => {
     header.addEventListener('click', evt => {
         if (evt.target.closest('a, button, form')) return;
         const sid = header.dataset.sessionId;
         if (!sid) return;
         const expanded = header.classList.toggle('expanded');
-        document.querySelectorAll(
-            `tr.shot-row[data-session-id="${sid}"]`
-        ).forEach(r => {
-            r.classList.toggle('session-collapsed', !expanded);
-        });
+        const gridRow = document.querySelector(
+            `tr.session-grid-row[data-session-id="${sid}"]`);
+        if (gridRow) gridRow.classList.toggle('session-collapsed', !expanded);
     });
 });
 
