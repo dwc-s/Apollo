@@ -1,36 +1,46 @@
 # Apollo
 
-Flask web app for tracking archery practice. Log each shot's coordinates on a
-target image, group shots into quivers and sessions, and review hit rate,
-session length, and per-quiver breakdowns over time. Supports multiple bows,
-arrows, and target faces.
+Flask web app for logging archery practice and analyzing performance.
+Tap a target image to record each shot, group shots into quivers and
+sessions, run formal tournament rounds, and review hit rate, group
+geometry, and equipment comparisons over time. Supports multiple users,
+bows, arrows, and target faces.
+
+A hosted instance lives at <https://apolloshoots.org>.
 
 ---
 
 ## Quick start
 
 ```bash
-cd development
 python install.py
 ```
 
 `install.py` walks you through:
 
-1. Creating a conda environment (default name `apollo`, Python 3.11)
-2. Installing the Python packages it needs into that env
-3. Choosing `local` (SQLite) or `server` (MySQL) flavor
-4. Collecting required env vars (SECRET_KEY, DATABASE_URL if server)
-5. Writing those env vars to `development/.env` (chmod 600)
+1. Picking an environment manager (conda if installed, else venv)
+2. Picking a flavor — `local` (SQLite) or `server` (MySQL)
+3. Installing the Python packages it needs into that env
+4. Collecting env vars (`SECRET_KEY`, `RESEND_API_KEY`, and — for
+   server — `DATABASE_URL`, `APOLLO_BASE_URL`, and the root account)
+5. Writing those env vars to `.env` next to `apollo.py` (chmod 600).
+   For the server flavor it also writes `wsgi_snippet.py`, a ready-to-
+   paste WSGI configuration file with your real values filled in.
 
-Then to run:
+Then to run locally:
 
 ```bash
 source .env
-conda activate apollo
+conda activate apollo            # or: source venv/bin/activate
 python apollo.py
 ```
 
-The app starts on `http://127.0.0.1:5000`.
+The app starts on `http://127.0.0.1:5000/`. Click **Create account** to
+register the first user — any data left over from a pre-multi-user
+install is claimed by the first account automatically.
+
+See [install_help.txt](install_help.txt) for a full walkthrough of every
+prompt, env var, and the PythonAnywhere deploy procedure.
 
 ---
 
@@ -38,57 +48,44 @@ The app starts on `http://127.0.0.1:5000`.
 
 ```
 apollo/
-├── README.md                       ← you are here
-├── development/                    ← working copy; edit here
-│   ├── apollo.py                   ← the Flask app + schema
-│   ├── install.py                  ← interactive bootstrapper
-│   ├── migrate_to_production.sh    ← copy to production/
-│   ├── static/                     ← target images, CSS, logos
-│   │   └── targets/                ← user-uploaded target images
-│   ├── templates/                  ← Jinja templates
-│   └── apollo_legacy.db            ← pre-SQLAlchemy SQLite DB (archived)
-└── production/                     ← deployable copy (synced from dev)
+├── README.md            ← you are here
+├── install.py           ← interactive bootstrapper
+├── install_help.txt     ← detailed install / deploy reference
+├── apollo.py            ← the Flask app + schema
+├── apollo.db            ← local SQLite DB (created on first launch)
+├── static/              ← target images, CSS, JS, logos
+│   └── targets/         ← user-uploaded target images
+├── templates/           ← Jinja templates
+└── documentation/
+    └── tournament/      ← rule/scoring/target reference for /tournament
 ```
-
-`apollo.py` lives in two places: `development/` is where you make changes,
-`production/` is the deployable snapshot. `migrate_to_production.sh` is a
-plain `cp` that promotes the dev tree.
 
 ---
 
 ## Two backends
 
-Storage runs through SQLAlchemy Core, so the same code works against SQLite
-or MySQL. The backend is picked at startup from (in priority order):
+Storage runs through SQLAlchemy Core, so the same code works against
+SQLite or MySQL. The backend is picked at startup from the
+`APOLLO_BACKEND` env var:
 
-1. The `DEV_BACKEND` constant at the top of `apollo.py` (for debug/QA)
-2. The `DATABASE_URL` environment variable
-3. A fallback to a local file-based SQLite DB next to `apollo.py`
+| `APOLLO_BACKEND` | Behavior                                                                 |
+|------------------|--------------------------------------------------------------------------|
+| unset / `sqlite` | Local file-based SQLite (`apollo.db` next to `apollo.py`). `DATABASE_URL` is **ignored** so a stray export can't accidentally point a dev shell at a remote DB. |
+| `mysql`          | Use `DATABASE_URL`; raise loudly if it isn't set.                        |
 
-### `DEV_BACKEND` toggle
+`install.py` sets `APOLLO_BACKEND=mysql` for you in the server flavor;
+the local flavor leaves it unset.
 
-Open `apollo.py` and edit:
-
-```python
-DEV_BACKEND = None  # 'sqlite' | 'mysql' | None
-```
-
-| Value      | Behavior                                                                 |
-|------------|--------------------------------------------------------------------------|
-| `None`     | Production behavior: use `DATABASE_URL` if set, else SQLite fallback     |
-| `'sqlite'` | Force local SQLite, **ignore** any `DATABASE_URL` in the shell           |
-| `'mysql'`  | Force MySQL; raise loudly if `DATABASE_URL` isn't set                    |
-
-At startup the app prints `📦 Apollo DB: <redacted-url>` so you can confirm
-which backend you actually hit.
+At startup the app prints `📦 Apollo DB: <redacted-url>` so you can
+confirm which backend you actually hit.
 
 ### `DATABASE_URL` format
 
 ```
-# SQLite (file-based)
+# SQLite (file-based — generated automatically; rarely set by hand)
 sqlite:///apollo.db
 
-# MySQL (web/cloud — requires PyMySQL, installed by the 'server' flavor)
+# MySQL (server flavor — requires PyMySQL, installed by `install.py`)
 mysql+pymysql://user:password@host:port/dbname
 ```
 
@@ -96,59 +93,70 @@ mysql+pymysql://user:password@host:port/dbname
 
 ## Environment variables
 
-| Variable        | Required? | Notes                                                                 |
-|-----------------|-----------|-----------------------------------------------------------------------|
-| `SECRET_KEY`    | Prod yes  | Signs Flask sessions + CSRF tokens. Dev has a hardcoded fallback.     |
-| `DATABASE_URL`  | Server yes| SQLAlchemy URL. Defaults to local SQLite when unset.                  |
-| `FLASK_ENV`     | Optional  | Set to `production` to force-disable the Werkzeug debugger.           |
-| `FLASK_DEBUG`   | Optional  | `1` = debug mode (default in dev); ignored when `FLASK_ENV=production`. |
+Apollo reads these from `os.environ` at startup — there is no dotenv
+loader. `install.py` writes the `export KEY=value` form to `.env`; you
+must `source .env` (or set them inside your WSGI file) before launching
+the app.
 
-`install.py` writes these to `development/.env` as `export KEY=value` lines;
-`source .env` before launching the app.
+| Variable               | Required?         | Notes                                                                     |
+|------------------------|-------------------|---------------------------------------------------------------------------|
+| `SECRET_KEY`           | Prod: **yes**     | Signs Flask sessions + CSRF tokens. Dev generates a random fallback.      |
+| `APOLLO_BACKEND`       | Server: `mysql`   | Explicit opt-in for the MySQL path. Unset / `sqlite` ⇒ local SQLite.      |
+| `DATABASE_URL`         | `APOLLO_BACKEND=mysql`: yes | SQLAlchemy URL.                                                |
+| `APOLLO_BASE_URL`      | Prod: **yes**     | Public origin used in password-reset email links (e.g. `https://apolloshoots.org`). |
+| `APOLLO_ROOT_USERNAME` | Server: yes       | Bootstraps / re-affirms the root admin account on every boot.             |
+| `APOLLO_ROOT_EMAIL`    | Server bootstrap  | Used only when the root account doesn't exist yet.                        |
+| `APOLLO_ROOT_PASSWORD` | Server bootstrap  | Used only when the root account doesn't exist yet. Safe to remove from `.env` after first boot. |
+| `RESEND_API_KEY`       | Optional          | Powers password-reset email. If unset, Apollo prints reset links to the server log. |
+| `RESEND_FROM`          | Optional          | Sender address. Must be on a Resend-verified domain to mail real users.   |
+| `FLASK_ENV`            | Server: `production` | Disables the Werkzeug debugger and makes `SECRET_KEY` + `APOLLO_BASE_URL` mandatory. |
+| `FLASK_DEBUG`          | Optional          | `1` (default in dev) enables debug. Ignored when `FLASK_ENV=production`.  |
 
 ---
 
 ## Schema
 
-Five tables, all defined as SQLAlchemy Core `Table` objects in `apollo.py`
+All tables are defined as SQLAlchemy Core `Table` objects in `apollo.py`
 and created by `metadata.create_all(engine)` at import time.
+`migrate_db()` (also at import) adds any new columns to pre-existing
+DBs in place.
 
-| Table           | Purpose                                                          |
-|-----------------|------------------------------------------------------------------|
-| `apollo`        | One row per shot (coords, quiver/session metadata, target ref)   |
-| `session_times` | Session start/end times, optional manual length override         |
-| `targets`       | Available target faces (image, physical size, default flag)      |
-| `bows`          | Bow inventory (model, type, poundage, AMO length)                |
-| `arrows`        | Arrow inventory (length, spine, weights, tip)                    |
+| Table              | Purpose                                                                  |
+|--------------------|--------------------------------------------------------------------------|
+| `users`            | One row per account (creds, lockout state, `is_root`, timezone).         |
+| `apollo`           | One row per shot (coords, quiver/session metadata, equipment snapshot).  |
+| `session_times`    | Session start/end times, optional manual length override.                |
+| `targets`          | Available target faces (image, physical size, default flag).             |
+| `target_zones`     | User-defined concentric scoring rings per target.                        |
+| `bows`             | Bow inventory (model, type, draw weight, AMO length, nock height).       |
+| `arrows`           | Arrow inventory (length, spine, weights, shaft, tip).                    |
+| `password_resets`  | One-shot, short-lived reset tokens (stored as sha256, never plaintext).  |
+| `rate_limit_hits`  | Persistent rate-limit counters (login, forgot-password).                 |
+| `app_settings`     | Global key/value config (e.g. server timezone).                          |
+| `user_notes`       | Per-user free-form scratchpad (one row per user).                        |
 
-Every table has an explicit `id INTEGER PRIMARY KEY AUTOINCREMENT`. Queries
-in the app SELECT it aliased as `rowid` so templates that read `rowid` keep
-working unchanged.
-
----
-
-## Promoting to production
-
-```bash
-cd development
-./migrate_to_production.sh
-```
-
-This is a plain `cp` that copies `apollo.py`, `static/`, and `templates/`
-into `../production/`. `.env`, `apollo.db`, and `install.py` are
-intentionally not copied — production should have its own env config and DB.
+Every table has an explicit `id INTEGER PRIMARY KEY AUTOINCREMENT`.
+Queries in the app SELECT it aliased as `rowid` so older templates that
+read `rowid` keep working unchanged. All per-user tables carry a
+`user_id` column added by `ensure_user_id_columns()` for pre-multi-user
+DBs.
 
 ---
 
 ## Notes
 
-- **`apollo_legacy.db`** is the original pre-SQLAlchemy SQLite database with
-  the old typeless schema. Kept around so you can still inspect old session
-  data, but unused by the current app — the new schema lives in `apollo.db`
-  (created automatically on first launch in local mode).
-- **Single-user assumption.** Session IDs are minted with
-  `SELECT MAX(session_id)+1`, which has a race window between two
-  near-simultaneous `/sesh` GETs. Fine for a personal tool; switch to an
-  `AUTO_INCREMENT` session counter before going multi-user.
-- **CSRF.** Every POST form must include `{{ csrf_token() }}`. Rotating
+- **Multi-user.** The first account to register inherits any data left
+  over from a pre-multi-user install. Subsequent accounts start empty.
+  Root (created from `APOLLO_ROOT_*`) can browse/delete users and reset
+  passwords or email addresses via `/admin`.
+- **CSRF.** Every POST form includes `{{ csrf_token() }}`. Rotating
   `SECRET_KEY` invalidates in-flight tokens — expected.
+- **Password resets.** Tokens are sha256-hashed at rest, one-shot, and
+  expire after a short TTL. Without `RESEND_API_KEY`, the reset URL is
+  printed to the server log instead of mailed — fine for solo/offline
+  use.
+- **Tournament mode.** `/tournament` runs WA / NFAA / USAA / NASP
+  rounds with the right end size, target face, and scoring rule. See
+  [documentation/tournament/](documentation/tournament/) for the
+  internal rule reference. Verify against current official rulebooks
+  before relying on a score for competition.

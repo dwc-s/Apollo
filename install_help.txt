@@ -138,15 +138,16 @@ DATABASE_URL                               [server flavor only]
     `<username>$<dbname>`.
 
 APOLLO_BASE_URL                            [server flavor only,
-                                                       optional]
+                                                        required]
     The public origin used in password-reset email links, e.g.
-    `https://apolloshoots.org`.
+    `https://apolloshoots.org`. apollo.py refuses to start in
+    production (FLASK_ENV=production) without this set.
 
     In theory ProxyFix + request.url_root produces the right
     value automatically. In practice PythonAnywhere's free-tier
     proxy doesn't always forward X-Forwarded-Proto cleanly, which
-    can produce http:// links inside HTTPS-only deployments.
-    Setting this explicitly avoids that surprise.
+    can produce http:// links inside HTTPS-only deployments —
+    setting this explicitly avoids that surprise.
 
 APOLLO_ROOT_USERNAME                       [server flavor only]
     The username for the root (admin) account, collected during

@@ -307,19 +307,17 @@ def main():
             "Example: mysql+pymysql://apollo:s3cret@db.example.com:3306/apollo"
         )
         env_vars["DATABASE_URL"] = prompt("DATABASE_URL")
-        # APOLLO_BASE_URL gets embedded in password-reset email links. In
-        # principle ProxyFix + request.url_root produces the right value
-        # on its own, but PythonAnywhere's free-tier proxy doesn't always
-        # forward X-Forwarded-Proto cleanly, which can cause http:// links
-        # in HTTPS-only deployments. Setting this explicitly avoids the
-        # surprise.
+        # APOLLO_BASE_URL is required in production: apollo.py refuses to
+        # start without it (it's the origin embedded in password-reset
+        # email links). ProxyFix + request.url_root works in theory, but
+        # PythonAnywhere's free-tier proxy doesn't always forward
+        # X-Forwarded-Proto cleanly, which can produce http:// links in
+        # HTTPS-only deployments — so we require the explicit value.
         print(
             "\nAPOLLO_BASE_URL is the public origin used in password-reset "
             "email links.\nExample: https://apolloshoots.org"
         )
-        base_url = prompt("APOLLO_BASE_URL", default="", required=False)
-        if base_url:
-            env_vars["APOLLO_BASE_URL"] = base_url
+        env_vars["APOLLO_BASE_URL"] = prompt("APOLLO_BASE_URL")
     else:
         # Local flavor: apollo.py always uses the file-based SQLite DB next
         # to itself unless APOLLO_BACKEND=mysql is set, so there's nothing
