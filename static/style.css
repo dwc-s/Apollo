@@ -837,6 +837,33 @@ h4 {
     background-color: #636a80;
     color: #fff;
 }
+
+/* Notes popup — wider card and a roomy textarea so it's usable on every page. */
+.modal-card.notes-modal-card {
+    max-width: 720px;
+    width: 92%;
+}
+.modal-card.notes-modal-card textarea#notes-modal-textarea {
+    width: 100%;
+    min-height: 320px;
+    font-family: 'Quantico', sans-serif;
+    font-size: 1rem;
+    padding: 12px 14px;
+    border: 1px solid #6b80a8;
+    border-radius: 6px;
+    background: #eef2f9;
+    color: #1a3a5c;
+    box-sizing: border-box;
+    resize: vertical;
+    line-height: 1.5;
+}
+.modal-card.notes-modal-card .notes-meta {
+    font-family: 'Quantico', sans-serif;
+    font-size: 0.8rem;
+    color: #2c4a6b;
+    margin-top: 6px;
+    letter-spacing: 0.04em;
+}
 /* ═══════════════════════════════════════════════════
    Auth pages — login / register / account
    ═══════════════════════════════════════════════════ */

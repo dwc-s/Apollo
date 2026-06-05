@@ -40,6 +40,23 @@
     </div>
 </div>`;
 
+    const NOTES_MODAL_HTML = `
+<div class="modal-backdrop" id="notes-modal" role="dialog" aria-modal="true" aria-labelledby="notes-modal-title">
+    <div class="modal-card notes-modal-card">
+        <h3 id="notes-modal-title">Notes</h3>
+        <p>Your personal scratchpad — saved to your account, available from any page.</p>
+        <form id="notes-modal-form">
+            <textarea id="notes-modal-textarea" class="notes-textarea" placeholder="Loading…"></textarea>
+            <div class="notes-meta" id="notes-modal-meta"></div>
+            <div id="notes-modal-status" style="margin-top:0.5rem; display:none;"></div>
+            <div class="modal-actions">
+                <button type="button" class="secondary" id="notes-modal-cancel">Close</button>
+                <button type="submit" id="notes-modal-submit">Save</button>
+            </div>
+        </form>
+    </div>
+</div>`;
+
     const IMPORT_MODAL_HTML = `
 <div class="modal-backdrop" id="import-modal" role="dialog" aria-modal="true" aria-labelledby="import-modal-title">
     <div class="modal-card">
@@ -94,6 +111,7 @@
     ready(function () {
         document.body.insertAdjacentHTML('beforeend', EXPORT_MODAL_HTML);
         document.body.insertAdjacentHTML('beforeend', IMPORT_MODAL_HTML);
+        document.body.insertAdjacentHTML('beforeend', NOTES_MODAL_HTML);
 
         // ─── Mobile side-nav drawer ────────────────────────
         // The hamburger and backdrop are styled only inside the
@@ -213,6 +231,112 @@
             if (evt.key !== 'Escape') return;
             if (exportModal.classList.contains('open')) closeExport();
             if (importModal.classList.contains('open')) closeImport();
+        });
+
+        // ─── Notes popup ───────────────────────────────────────────
+        const notesModal    = document.getElementById('notes-modal');
+        const notesLink     = document.getElementById('notes-link');
+        const notesCancel   = document.getElementById('notes-modal-cancel');
+        const notesForm     = document.getElementById('notes-modal-form');
+        const notesTextarea = document.getElementById('notes-modal-textarea');
+        const notesMeta     = document.getElementById('notes-modal-meta');
+        const notesStatus   = document.getElementById('notes-modal-status');
+        const notesSubmit   = document.getElementById('notes-modal-submit');
+
+        function closeNotes() {
+            notesModal.classList.remove('open');
+            notesStatus.style.display = 'none';
+            notesStatus.textContent = '';
+        }
+        async function openNotes() {
+            notesModal.classList.add('open');
+            notesStatus.style.display = 'none';
+            notesTextarea.value = '';
+            notesTextarea.placeholder = 'Loading…';
+            notesMeta.textContent = '';
+            notesSubmit.disabled = true;
+            try {
+                const res = await fetch('/notes/api', {
+                    credentials: 'same-origin',
+                    headers: { 'Accept': 'application/json' },
+                });
+                const data = await res.json().catch(() => ({ ok: false }));
+                if (!res.ok || !data.ok) {
+                    notesStatus.style.color = '#c0392b';
+                    notesStatus.style.display = 'block';
+                    notesStatus.textContent = 'Could not load notes.';
+                    notesTextarea.placeholder = 'Start typing…';
+                } else {
+                    notesTextarea.value = data.content || '';
+                    notesTextarea.placeholder = 'Start typing…';
+                    notesMeta.textContent = data.updated_at
+                        ? 'Last saved (UTC): ' + data.updated_at
+                        : '';
+                }
+            } catch (err) {
+                notesStatus.style.color = '#c0392b';
+                notesStatus.style.display = 'block';
+                notesStatus.textContent = 'Could not load notes: ' + err.message;
+                notesTextarea.placeholder = 'Start typing…';
+            } finally {
+                notesSubmit.disabled = false;
+                notesTextarea.focus();
+            }
+        }
+
+        if (notesLink) {
+            notesLink.addEventListener('click', evt => {
+                evt.preventDefault();
+                openNotes();
+            });
+        }
+        notesCancel.addEventListener('click', closeNotes);
+        notesModal.addEventListener('click', evt => {
+            if (evt.target === notesModal) closeNotes();
+        });
+
+        notesForm.addEventListener('submit', async evt => {
+            evt.preventDefault();
+            notesStatus.style.display = 'block';
+            notesStatus.style.color = '';
+            notesStatus.textContent = 'Saving…';
+            notesSubmit.disabled = true;
+            try {
+                const res = await fetch('/notes/api', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Accept': 'application/json',
+                        'X-CSRFToken': csrfToken(),
+                    },
+                    credentials: 'same-origin',
+                    body: JSON.stringify({ content: notesTextarea.value }),
+                });
+                const data = await res.json().catch(() => ({ ok: false }));
+                if (!res.ok || !data.ok) {
+                    notesStatus.style.color = '#c0392b';
+                    notesStatus.textContent = 'Save failed: ' +
+                        (data.error || res.statusText || 'unknown error');
+                } else {
+                    notesStatus.style.color = '#1e7e34';
+                    notesStatus.textContent = 'Saved.';
+                    if (data.updated_at) {
+                        notesMeta.textContent = 'Last saved (UTC): ' + data.updated_at;
+                    }
+                }
+            } catch (err) {
+                notesStatus.style.color = '#c0392b';
+                notesStatus.textContent = 'Save failed: ' + err.message;
+            } finally {
+                notesSubmit.disabled = false;
+            }
+        });
+
+        // Shared Escape handler also closes the notes modal.
+        document.addEventListener('keydown', evt => {
+            if (evt.key === 'Escape' && notesModal.classList.contains('open')) {
+                closeNotes();
+            }
         });
 
         importForm.addEventListener('submit', async evt => {

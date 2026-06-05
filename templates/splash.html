@@ -38,27 +38,30 @@
     <a href="/" class="side-nav-brand">Apollo</a>
     {% if current_user %}
     <a href="/sesh" class="side-nav-link"><span class="nav-badge">→</span>Start session</a>
-    <a href="/tournament" class="side-nav-link"><span class="nav-badge">★</span>Tournament</a>
     <a href="/previous_sessions" class="side-nav-link"><span class="nav-badge">→</span>Previous sessions</a>
+    <hr class="side-nav-divider">
+    <a href="/tournament" class="side-nav-link"><span class="nav-badge">★</span>Tournament</a>
     <hr class="side-nav-divider">
     <a href="/analyze" class="side-nav-link"><span class="nav-badge">→</span>Analyze data</a>
     <a href="/predict" class="side-nav-link"><span class="nav-badge">→</span>Predict performance</a>
     <hr class="side-nav-divider">
     <a href="/add_bow" class="side-nav-link"><span class="nav-badge">→</span>Add bow</a>
     <a href="/add_arrow" class="side-nav-link"><span class="nav-badge">→</span>Add arrow</a>
+    <a href="/add_target" class="side-nav-link"><span class="nav-badge">→</span>Add target</a>
+    <hr class="side-nav-divider">
     <a href="/edit_bows" class="side-nav-link"><span class="nav-badge">→</span>Edit bows</a>
     <a href="/edit_arrows" class="side-nav-link"><span class="nav-badge">→</span>Edit arrows</a>
-    <a href="/add_target" class="side-nav-link"><span class="nav-badge">→</span>Add target</a>
     <a href="/edit_targets" class="side-nav-link"><span class="nav-badge">→</span>Edit targets</a>
     <hr class="side-nav-divider">
     <a href="#" id="export-link" class="side-nav-link"><span class="nav-badge">⬇</span>Export data</a>
     <a href="#" id="import-link" class="side-nav-link"><span class="nav-badge">⬆</span>Import data</a>
-    <a href="/notes" class="side-nav-link"><span class="nav-badge">✎</span>Notes</a>
+    <hr class="side-nav-divider">
+    <a href="#" id="notes-link" class="side-nav-link"><span class="nav-badge">✎</span>Notes</a>
+    <hr class="side-nav-divider">
     {% if current_user and current_user.is_root %}
-    <hr class="side-nav-divider">
     <a href="/admin" class="side-nav-link"><span class="nav-badge">★</span>Admin</a>
-    {% endif %}
     <hr class="side-nav-divider">
+    {% endif %}
     {% else %}
     <a href="/login" class="side-nav-link"><span class="nav-badge">→</span>Sign in</a>
     <a href="/register" class="side-nav-link"><span class="nav-badge">→</span>Create account</a>

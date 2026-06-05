@@ -8735,6 +8735,60 @@ def notes():
                            error=error)
 
 
+@app.route('/notes/api', methods=['GET', 'POST'])
+@login_required
+def notes_api():
+    """JSON load/save for the side-nav Notes popup.
+
+    GET returns {ok, content, updated_at}. POST accepts JSON or form
+    body with 'content' and upserts it.
+    """
+    user_id = current_user_id()
+
+    if request.method == 'POST':
+        if request.is_json:
+            content = (request.get_json(silent=True) or {}).get('content', '')
+        else:
+            content = request.form.get('content', '')
+        try:
+            with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
+                existing = cur.execute(
+                    "SELECT id FROM user_notes WHERE user_id = %s",
+                    (user_id,)
+                ).fetchone()
+                now = _app_now()
+                if existing is None:
+                    cur.execute(
+                        "INSERT INTO user_notes (user_id, content, updated_at) "
+                        "VALUES (%s, %s, %s)",
+                        (user_id, content, now)
+                    )
+                else:
+                    cur.execute(
+                        "UPDATE user_notes SET content = %s, updated_at = %s "
+                        "WHERE user_id = %s",
+                        (content, now, user_id)
+                    )
+                con.commit()
+            return jsonify(ok=True, content=content, updated_at=str(now))
+        except SQLAlchemyError as e:
+            print(f"❌ Notes API save error: {e}")
+            return jsonify(ok=False, error="Could not save notes."), 500
+
+    try:
+        with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
+            row = cur.execute(
+                "SELECT content, updated_at FROM user_notes WHERE user_id = %s",
+                (user_id,)
+            ).fetchone()
+        content = (row['content'] or '') if row is not None else ''
+        updated_at = str(row['updated_at']) if row is not None and row['updated_at'] else None
+        return jsonify(ok=True, content=content, updated_at=updated_at)
+    except SQLAlchemyError as e:
+        print(f"❌ Notes API load error: {e}")
+        return jsonify(ok=False, error="Could not load notes."), 500
+
+
 @app.route('/analyze/export', methods=['GET'])
 @login_required
 def analyze_export():
