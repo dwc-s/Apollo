@@ -143,6 +143,67 @@ DBs.
 
 ---
 
+## Analyze (`/analyze`)
+
+Pick which reports to generate from a checkbox list; each report renders
+a chart plus a table of the underlying data and offers CSV / Excel
+downloads.
+
+### Reports
+
+- **Arrows shot vs time** — bar chart of arrows shot per calendar day
+  (zero-fill between the first and last day so practice gaps are
+  visible). Sessions on the same day are summed; the table beneath the
+  chart still lists the underlying per-session counts.
+- **Sessions per day** — same idea but the bar is sessions instead of
+  arrows.
+- **Shots per target (date range)** — every shot you've placed on each
+  target, overlaid on the target face with centroid and group-spread
+  circle. Accepts a date range.
+- **Hits by boundaries** — for targets with scoring zones, counts hits
+  per ring + a replay of every shot on that target.
+- **Accuracy over time** — line chart with three traces per time bucket
+  (day / week / month, auto-picked so you get ~12–40 buckets):
+  - **MPI** — Mean Point of Impact, i.e. distance from target center to
+    the centroid of that bucket's shots. Captures systematic *bias*.
+  - **σ from center** — standard deviation of distance-from-center.
+    The traditional "shots within …" notion.
+  - **Mean normalized distance** — average |shot|. Lower = better.
+
+  Distances are normalized by target half-width so mixed target sizes
+  stay comparable.
+- **Head-to-head comparisons** — see below.
+
+### Head-to-head statistical model
+
+For every pair of bows / arrows / session tags with at least 5 shots
+each, Apollo runs three independent tests on normalized distances:
+
+| Test | Question it answers | Why this test |
+|---|---|---|
+| **Mann-Whitney U** + **Cliff's δ** | Does one piece tend to land closer to center than the other? | Nonparametric — distance-from-center is right-skewed and bounded ≥ 0, so a rank-based test is more honest than Welch's t. Cliff's δ ∈ [−1, +1] is the matching effect size: P(A > B) − P(A < B). |
+| **Brown-Forsythe** (median-centered Levene's) | Does one piece group *tighter* than the other? | Robust to non-normality. Tests equality of spread directly, which is the consistency question separate from accuracy. |
+| **Hotelling's T²** on the 2D centroid | Does one piece systematically push shots in a particular direction (left/right/up/down bias)? | Multivariate analogue of the t-test; treats (cx, cy) as a single 2D measurement rather than collapsing to radius. |
+
+All three p-values are adjusted with **Holm-Bonferroni** within each
+test's family (the set of pairs in the current section), so a "p < 0.05"
+verdict accounts for multiple comparisons.
+
+**Caveat:** shots within a session are correlated (wind, light, fatigue
+all create within-session covariance). None of these tests model that,
+so adjusted p-values understate the true error rate. Treat them as
+exploratory — significant pairs are worth a closer look, but small
+samples or borderline results shouldn't be over-read.
+
+**Implementation:** scipy is a soft dependency. When installed,
+`scipy.stats.mannwhitneyu` / `f.sf` are used directly; otherwise the
+helpers fall back to the normal approximation (Mann-Whitney) or a
+continued-fraction regularized incomplete beta (F-distribution). Both
+paths agree to better-than-display precision for the sample sizes
+/analyze sees.
+
+---
+
 ## Notes
 
 - **Multi-user.** The first account to register inherits any data left

@@ -38,6 +38,7 @@ from flask import (
     Flask, render_template, request, redirect, url_for, session, Response, abort, flash,
     jsonify, g,
 )
+from markupsafe import Markup
 from flask_wtf.csrf import CSRFProtect
 from datetime import datetime, timedelta, timezone
 from zoneinfo import available_timezones
@@ -6706,21 +6707,37 @@ def _report_arrows_vs_time(user_id):
     if not sessions:
         return None
 
+    # Bar chart: arrows per calendar day, with zero-fill between the
+    # first and last days so practice gaps are visible. Session count is
+    # intentionally ignored — the question is volume per day.
+    from collections import Counter
+    per_day = Counter()
+    for s in sessions:
+        per_day[s['begin_time'].date()] += s['arrows_shot']
+    days_sorted = sorted(per_day.keys())
+    first_day, last_day = days_sorted[0], days_sorted[-1]
+    span = (last_day - first_day).days
+    day_series = [
+        (first_day + timedelta(days=i),
+         per_day.get(first_day + timedelta(days=i), 0))
+        for i in range(span + 1)
+    ]
+
     import matplotlib
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
     import matplotlib.dates as mdates
+    from matplotlib.ticker import MaxNLocator
 
     fig, ax = plt.subplots(figsize=(9, 4.5))
-    xs = [s['begin_time'] for s in sessions]
-    ys = [s['arrows_shot'] for s in sessions]
-    ax.bar(xs, ys, width=0.6, color='#4d6da6', edgecolor='#1a3a5c')
-    ax.plot(xs, ys, color='#a1d8ed', marker='o', linewidth=1.2,
-            markeredgecolor='#1a3a5c')
-    ax.set_xlabel('Session start')
+    xs = [datetime.combine(d, datetime.min.time()) for d, _ in day_series]
+    ys = [n for _, n in day_series]
+    ax.bar(xs, ys, width=0.8, color='#4d6da6', edgecolor='#1a3a5c')
+    ax.set_xlabel('Day')
     ax.set_ylabel('Arrows shot')
-    ax.set_title('Arrows shot per session, over time')
+    ax.set_title('Arrows shot per day')
     ax.grid(True, axis='y', linestyle='--', alpha=0.4)
+    ax.yaxis.set_major_locator(MaxNLocator(integer=True))
     locator = mdates.AutoDateLocator()
     ax.xaxis.set_major_locator(locator)
     ax.xaxis.set_major_formatter(mdates.ConciseDateFormatter(locator))
@@ -7178,61 +7195,12 @@ def _report_all_shots_per_target(user_id, date_from=None, date_to=None):
 _HEAD_TO_HEAD_MIN_SHOTS = 5
 
 
-def _welch_ttest(a, b):
-    """Welch's two-sample t-test on hit-distance samples.
-
-    Returns (t, df, p) where p is a two-sided p-value. p is computed
-    from scipy.stats if available, otherwise from a Student-t survival
-    approximation built from a regularized incomplete beta function so
-    /analyze still produces a number without forcing scipy on users.
-    Returns (None, None, None) when either sample is too small or has
-    zero variance (the test is undefined).
-    """
-    n1, n2 = len(a), len(b)
-    if n1 < 2 or n2 < 2:
-        return None, None, None
-    m1 = sum(a) / n1
-    m2 = sum(b) / n2
-    v1 = sum((x - m1) ** 2 for x in a) / (n1 - 1)
-    v2 = sum((x - m2) ** 2 for x in b) / (n2 - 1)
-    if v1 <= 0 and v2 <= 0:
-        return None, None, None
-    se = math.sqrt(v1 / n1 + v2 / n2)
-    if se == 0:
-        return None, None, None
-    t = (m1 - m2) / se
-    num = (v1 / n1 + v2 / n2) ** 2
-    den = (v1 ** 2) / ((n1 ** 2) * (n1 - 1)) + \
-          (v2 ** 2) / ((n2 ** 2) * (n2 - 1))
-    df = num / den if den > 0 else None
-    p = None
-    try:
-        from scipy.stats import t as _t  # type: ignore
-        if df is not None:
-            p = float(2 * _t.sf(abs(t), df))
-    except ImportError:
-        if df is not None:
-            # Two-sided p from the regularized incomplete beta:
-            #   p = I_{df/(df+t^2)}(df/2, 1/2)
-            # math.lgamma gives us Beta via log-gammas, and the
-            # continued-fraction expansion of the incomplete beta is
-            # standard (Numerical Recipes 6.4) and converges fast for
-            # the moderate df / t we see here.
-            x = df / (df + t * t)
-            a_p, b_p = df / 2.0, 0.5
-            try:
-                p = _regularized_incomplete_beta(x, a_p, b_p)
-            except (ValueError, ZeroDivisionError):
-                p = None
-    return t, df, p
-
-
 def _regularized_incomplete_beta(x, a, b):
     """I_x(a, b) via the standard continued-fraction expansion.
 
-    Used as a scipy-free fallback for Welch's t-test p-values. Accurate
-    to ~1e-7 for the (df, t) ranges /analyze produces, which is well
-    inside the precision we actually display.
+    Used as a scipy-free fallback for survival-function p-values on the
+    t and F distributions. Accurate to ~1e-7 for the parameter ranges
+    /analyze produces, which is well inside the precision we display.
     """
     if x <= 0:
         return 0.0
@@ -7277,22 +7245,217 @@ def _regularized_incomplete_beta(x, a, b):
     return front * h
 
 
-def _cohens_d(a, b):
-    """Cohen's d effect size with a pooled standard deviation.
+def _std_normal_cdf(z):
+    """Standard normal CDF via math.erf — no scipy dependency."""
+    return 0.5 * (1.0 + math.erf(z / math.sqrt(2.0)))
 
-    None when either sample is too small to estimate variance.
+
+def _f_sf(f, df1, df2):
+    """Right-tail (survival) probability of an F(df1, df2) random variable.
+
+    Falls back to a regularized incomplete beta when scipy isn't installed.
+    Returns None when the parameters are out of range.
+    """
+    if f is None or f <= 0 or df1 <= 0 or df2 <= 0:
+        return None
+    try:
+        from scipy.stats import f as _f  # type: ignore
+        return float(_f.sf(f, df1, df2))
+    except ImportError:
+        x = df2 / (df2 + df1 * f)
+        try:
+            return _regularized_incomplete_beta(x, df2 / 2.0, df1 / 2.0)
+        except (ValueError, ZeroDivisionError):
+            return None
+
+
+def _median(xs):
+    s = sorted(xs)
+    n = len(s)
+    if n == 0:
+        return 0.0
+    if n % 2:
+        return s[n // 2]
+    return 0.5 * (s[n // 2 - 1] + s[n // 2])
+
+
+def _mann_whitney_u(a, b):
+    """Two-sided Mann-Whitney U on samples ``a`` and ``b``.
+
+    Returns ``(U, p)`` where U is the smaller of the two conventional U
+    statistics. p is the two-sided p-value (scipy when available,
+    otherwise the standard normal approximation with tie + continuity
+    correction). Returns ``(None, None)`` for samples too small to test.
+
+    Preferred over Welch's t for shot-distance data because the
+    underlying distribution is right-skewed and bounded below at 0 —
+    rank-based tests don't care about either.
     """
     n1, n2 = len(a), len(b)
     if n1 < 2 or n2 < 2:
+        return None, None
+    try:
+        from scipy.stats import mannwhitneyu  # type: ignore
+        res = mannwhitneyu(a, b, alternative='two-sided')
+        return float(res.statistic), float(res.pvalue)
+    except ImportError:
+        pass
+
+    # Combined-sample average ranks (1-indexed; ties get the midpoint).
+    combined = [(v, 0) for v in a] + [(v, 1) for v in b]
+    combined.sort(key=lambda x: x[0])
+    ranks = [0.0] * len(combined)
+    i = 0
+    while i < len(combined):
+        j = i
+        while j + 1 < len(combined) and combined[j + 1][0] == combined[i][0]:
+            j += 1
+        avg_rank = (i + j) / 2.0 + 1
+        for k in range(i, j + 1):
+            ranks[k] = avg_rank
+        i = j + 1
+    r1 = sum(r for r, (_, g) in zip(ranks, combined) if g == 0)
+    u1 = r1 - n1 * (n1 + 1) / 2.0
+    u2 = n1 * n2 - u1
+    u = min(u1, u2)
+
+    # Normal approximation with continuity + tie correction.
+    from collections import Counter
+    counts = Counter(v for v, _ in combined)
+    tie_term = sum(t * (t * t - 1) for t in counts.values())
+    N = n1 + n2
+    var = (n1 * n2 / 12.0) * ((N + 1) - tie_term / (N * (N - 1)))
+    if var <= 0:
+        return float(u), None
+    diff = u1 - (n1 * n2 / 2.0)
+    if diff > 0:
+        diff -= 0.5
+    elif diff < 0:
+        diff += 0.5
+    z = diff / math.sqrt(var)
+    p = 2.0 * (1.0 - _std_normal_cdf(abs(z)))
+    return float(u), max(0.0, min(1.0, p))
+
+
+def _cliffs_delta(a, b):
+    """Cliff's δ — nonparametric effect size paired with Mann-Whitney.
+
+    δ = P(a > b) − P(a < b) ∈ [−1, +1]. For distance-from-center data,
+    δ > 0 means ``a``'s shots tend to land farther from center than
+    ``b``'s (i.e., ``b`` is more accurate); δ < 0 means the opposite.
+    Naive O(n·m) implementation — fine at the dataset sizes /analyze sees.
+    """
+    n1, n2 = len(a), len(b)
+    if n1 == 0 or n2 == 0:
         return None
-    m1 = sum(a) / n1
-    m2 = sum(b) / n2
-    v1 = sum((x - m1) ** 2 for x in a) / (n1 - 1)
-    v2 = sum((x - m2) ** 2 for x in b) / (n2 - 1)
-    pooled = math.sqrt(((n1 - 1) * v1 + (n2 - 1) * v2) / (n1 + n2 - 2))
-    if pooled == 0:
-        return None
-    return (m1 - m2) / pooled
+    gt = lt = 0
+    for x in a:
+        for y in b:
+            if x > y:
+                gt += 1
+            elif x < y:
+                lt += 1
+    return (gt - lt) / float(n1 * n2)
+
+
+def _brown_forsythe(a, b):
+    """Brown-Forsythe (median-centered Levene's) test for equality of
+    spread between two samples.
+
+    For 2 groups this reduces algebraically to a two-sample equal-variance
+    t-test on the absolute deviations from each group's median; we report
+    the equivalent F = t² with df=(1, n1+n2-2). Returns
+    ``(F, df1, df2, p)``, or all-None when too small / no spread.
+    """
+    n1, n2 = len(a), len(b)
+    if n1 < 2 or n2 < 2:
+        return None, None, None, None
+    med1 = _median(a)
+    med2 = _median(b)
+    z1 = [abs(x - med1) for x in a]
+    z2 = [abs(x - med2) for x in b]
+    m1 = sum(z1) / n1
+    m2 = sum(z2) / n2
+    df2 = n1 + n2 - 2
+    pooled_ss = sum((x - m1) ** 2 for x in z1) + sum((x - m2) ** 2 for x in z2)
+    s_pooled = pooled_ss / df2
+    if s_pooled <= 0:
+        return None, None, None, None
+    se = math.sqrt(s_pooled * (1.0 / n1 + 1.0 / n2))
+    if se == 0:
+        return None, None, None, None
+    t = (m1 - m2) / se
+    f_stat = t * t
+    return f_stat, 1, df2, _f_sf(f_stat, 1, df2)
+
+
+def _hotelling_t2(a_xy, b_xy):
+    """Two-sample Hotelling's T² on 2D shot vectors (cx, cy per shot).
+
+    Multivariate analogue of the t-test for the centroid; answers
+    "does one piece systematically push shots in a particular direction
+    relative to the other?" Returns ``(T², F, df1, df2, p)`` with df1=2
+    (the two coordinate dimensions) and df2=n1+n2−3.
+
+    Returns all-None when either sample is too small or the pooled
+    covariance is singular (e.g., all shots on a line).
+    """
+    n1, n2 = len(a_xy), len(b_xy)
+    if n1 < 3 or n2 < 3:
+        return None, None, None, None, None
+    mx1 = sum(p[0] for p in a_xy) / n1
+    my1 = sum(p[1] for p in a_xy) / n1
+    mx2 = sum(p[0] for p in b_xy) / n2
+    my2 = sum(p[1] for p in b_xy) / n2
+
+    def _cov(pts, mx, my, n):
+        sxx = sum((p[0] - mx) ** 2 for p in pts) / (n - 1)
+        syy = sum((p[1] - my) ** 2 for p in pts) / (n - 1)
+        sxy = sum((p[0] - mx) * (p[1] - my) for p in pts) / (n - 1)
+        return sxx, syy, sxy
+
+    s1xx, s1yy, s1xy = _cov(a_xy, mx1, my1, n1)
+    s2xx, s2yy, s2xy = _cov(b_xy, mx2, my2, n2)
+    df2_pool = n1 + n2 - 2
+    pxx = ((n1 - 1) * s1xx + (n2 - 1) * s2xx) / df2_pool
+    pyy = ((n1 - 1) * s1yy + (n2 - 1) * s2yy) / df2_pool
+    pxy = ((n1 - 1) * s1xy + (n2 - 1) * s2xy) / df2_pool
+    det = pxx * pyy - pxy * pxy
+    if det <= 0:
+        return None, None, None, None, None
+    inv_xx, inv_yy, inv_xy = pyy / det, pxx / det, -pxy / det
+    dx, dy = mx1 - mx2, my1 - my2
+    t2 = (n1 * n2 / (n1 + n2)) * (
+        dx * dx * inv_xx + 2 * dx * dy * inv_xy + dy * dy * inv_yy
+    )
+    df1 = 2
+    df2 = n1 + n2 - df1 - 1
+    if df2 <= 0:
+        return None, None, None, None, None
+    f_stat = t2 * df2 / (df1 * df2_pool)
+    return t2, f_stat, df1, df2, _f_sf(f_stat, df1, df2)
+
+
+def _holm_bonferroni(p_values):
+    """Step-down Holm correction. Input order is preserved in the output.
+
+    ``None`` entries are passed through unchanged and don't count toward
+    the family size. Adjusted values are clamped to [0, 1] and made
+    monotone in the rank ordering of the originals — the usual guarantee
+    that a smaller raw p never produces a larger adjusted p.
+    """
+    indexed = [(i, p) for i, p in enumerate(p_values) if p is not None]
+    if not indexed:
+        return list(p_values)
+    indexed.sort(key=lambda x: x[1])
+    m = len(indexed)
+    adj = list(p_values)
+    running = 0.0
+    for rank, (orig_i, p) in enumerate(indexed):
+        scaled = min(1.0, p * (m - rank))
+        running = max(running, scaled)
+        adj[orig_i] = running
+    return adj
 
 
 def _equipment_shot_samples(user_id, column):
@@ -7518,6 +7681,10 @@ def _summarize_equipment(shots):
         'centroid_norm': (cx, cy),
         'group_sigma_norm': group_sigma,
         'norm_dists': norm_dists,
+        # Per-shot normalized coords — Hotelling's T² needs the 2D points,
+        # not just the radial distance, to test for centroid-level bias.
+        'xs_norm': xs_norm,
+        'ys_norm': ys_norm,
         'n_targets': len(targets),
     }
 
@@ -7595,6 +7762,11 @@ def _report_equipment_head_to_head(user_id, categories=None, tag_filter=None):
         # equipment shows up at the top of the report.
         names_sorted = sorted(summaries.keys(),
                               key=lambda n: -summaries[n]['n_total'])
+        # ── Pass 1: compute per-pair statistics ──────────────────────
+        # Holm-Bonferroni needs the full set of p-values within a family
+        # before it can adjust any of them, so we defer panel rendering
+        # until the whole pair grid is computed.
+        pair_stats = []
         for i in range(len(names_sorted)):
             for j in range(i + 1, len(names_sorted)):
                 a_name = names_sorted[i]
@@ -7603,123 +7775,207 @@ def _report_equipment_head_to_head(user_id, categories=None, tag_filter=None):
                 b_sum = summaries[b_name]
                 if a_sum['n_hit'] < 2 or b_sum['n_hit'] < 2:
                     continue
-
-                t, df, p = _welch_ttest(a_sum['norm_dists'],
-                                        b_sum['norm_dists'])
-                d_eff = _cohens_d(a_sum['norm_dists'], b_sum['norm_dists'])
-
-                fig, axes = plt.subplots(1, 3, figsize=(11, 4))
-                metric_titles = [
-                    'Hit rate (%)',
-                    'Mean distance from center\n(normalized: 1.0 = target edge)',
-                    'Group spread\n(1σ from centroid, normalized)',
-                ]
-                a_vals = [
-                    a_sum['hit_rate'],
-                    a_sum['mean_norm'],
-                    a_sum['group_sigma_norm'],
-                ]
-                b_vals = [
-                    b_sum['hit_rate'],
-                    b_sum['mean_norm'],
-                    b_sum['group_sigma_norm'],
-                ]
-                for ax, title, av, bv in zip(axes, metric_titles, a_vals, b_vals):
-                    bars = ax.bar([0, 1], [av, bv],
-                                  color=[COLOR_A, COLOR_B],
-                                  edgecolor=EDGE)
-                    ax.set_title(title, fontsize=10)
-                    # No x-tick labels: full names land in the figure-level
-                    # color key above instead. Avoids the overlap problem
-                    # when names are long.
-                    ax.set_xticks([])
-                    ax.grid(True, axis='y', linestyle='--', alpha=0.4)
-                    for bar, v in zip(bars, (av, bv)):
-                        ax.text(bar.get_x() + bar.get_width() / 2,
-                                bar.get_height(),
-                                f'{v:.2f}', ha='center', va='bottom',
-                                fontsize=9)
-                    # Headroom so the value labels above each bar don't
-                    # collide with the title.
-                    ymax = max(av, bv)
-                    if ymax > 0:
-                        ax.set_ylim(0, ymax * 1.18)
-                # Color key: a small swatch for each side maps color → name
-                # so the bar chart itself stays uncluttered.
-                legend_handles = [
-                    Patch(facecolor=COLOR_A, edgecolor=EDGE, label=a_name),
-                    Patch(facecolor=COLOR_B, edgecolor=EDGE, label=b_name),
-                ]
-                fig.legend(handles=legend_handles,
-                           loc='upper center',
-                           bbox_to_anchor=(0.5, 0.90),
-                           ncol=2, frameon=False, fontsize=10)
-                fig.suptitle(f'{label_singular} head-to-head',
-                             fontsize=12, fontweight='bold', y=0.99)
-                # Leave room at the top for both the suptitle and the legend.
-                fig.tight_layout(rect=(0, 0, 1, 0.86))
-                png_b64 = _render_matplotlib_png(fig)
-
-                # Significance verdict — uses the conventional α=0.05
-                # cutoff. "Inconclusive" rather than "not significant"
-                # because small samples often can't reject H0 even
-                # when a real difference exists.
-                if p is None:
-                    verdict = 'Insufficient data for p-value'
-                elif p < 0.001:
-                    verdict = f'Significant (p < 0.001)'
-                elif p < 0.05:
-                    verdict = f'Significant (p = {p:.3f})'
-                else:
-                    verdict = f'Inconclusive (p = {p:.3f})'
-
-                def _fmt(v, digits=2):
-                    return '—' if v is None else f'{v:.{digits}f}'
-
-                columns_out = ['Metric', a_name, b_name]
-                rows_out = [
-                    ['Total shots', a_sum['n_total'], b_sum['n_total']],
-                    ['Hits', a_sum['n_hit'], b_sum['n_hit']],
-                    ['Misses', a_sum['n_miss'], b_sum['n_miss']],
-                    ['Hit rate (%)',
-                     f"{a_sum['hit_rate']:.1f}",
-                     f"{b_sum['hit_rate']:.1f}"],
-                    ['Mean distance from center (mm)',
-                     f"{a_sum['mean_raw_mm']:.1f}",
-                     f"{b_sum['mean_raw_mm']:.1f}"],
-                    ['Mean distance (normalized)',
-                     f"{a_sum['mean_norm']:.3f}",
-                     f"{b_sum['mean_norm']:.3f}"],
-                    ['Std dev of distance (normalized)',
-                     f"{a_sum['std_norm']:.3f}",
-                     f"{b_sum['std_norm']:.3f}"],
-                    ['Centroid offset (X, Y, normalized)',
-                     f"({a_sum['centroid_norm'][0]:.3f}, "
-                     f"{a_sum['centroid_norm'][1]:.3f})",
-                     f"({b_sum['centroid_norm'][0]:.3f}, "
-                     f"{b_sum['centroid_norm'][1]:.3f})"],
-                    ['Group spread (1σ, normalized)',
-                     f"{a_sum['group_sigma_norm']:.3f}",
-                     f"{b_sum['group_sigma_norm']:.3f}"],
-                    ['Distinct targets used',
-                     a_sum['n_targets'], b_sum['n_targets']],
-                    ["Welch's t-statistic", _fmt(t, 3), ''],
-                    ['Degrees of freedom', _fmt(df, 1), ''],
-                    ['p-value (two-sided)',
-                     '—' if p is None else (
-                         '< 0.001' if p < 0.001 else f'{p:.4f}'),
-                     ''],
-                    ["Cohen's d (effect size)", _fmt(d_eff, 3), ''],
-                    ['Verdict (α = 0.05)', verdict, ''],
-                ]
-
-                panels.append({
-                    'key': f'head_to_head__{column}__{a_name}__vs__{b_name}',
-                    'title': f'{label_singular}: {a_name} vs {b_name}',
-                    'png_b64': png_b64,
-                    'columns': columns_out,
-                    'rows': rows_out,
+                a_d = a_sum['norm_dists']
+                b_d = b_sum['norm_dists']
+                u_stat, p_mw = _mann_whitney_u(a_d, b_d)
+                delta = _cliffs_delta(a_d, b_d)
+                f_bf, df1_bf, df2_bf, p_bf = _brown_forsythe(a_d, b_d)
+                a_xy = list(zip(a_sum['xs_norm'], a_sum['ys_norm']))
+                b_xy = list(zip(b_sum['xs_norm'], b_sum['ys_norm']))
+                t2, f_ht, df1_ht, df2_ht, p_ht = _hotelling_t2(a_xy, b_xy)
+                pair_stats.append({
+                    'a_name': a_name, 'b_name': b_name,
+                    'a_sum': a_sum, 'b_sum': b_sum,
+                    'u': u_stat, 'p_mw_raw': p_mw, 'delta': delta,
+                    'f_bf': f_bf, 'df1_bf': df1_bf, 'df2_bf': df2_bf,
+                    'p_bf_raw': p_bf,
+                    't2': t2, 'f_ht': f_ht, 'df1_ht': df1_ht,
+                    'df2_ht': df2_ht, 'p_ht_raw': p_ht,
                 })
+
+        if not pair_stats:
+            continue
+
+        # ── Holm correction per test family ──────────────────────────
+        # Each test type is its own family of pairwise comparisons within
+        # this section. Correcting per family rather than across all three
+        # types keeps the question "did mean accuracy differ?" honest
+        # without dragging in the bias and spread tests as bystanders.
+        p_mw_adj = _holm_bonferroni([ps['p_mw_raw'] for ps in pair_stats])
+        p_bf_adj = _holm_bonferroni([ps['p_bf_raw'] for ps in pair_stats])
+        p_ht_adj = _holm_bonferroni([ps['p_ht_raw'] for ps in pair_stats])
+        for ps, pmw, pbf, pht in zip(pair_stats, p_mw_adj, p_bf_adj, p_ht_adj):
+            ps['p_mw'] = pmw
+            ps['p_bf'] = pbf
+            ps['p_ht'] = pht
+
+        # ── Pass 2: render each pair's panel ─────────────────────────
+        for ps in pair_stats:
+            a_name, b_name = ps['a_name'], ps['b_name']
+            a_sum, b_sum = ps['a_sum'], ps['b_sum']
+
+            fig, axes = plt.subplots(1, 3, figsize=(11, 4))
+            metric_titles = [
+                'Hit rate (%)',
+                'Mean distance from center\n(normalized: 1.0 = target edge)',
+                'Group spread\n(1σ from centroid, normalized)',
+            ]
+            a_vals = [a_sum['hit_rate'], a_sum['mean_norm'],
+                      a_sum['group_sigma_norm']]
+            b_vals = [b_sum['hit_rate'], b_sum['mean_norm'],
+                      b_sum['group_sigma_norm']]
+            for ax, title, av, bv in zip(axes, metric_titles, a_vals, b_vals):
+                bars = ax.bar([0, 1], [av, bv],
+                              color=[COLOR_A, COLOR_B], edgecolor=EDGE)
+                ax.set_title(title, fontsize=10)
+                # Full equipment names live in the figure-level color key
+                # above instead of the x-tick labels so long names don't
+                # overlap.
+                ax.set_xticks([])
+                ax.grid(True, axis='y', linestyle='--', alpha=0.4)
+                for bar, v in zip(bars, (av, bv)):
+                    ax.text(bar.get_x() + bar.get_width() / 2,
+                            bar.get_height(),
+                            f'{v:.2f}', ha='center', va='bottom', fontsize=9)
+                ymax = max(av, bv)
+                if ymax > 0:
+                    ax.set_ylim(0, ymax * 1.18)
+            legend_handles = [
+                Patch(facecolor=COLOR_A, edgecolor=EDGE, label=a_name),
+                Patch(facecolor=COLOR_B, edgecolor=EDGE, label=b_name),
+            ]
+            fig.legend(handles=legend_handles, loc='upper center',
+                       bbox_to_anchor=(0.5, 0.90),
+                       ncol=2, frameon=False, fontsize=10)
+            fig.suptitle(f'{label_singular} head-to-head',
+                         fontsize=12, fontweight='bold', y=0.99)
+            fig.tight_layout(rect=(0, 0, 1, 0.86))
+            png_b64 = _render_matplotlib_png(fig)
+
+            def _fmt(v, digits=3):
+                return '—' if v is None else f'{v:.{digits}f}'
+
+            def _fmt_p(p):
+                if p is None:
+                    return '—'
+                if p < 0.001:
+                    return '< 0.001'
+                return f'{p:.4f}'
+
+            def _verdict(p, label):
+                if p is None:
+                    return f'{label}: insufficient data'
+                if p < 0.05:
+                    return f'{label}: significant (p = {_fmt_p(p)})'
+                return f'{label}: inconclusive (p = {_fmt_p(p)})'
+
+            verdict = ' · '.join([
+                _verdict(ps['p_mw'], 'Mean'),
+                _verdict(ps['p_bf'], 'Spread'),
+                _verdict(ps['p_ht'], 'Bias'),
+            ])
+
+            def _tip(label, tip):
+                # Pre-rendered safe Markup so {{ cell }} doesn't escape the
+                # span. data-tip drives the analyze.html CSS tooltip.
+                from html import escape
+                return Markup(
+                    f'<span data-tip="{escape(tip)}">{escape(label)}</span>'
+                )
+
+            mw_tip = (
+                "Mann-Whitney U: nonparametric test for whether one group's "
+                "shot distances tend to be larger than the other's. Robust "
+                "to skew/outliers — preferred over Student/Welch for "
+                "right-skewed distance data."
+            )
+            delta_tip = (
+                "Cliff's δ: effect size for Mann-Whitney. Range −1…+1. "
+                "Positive means this group's distances tend to exceed the "
+                "other's (i.e., the other group is more accurate); 0 means "
+                "no stochastic ordering."
+            )
+            bf_tip = (
+                "Brown-Forsythe (median-centered Levene's test): tests "
+                "whether the two groups have different spread (consistency). "
+                "A significant result with similar means signals one piece "
+                "groups tighter than the other."
+            )
+            ht_tip = (
+                "Hotelling's T² on the 2D centroid: tests whether one piece "
+                "systematically pushes shots in a particular direction "
+                "(left/right/up/down bias) relative to the other."
+            )
+            holm_tip = (
+                "Holm-Bonferroni step-down adjustment. Multiplies each "
+                "raw p by the family size (number of pairs in this section) "
+                "minus its rank. Keeps the family-wise false-positive rate "
+                "at α even when many pairs are tested."
+            )
+            verdict_tip = (
+                "Per-test verdict at α = 0.05 using Holm-adjusted p-values. "
+                "'Inconclusive' rather than 'not significant' because small "
+                "samples often can't reject H₀ even when a real effect "
+                "exists. Treat as exploratory — shots within a session are "
+                "correlated, which Mann-Whitney doesn't model."
+            )
+
+            columns_out = ['Metric', a_name, b_name]
+            rows_out = [
+                ['Total shots', a_sum['n_total'], b_sum['n_total']],
+                ['Hits', a_sum['n_hit'], b_sum['n_hit']],
+                ['Misses', a_sum['n_miss'], b_sum['n_miss']],
+                ['Hit rate (%)',
+                 f"{a_sum['hit_rate']:.1f}",
+                 f"{b_sum['hit_rate']:.1f}"],
+                ['Mean distance from center (mm)',
+                 f"{a_sum['mean_raw_mm']:.1f}",
+                 f"{b_sum['mean_raw_mm']:.1f}"],
+                ['Mean distance (normalized)',
+                 f"{a_sum['mean_norm']:.3f}",
+                 f"{b_sum['mean_norm']:.3f}"],
+                ['Std dev of distance (normalized)',
+                 f"{a_sum['std_norm']:.3f}",
+                 f"{b_sum['std_norm']:.3f}"],
+                ['Centroid offset (X, Y, normalized)',
+                 f"({a_sum['centroid_norm'][0]:.3f}, "
+                 f"{a_sum['centroid_norm'][1]:.3f})",
+                 f"({b_sum['centroid_norm'][0]:.3f}, "
+                 f"{b_sum['centroid_norm'][1]:.3f})"],
+                ['Group spread (1σ, normalized)',
+                 f"{a_sum['group_sigma_norm']:.3f}",
+                 f"{b_sum['group_sigma_norm']:.3f}"],
+                ['Distinct targets used',
+                 a_sum['n_targets'], b_sum['n_targets']],
+                [_tip('Mann-Whitney U (mean accuracy)', mw_tip),
+                 _fmt(ps['u'], 1), ''],
+                [_tip('p-value, Holm-adjusted (mean)', holm_tip),
+                 _fmt_p(ps['p_mw']), ''],
+                [_tip("Cliff's δ (effect size)", delta_tip),
+                 _fmt(ps['delta']), ''],
+                [_tip('Brown-Forsythe F (spread)', bf_tip),
+                 (f"{ps['f_bf']:.3f} (df={ps['df1_bf']},{ps['df2_bf']})"
+                  if ps['f_bf'] is not None else '—'),
+                 ''],
+                [_tip('p-value, Holm-adjusted (spread)', holm_tip),
+                 _fmt_p(ps['p_bf']), ''],
+                [_tip("Hotelling's T² (2D bias)", ht_tip),
+                 (f"{ps['t2']:.3f} (F={ps['f_ht']:.3f}, "
+                  f"df={ps['df1_ht']},{ps['df2_ht']})"
+                  if ps['t2'] is not None else '—'),
+                 ''],
+                [_tip('p-value, Holm-adjusted (bias)', holm_tip),
+                 _fmt_p(ps['p_ht']), ''],
+                [_tip('Verdict (α = 0.05)', verdict_tip), verdict, ''],
+            ]
+
+            panels.append({
+                'key': f'head_to_head__{column}__{a_name}__vs__{b_name}',
+                'title': f'{label_singular}: {a_name} vs {b_name}',
+                'png_b64': png_b64,
+                'columns': columns_out,
+                'rows': rows_out,
+            })
 
         if panels:
             # ``key`` stays as the catalog key so the template's per-report
@@ -7783,9 +8039,6 @@ def _report_equipment_head_to_head(user_id, categories=None, tag_filter=None):
 # the target's outer edge regardless of target size, so different targets
 # in the same dataset are comparable. Lower numbers = more accurate.
 
-_ACC_NORM_RANGE = 1.2          # heatmap spans [-1.2, 1.2] (slight overshoot
-                               # so just-outside hits still bin)
-_ACC_NORM_BINS  = 20           # 20×20 grid per time bucket
 _ACC_BUCKET_TARGET = (12, 40)  # auto-pick bucket size so count lands here
 
 
@@ -7808,9 +8061,15 @@ def _accuracy_bucket_period(span_days):
 
 
 def _report_accuracy_over_time(user_id, date_from=None, date_to=None):
-    """Per-time-bucket 2D shot-density heatmap (interactive) + line graph
-    of mean normalized distance-from-center over time. Misses excluded;
-    only precise/estimated hits with x,y coords contribute.
+    """Per-time-bucket line graph of three accuracy traces:
+
+      * MPI — Mean Point of Impact, i.e. |centroid|. Captures systematic
+        bias (sight off, anchor drift) independent of grouping.
+      * σ from center — std dev of distance-from-center. Mixes bias and
+        spread, but is what a coach usually means by "shots within …".
+      * Mean normalized distance — average |shot|. Lower is better.
+
+    Misses excluded; only hits with x,y coords contribute.
     """
     range_from = None
     range_to = None
@@ -7913,84 +8172,56 @@ def _report_accuracy_over_time(user_id, date_from=None, date_to=None):
             bucket_order.append(key)
         buckets[key].append((nx, ny, ndist))
 
-    # Build the 2D histogram grid for each bucket.
-    edges = [
-        -_ACC_NORM_RANGE + i * (2 * _ACC_NORM_RANGE / _ACC_NORM_BINS)
-        for i in range(_ACC_NORM_BINS + 1)
-    ]
-    centers = [(edges[i] + edges[i + 1]) / 2.0 for i in range(_ACC_NORM_BINS)]
-
-    def bin_index(v):
-        if v < edges[0] or v > edges[-1]:
-            return None
-        idx = int((v - edges[0]) / (edges[-1] - edges[0]) * _ACC_NORM_BINS)
-        if idx == _ACC_NORM_BINS:
-            idx -= 1
-        return idx
-
-    frames = []
-    line_means = []
-    line_sigmas = []
     line_x = []
+    line_mpi = []
+    line_sigma = []
+    line_mean = []
     rows_out = []
-    zmax = 0
     for key in bucket_order:
         pts = buckets[key]
-        z = [[0 for _ in range(_ACC_NORM_BINS)]
-             for _ in range(_ACC_NORM_BINS)]
-        ndists = []
-        inner_half = 0
-        for nx, ny, ndist in pts:
-            ix = bin_index(nx)
-            iy = bin_index(ny)
-            if ix is not None and iy is not None:
-                z[iy][ix] += 1
-                if z[iy][ix] > zmax:
-                    zmax = z[iy][ix]
-            ndists.append(ndist)
-            if ndist <= 0.5:
-                inner_half += 1
         n = len(pts)
-        mean = sum(ndists) / n if n else 0.0
+        ndists = [p[2] for p in pts]
+        mean_d = sum(ndists) / n if n else 0.0
         if n > 1:
-            var = sum((d - mean) ** 2 for d in ndists) / (n - 1)
+            var = sum((d - mean_d) ** 2 for d in ndists) / (n - 1)
             sigma = math.sqrt(var)
         else:
             sigma = 0.0
+        if n:
+            cx = sum(p[0] for p in pts) / n
+            cy = sum(p[1] for p in pts) / n
+            mpi = math.sqrt(cx * cx + cy * cy)
+        else:
+            mpi = 0.0
         if period_label == 'day':
             label = key.strftime('%Y-%m-%d')
         elif period_label == 'week':
             label = 'Wk of ' + key.strftime('%Y-%m-%d')
         else:
             label = key.strftime('%Y-%m')
-        frames.append({
-            'name': label,
-            'label': label,
-            'z': z,
-        })
         line_x.append(key)
-        line_means.append(mean)
-        line_sigmas.append(sigma)
-        inner_pct = round(inner_half / n * 100, 1) if n else 0.0
+        line_mpi.append(mpi)
+        line_sigma.append(sigma)
+        line_mean.append(mean_d)
         rows_out.append([
-            label, n, round(mean, 3), round(sigma, 3), f'{inner_pct}%'
+            label, n,
+            round(mpi, 3), round(sigma, 3), round(mean_d, 3),
         ])
 
-    # Server-side static line chart of mean ± σ over time.
     import matplotlib
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
     import matplotlib.dates as mdates
 
     fig, ax = plt.subplots(figsize=(9, 4.5))
-    ax.plot(line_x, line_means, color='#1a3a5c', marker='o', linewidth=1.8,
+    ax.plot(line_x, line_mpi, color='#c0392b', marker='o', linewidth=1.8,
+            markersize=5, label='MPI (|centroid|)')
+    ax.plot(line_x, line_sigma, color='#1a7a3a', marker='s', linewidth=1.8,
+            markersize=5, label='σ from center')
+    ax.plot(line_x, line_mean, color='#1a3a5c', marker='^', linewidth=1.8,
             markersize=5, label='Mean normalized distance')
-    upper = [m + s for m, s in zip(line_means, line_sigmas)]
-    lower = [max(0.0, m - s) for m, s in zip(line_means, line_sigmas)]
-    ax.fill_between(line_x, lower, upper, color='#4d6da6', alpha=0.20,
-                    label='±1σ')
     ax.set_xlabel(f'Session start ({period_label} buckets)')
-    ax.set_ylabel('Mean normalized distance from center\n(lower is better)')
+    ax.set_ylabel('Normalized units (1.0 = target edge)\nlower is better')
     ax.set_title('Accuracy over time')
     ax.grid(True, axis='y', linestyle='--', alpha=0.4)
     ax.axhline(0.5, color='#888', linewidth=0.7, linestyle=':')
@@ -8011,47 +8242,22 @@ def _report_accuracy_over_time(user_id, date_from=None, date_to=None):
     else:
         report_title = f'Accuracy over time ({period_label} buckets)'
 
-    # Heatmap panel — client-side Plotly with frame slider.
-    heatmap_panel = {
-        'key': 'accuracy_over_time__heatmap',
-        'title': f'Shot density per {period_label}',
-        'is_interactive': True,
-        'plotly_frames': frames,
-        'plotly_layout': {
-            'title': f'Shot density per {period_label} bucket '
-                     '(slider scrubs through time)',
-            'xs': centers,
-            'ys': centers,
-            'zmax': zmax,
-        },
-        # Same table on both panels would be noisy; only the line-graph
-        # panel carries the table. Provide an empty header so the macro
-        # doesn't choke if the user is in interactive-only branch.
-        'columns': [],
-        'rows': [],
-    }
-
-    line_panel = {
-        'key': 'accuracy_over_time__line',
-        'title': 'Mean normalized distance per bucket',
-        'png_b64': png_b64,
-        'columns': ['Bucket', 'Shots', 'Mean (norm)', 'σ (norm)',
-                    'Within inner half'],
-        'rows': rows_out,
-    }
-
     return {
         'key': 'accuracy_over_time',
         'title': report_title,
-        'panels': [heatmap_panel, line_panel],
+        'png_b64': png_b64,
+        'columns': ['Bucket', 'Shots', 'MPI (norm)', 'σ from center (norm)',
+                    'Mean dist (norm)'],
+        'rows': rows_out,
     }
 
 
 REPORTS = {
     'arrows_vs_time': {
         'label': 'Arrows shot vs time',
-        'description': 'Per-session arrow counts plotted against session '
-                       'start time.',
+        'description': 'Arrows shot per calendar day (empty days included '
+                       'so gaps are visible). Table lists the underlying '
+                       'per-session counts.',
         'fn': _report_arrows_vs_time,
     },
     'sessions_per_day': {
@@ -8081,24 +8287,26 @@ REPORTS = {
     },
     'accuracy_over_time': {
         'label': 'Accuracy over time',
-        'description': 'Interactive shot-density heatmap on the target '
-                       'face with a time slider to scrub between buckets, '
-                       'plus a line graph of mean normalized distance '
-                       'from center over time (lower is better). '
-                       'Distances are normalized by target half-width so '
-                       'mixed targets are comparable.',
+        'description': 'Per-bucket line chart with three traces: MPI '
+                       '(|centroid|), σ from center, and mean normalized '
+                       'distance from center. Lower is better. Distances '
+                       'are normalized by target half-width so mixed '
+                       'targets are comparable.',
         'fn': _report_accuracy_over_time,
         'accepts_date_range': True,
     },
     'equipment_head_to_head': {
         'label': 'Head-to-head comparisons',
         'description': 'Pairwise comparison of every bow, arrow, and '
-                       'session tag you have shot with. Reports per-group '
-                       'accuracy metrics plus Welch\'s t-test and Cohen\'s '
-                       'd so you can see whether a difference between two '
-                       'groups is real or just noise. Distances are '
-                       'normalized by target size so mixed targets are '
-                       'comparable.',
+                       'session tag you have shot with. Three tests per '
+                       'pair: Mann-Whitney U (mean accuracy, with '
+                       "Cliff's δ effect size), Brown-Forsythe (group "
+                       "spread / consistency), and Hotelling's T² (2D "
+                       "centroid bias). p-values are Holm-corrected within "
+                       "each test family. Distances are normalized by "
+                       "target size so mixed targets are comparable. "
+                       "Caveat: shots within a session are correlated, so "
+                       "treat p-values as exploratory.",
         'fn': _report_equipment_head_to_head,
         # Sub-options revealed when this report is ticked. Each entry is
         # forwarded into the report fn as ``categories=[...]``. Defaults

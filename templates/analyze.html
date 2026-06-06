@@ -366,7 +366,7 @@
            one click away. */
         .panel-row {
             display: grid;
-            grid-template-columns: minmax(0, 1fr) 320px;
+            grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
             gap: 18px;
             margin-bottom: 16px;
             align-items: start;
@@ -388,7 +388,6 @@
             overflow: hidden;
             background: #fff;
             width: 100%;
-            max-width: 320px;
         }
         .panel-aside a.chart-thumb img {
             display: block;
@@ -462,6 +461,38 @@
         }
         .report-table tr:nth-child(even) td {
             background: #f4f8fd;
+        }
+        /* CSS tooltip — appears immediately, no browser delay. Mirrors
+           the pattern used in previous_sessions.html. data-tip spans are
+           inserted by the head-to-head report to explain each test row
+           (Mann-Whitney U, Brown-Forsythe, Hotelling's T², etc). */
+        .report-table [data-tip] {
+            position: relative;
+            cursor: help;
+            border-bottom: 1px dotted #6b80a8;
+        }
+        .report-table [data-tip]:hover::after,
+        .report-table [data-tip]:focus-visible::after {
+            content: attr(data-tip);
+            position: absolute;
+            left: 0;
+            bottom: calc(100% + 6px);
+            background: #1a3a5c;
+            color: #eef2f9;
+            font-family: 'Quantico', sans-serif;
+            font-size: 0.75rem;
+            font-weight: 400;
+            letter-spacing: 0;
+            text-transform: none;
+            padding: 6px 10px;
+            border-radius: 4px;
+            white-space: normal;
+            width: max-content;
+            max-width: 280px;
+            line-height: 1.35;
+            box-shadow: 0 2px 6px rgba(0,0,0,0.25);
+            z-index: 5;
+            pointer-events: none;
         }
 
         .download-row {
