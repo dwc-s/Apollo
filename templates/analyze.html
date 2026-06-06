@@ -442,6 +442,26 @@
             margin-bottom: 16px;
         }
 
+        /* Short report-level explainer, rendered between the h3 title
+           and the chart/table panels. Used by accuracy_over_time to
+           define accuracy vs precision in plain English. */
+        .report-card .report-intro {
+            font-family: 'Quantico', sans-serif;
+            font-size: 0.92rem;
+            color: #1a3a5c;
+            background: #eef3fa;
+            border-left: 3px solid #4d6da6;
+            padding: 10px 14px;
+            margin: 0 0 14px 0;
+            line-height: 1.45;
+            max-width: 760px;
+        }
+        .report-card .report-intro strong { color: #c0392b; }
+        .report-card .report-intro em {
+            font-style: italic;
+            color: #1a7a3a;
+        }
+
         .report-table {
             border-collapse: collapse;
             font-family: "Quantico", sans-serif;
@@ -462,10 +482,27 @@
         .report-table tr:nth-child(even) td {
             background: #f4f8fd;
         }
+        /* Section-header rows inside a single result table — used by the
+           shots-per-target stats panel and the head-to-head pair tables
+           to group rows under "Accuracy / Precision / Total error"
+           sub-headings without splitting into multiple tables. The first
+           cell is a Markup'd <em>; the row's other cells are empty. */
+        .report-table tr td em {
+            font-style: normal;
+            font-weight: 600;
+            color: #1a3a5c;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+            font-size: 0.78rem;
+        }
+        .report-table tr td:first-child:has(em) {
+            background: #e3eaf5;
+            border-top: 2px solid #95abcf;
+        }
         /* CSS tooltip — appears immediately, no browser delay. Mirrors
-           the pattern used in previous_sessions.html. data-tip spans are
-           inserted by the head-to-head report to explain each test row
-           (Mann-Whitney U, Brown-Forsythe, Hotelling's T², etc). */
+           the pattern used in previous_sessions.html. data-tip spans
+           explain each statistical test (Mann-Whitney U, Brown-Forsythe,
+           Hotelling's T², …) and each metric (MPI, R95, σ_x/y, …). */
         .report-table [data-tip] {
             position: relative;
             cursor: help;
@@ -480,19 +517,32 @@
             background: #1a3a5c;
             color: #eef2f9;
             font-family: 'Quantico', sans-serif;
-            font-size: 0.75rem;
+            font-size: 0.78rem;
             font-weight: 400;
             letter-spacing: 0;
             text-transform: none;
-            padding: 6px 10px;
+            text-align: left;
+            padding: 8px 12px;
             border-radius: 4px;
             white-space: normal;
-            width: max-content;
-            max-width: 280px;
-            line-height: 1.35;
+            /* Wide-and-short instead of tall-and-narrow. 360px is
+               roughly 4:3 for a 3-line paragraph at our font size;
+               min-width keeps short tips from squeezing into a
+               vertical strip. */
+            width: 360px;
+            min-width: 220px;
+            line-height: 1.4;
             box-shadow: 0 2px 6px rgba(0,0,0,0.25);
             z-index: 5;
             pointer-events: none;
+        }
+        /* Header tooltips drop *below* the cell — the row sits at the
+           top of .report-table-wrapper, whose overflow-x:auto silently
+           clips overflow-y too, so an upward tooltip is hidden. */
+        .report-table th [data-tip]:hover::after,
+        .report-table th [data-tip]:focus-visible::after {
+            bottom: auto;
+            top: calc(100% + 6px);
         }
 
         .download-row {
@@ -799,6 +849,7 @@
     {% for r in results %}
     <section class="report-card">
         <h3>{{ r.title }}</h3>
+        {% if r.intro_html %}{{ r.intro_html }}{% endif %}
         {% if r.empty %}
             <p class="report-empty">{{ r.empty_reason or 'No data yet — shoot a session first.' }}</p>
         {% elif r.panels %}
@@ -958,10 +1009,30 @@
 
 <script>
 const UNITS_KEY = 'apollo_units';
+const MM_PER_IN = 25.4;
+// Convert every server-rendered mm cell on the page when the user
+// toggles units. Each value cell is a <span class="metric-len"
+// data-mm="33.4">…</span>; each unit label is a <span
+// class="metric-unit">mm</span>. Both classes are independent so a
+// tuple cell like "(Δx, Δy) mm" round-trips cleanly.
 function applyUnits() {
     const imperial = localStorage.getItem(UNITS_KEY) === 'imperial';
     document.getElementById('units-toggle').textContent =
         imperial ? '⇄ Metric' : '⇄ Imperial';
+    document.querySelectorAll('.metric-unit').forEach(el => {
+        el.textContent = imperial ? 'in' : 'mm';
+    });
+    document.querySelectorAll('.metric-len').forEach(el => {
+        const mm = parseFloat(el.dataset.mm);
+        if (isNaN(mm)) return;
+        if (imperial) {
+            el.textContent = (mm / MM_PER_IN).toFixed(2);
+        } else {
+            // Round to 1 decimal in metric — matches the precision the
+            // server originally rendered, so the toggle is a true round-trip.
+            el.textContent = mm.toFixed(1);
+        }
+    });
 }
 document.getElementById('units-toggle').addEventListener('click', () => {
     const current = localStorage.getItem(UNITS_KEY) || 'metric';

@@ -41,7 +41,7 @@ from flask import (
 from markupsafe import Markup
 from flask_wtf.csrf import CSRFProtect
 from datetime import datetime, timedelta, timezone
-from zoneinfo import available_timezones
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError, available_timezones
 
 # Sorted IANA timezone list, computed once at import. ~600 entries; cheap
 # to ship into every authenticated page render via the context processor
@@ -866,6 +866,62 @@ def _parse_session_dt(raw):
     return None
 
 
+def _user_tz():
+    """Resolve the signed-in user's IANA zone, falling back to UTC.
+
+    Called from request handlers where ``current_user()`` is cheap (memoized
+    on flask.g). Anonymous requests and unknown zone names both fall back
+    to UTC so callers never have to guard the return value.
+    """
+    name = 'UTC'
+    if current_user_id() is not None:
+        user = current_user()
+        if user is not None:
+            try:
+                name = user['timezone'] or 'UTC'
+            except (KeyError, IndexError, TypeError):
+                name = 'UTC'
+    try:
+        return ZoneInfo(name)
+    except ZoneInfoNotFoundError:
+        return ZoneInfo('UTC')
+
+
+def _utc_to_user(val):
+    """Convert a stored UTC-naive datetime (or DT-shaped string) into the
+    user's zone. Returns a tz-aware datetime, or None on unparseable input.
+    """
+    if val is None:
+        return None
+    if isinstance(val, datetime):
+        dt = val
+    else:
+        dt = _parse_session_dt(str(val))
+        if dt is None:
+            return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(_user_tz())
+
+
+def _format_session_dt_user(val):
+    """Render a stored UTC datetime as a wall-clock string in the user's zone."""
+    dt = _utc_to_user(val)
+    return dt.strftime(SESSION_DT_FMT) if dt is not None else ''
+
+
+def _parse_session_dt_user(raw):
+    """Parse a user-typed local datetime string and return UTC-naive.
+
+    Mirrors the storage convention: every DB datetime is naive UTC, so the
+    user types in their own zone and we convert before persisting.
+    """
+    naive = _parse_session_dt(raw)
+    if naive is None:
+        return None
+    return naive.replace(tzinfo=_user_tz()).astimezone(timezone.utc).replace(tzinfo=None)
+
+
 def get_stats(session_id, user_id):
     """Compute summary stats for one session, scoped to one user.
 
@@ -955,7 +1011,9 @@ def get_stats(session_id, user_id):
         pretty_session_length = f'{hours + days * 24} hours, {minutes} minutes, {seconds} seconds'
     stats.update({"days": days, "hours": hours, "minutes": minutes, "seconds": seconds})
     stats.update({"pretty_session_length": pretty_session_length})
-    stats.update({"session_date": dt1.strftime('%Y-%m-%d')})
+    # Localize the date to the user's zone so a 23:30 PT session doesn't
+    # show as "tomorrow" just because the stored timestamp is UTC.
+    stats.update({"session_date": (_utc_to_user(dt1) or dt1).strftime('%Y-%m-%d')})
     try: # get number of arrows shot
         with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
             res = cur.execute(
@@ -1198,10 +1256,11 @@ users_table = Table('users', metadata,
     # install.py). No UI for granting/revoking root: keep promotion out-of-band
     # to avoid an admin race in the app itself.
     Column('is_root', Integer, server_default=text('0')),
-    # IANA timezone name (e.g. "America/Denver"). The server clock is UTC;
-    # this is the zone we localize *display* timestamps into. Free-text-ish
-    # but validated against zoneinfo.available_timezones() on write, so a
-    # stale row never feeds an invalid name to ZoneInfo().
+    # IANA timezone name (e.g. "America/Denver"). All DB datetimes are
+    # naive-UTC; helpers _utc_to_user / _format_session_dt_user convert
+    # to this zone for display, and _parse_session_dt_user converts user
+    # input back to UTC. Validated against zoneinfo.available_timezones()
+    # on write, so a stale row never feeds an invalid name to ZoneInfo().
     Column('timezone', String(64), server_default=text("'UTC'")),
 )
 
@@ -4818,13 +4877,17 @@ def _session_matches_filters(rows, target_cfg, filters):
 
 
 def _ts_date_str(value):
-    """Coerce a stored timestamp to a YYYY-MM-DD string for date filtering."""
+    """Coerce a stored timestamp to a YYYY-MM-DD string for date filtering.
+
+    Returns the *user's local* date — the date-from/date-to bounds in the
+    search bar are typed in the user's wall-clock, so a late-evening shot
+    in UTC-7 must compare against the date the user actually shot it on,
+    not the UTC date.
+    """
     if value is None:
         return ''
-    if isinstance(value, datetime):
-        return value.strftime('%Y-%m-%d')
-    s = str(value)
-    return s[:10]
+    dt = _utc_to_user(value)
+    return dt.strftime('%Y-%m-%d') if dt is not None else str(value)[:10]
 
 
 @app.route('/delete_session/<int:session_id>', methods=['POST'])
@@ -5029,7 +5092,7 @@ def edit_session(session_id):
         yraw = str(r['y_coord']).strip() if r['y_coord'] is not None else ''
         shot_view.append({
             'id':        int(r['id']),
-            'timestamp': r['timestamp'],
+            'timestamp': _format_session_dt_user(r['timestamp']) or r['timestamp'],
             'x':         xraw,
             'y':         yraw,
             'is_miss':   (xraw == MISS_SENTINEL and yraw == MISS_SENTINEL),
@@ -5106,8 +5169,8 @@ def end_session():
 
         return render_template('end_session.html',
                                session_id=session_id,
-                               begin_time=_format_session_dt(begin_time),
-                               end_time=_format_session_dt(_app_now()),
+                               begin_time=_format_session_dt_user(begin_time),
+                               end_time=_format_session_dt_user(_app_now()),
                                stats=None)
 
     # POST: finalize session
@@ -5123,14 +5186,14 @@ def end_session():
 
     begin_time_raw = request.form.get('session_begin_time', '').strip()
     end_time_raw = request.form.get('session_end_time', '').strip()
-    parsed_begin = _parse_session_dt(begin_time_raw)
-    parsed_end = _parse_session_dt(end_time_raw)
+    parsed_begin = _parse_session_dt_user(begin_time_raw)
+    parsed_end = _parse_session_dt_user(end_time_raw)
     if parsed_begin is None or parsed_end is None:
         return render_template(
             'end_session.html',
             session_id=session_id,
-            begin_time=begin_time_raw or _format_session_dt(_app_now()),
-            end_time=end_time_raw or _format_session_dt(_app_now()),
+            begin_time=begin_time_raw or _format_session_dt_user(_app_now()),
+            end_time=end_time_raw or _format_session_dt_user(_app_now()),
             error="Times must be in the format YYYY-MM-DD HH:MM:SS.",
             stats=None,
         )
@@ -5924,6 +5987,100 @@ def _fetch_target_zones(target_id, user_id):
         ).fetchall()
 
 
+def _sample_zone_colors(zones, target_cfg, fallback_count=None):
+    """Return a list of hex color strings sampled from the target image,
+    one per zone, ordered to match ``zones`` (innermost ring first).
+
+    For each ring we sample the pixel at the mid-radius between this
+    ring and the next inward one, along the +y axis (top of the face).
+    The sample is averaged over a small neighbourhood to smooth out
+    JPEG noise. Returns a synthetic warm-to-cool gradient if the image
+    can't be loaded so the report still renders.
+    """
+    n_rings = fallback_count if fallback_count is not None else len(zones)
+
+    def _fallback_gradient(n):
+        out = []
+        for i in range(n):
+            t = i / max(n - 1, 1)
+            r = int(255 - 110 * t)
+            g = int(170 - 60 * t)
+            b = int(40 + 150 * t)
+            out.append(f'#{r:02x}{g:02x}{b:02x}')
+        return out
+
+    if not zones:
+        return _fallback_gradient(n_rings)
+
+    img_disk_path = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), 'static',
+        target_cfg.get('target_image', '')
+    )
+    try:
+        from PIL import Image as PILImage
+        bg = PILImage.open(img_disk_path).convert('RGB')
+    except (FileNotFoundError, OSError, ValueError):
+        return _fallback_gradient(n_rings)
+
+    width_px, height_px = bg.size
+    half_mm = float(target_cfg['target_width_mm']) / 2.0
+    if half_mm <= 0:
+        return _fallback_gradient(n_rings)
+    px_per_mm = (width_px / 2.0) / half_mm
+    cx_px = width_px / 2.0
+    cy_px = height_px / 2.0
+
+    # zones are sorted innermost-out; iterate the same way so colors
+    # line up with the bar order (innermost first).
+    colors = []
+    inner_radius_mm = 0.0
+    for z in zones:
+        try:
+            outer_radius_mm = float(z['radius_mm'])
+        except (TypeError, ValueError, KeyError):
+            colors.append(None)
+            continue
+        # Sample 85% of the way from the inner ring boundary to the
+        # outer one — close enough to the outer edge to avoid the X mark
+        # / central cross / spider that often sits at the bullseye, but
+        # still inside the ring band that owns this radius.
+        mid_radius_mm = inner_radius_mm + 0.85 * (outer_radius_mm - inner_radius_mm)
+        inner_radius_mm = outer_radius_mm
+
+        # Sample along +y (above center). PIL's y-axis points down, so
+        # +y in target space → smaller pixel-y. Average a 3×3 patch for
+        # JPEG noise robustness.
+        sample_y_px = cy_px - mid_radius_mm * px_per_mm
+        sample_x_px = cx_px
+        if not (0 <= sample_x_px < width_px and 0 <= sample_y_px < height_px):
+            colors.append(None)
+            continue
+        r_sum = g_sum = b_sum = 0
+        samples = 0
+        for dy in (-1, 0, 1):
+            for dx in (-1, 0, 1):
+                px = int(round(sample_x_px + dx))
+                py = int(round(sample_y_px + dy))
+                if 0 <= px < width_px and 0 <= py < height_px:
+                    pr, pg, pb = bg.getpixel((px, py))
+                    r_sum += pr
+                    g_sum += pg
+                    b_sum += pb
+                    samples += 1
+        if samples == 0:
+            colors.append(None)
+            continue
+        r = r_sum // samples
+        g = g_sum // samples
+        b = b_sum // samples
+        colors.append(f'#{r:02x}{g:02x}{b:02x}')
+
+    # Patch any None entries with the fallback gradient at the same index
+    # so the bar chart never gets a missing color.
+    fg = _fallback_gradient(n_rings)
+    return [c if c is not None else fg[i] for i, c in enumerate(colors)]
+
+
 def _zones_define_scoring(zones):
     """True when this set of zones can be used to tally points.
 
@@ -6684,20 +6841,12 @@ def _report_arrows_vs_time(user_id):
 
     sessions = []
     for r in rows:
-        begin_raw = r['session_begin_time']
-        if isinstance(begin_raw, datetime):
-            begin_dt = begin_raw
-        else:
-            s = str(begin_raw).strip()
-            begin_dt = None
-            for fmt in (SESSION_DT_FMT_WITH_MS, SESSION_DT_FMT):
-                try:
-                    begin_dt = datetime.strptime(s, fmt)
-                    break
-                except ValueError:
-                    continue
-            if begin_dt is None:
-                continue
+        begin_dt = _utc_to_user(r['session_begin_time'])
+        if begin_dt is None:
+            continue
+        # Strip tzinfo so matplotlib date axes (and pure-date bucketing)
+        # work on a homogeneous naive local-wall-clock value.
+        begin_dt = begin_dt.replace(tzinfo=None)
         sessions.append({
             'session_id': int(r['session_id']),
             'begin_time': begin_dt,
@@ -6773,20 +6922,9 @@ def _report_sessions_per_day(user_id):
     from collections import Counter
     counts = Counter()
     for r in rows:
-        begin_raw = r['session_begin_time']
-        if isinstance(begin_raw, datetime):
-            begin_dt = begin_raw
-        else:
-            s = str(begin_raw).strip()
-            begin_dt = None
-            for fmt in (SESSION_DT_FMT_WITH_MS, SESSION_DT_FMT):
-                try:
-                    begin_dt = datetime.strptime(s, fmt)
-                    break
-                except ValueError:
-                    continue
-            if begin_dt is None:
-                continue
+        begin_dt = _utc_to_user(r['session_begin_time'])
+        if begin_dt is None:
+            continue
         counts[begin_dt.date()] += 1
 
     if not counts:
@@ -6912,17 +7050,15 @@ def _report_hits_by_boundaries(user_id):
         labels.append('Miss')
         counts.append(miss)
 
-        # Color gradient: warm at the center, cool toward the edge, red
-        # miss. Mirrors the convention on the target image.
-        colors = []
-        n_rings = len(zones)
-        for i in range(n_rings):
-            t = i / max(n_rings - 1, 1)
-            r = int(255 - 110 * t)
-            g = int(170 - 60 * t)
-            b = int(40 + 150 * t)
-            colors.append(f'#{r:02x}{g:02x}{b:02x}')
-        colors.append('#e53935')   # miss
+        # Bar colors sampled directly from the target image at each ring's
+        # mid-radius — works for any face the user uploads (NASP, FITA,
+        # 3D animal, custom) instead of guessing with a synthetic
+        # gradient. Falls back to the old warm-to-cool ramp if the image
+        # can't be loaded.
+        colors = _sample_zone_colors(
+            zones, target_cfg, fallback_count=len(zones)
+        )
+        colors.append('#e53935')   # miss bar — vivid red regardless
 
         fig, ax = plt.subplots(figsize=(7.5, 4.5))
         bars = ax.bar(labels, counts, color=colors, edgecolor='#1a3a5c')
@@ -7029,7 +7165,7 @@ def _report_all_shots_per_target(user_id, date_from=None, date_to=None):
     import matplotlib
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
-    from matplotlib.patches import Circle
+    from matplotlib.patches import Circle, Ellipse, FancyArrow
 
     panels = []
     for trow in target_rows:
@@ -7097,25 +7233,63 @@ def _report_all_shots_per_target(user_id, date_from=None, date_to=None):
         ax.set_ylim(-half, half)
         ax.set_aspect('equal')
 
-        if hits > 0:
+        stats = _archery_stats(xs, ys) if hits > 0 else None
+        if stats is not None:
             ax.scatter(xs, ys, s=42,
                        facecolors='#fcba03', edgecolors='#1a3a5c',
                        linewidths=0.6, alpha=0.55, zorder=3)
-            mean_x = sum(xs) / hits
-            mean_y = sum(ys) / hits
-            # Standard deviation of distance-from-centroid — a single
-            # circle gives a clean "group size" indicator without the
-            # extra cognitive load of a tilted covariance ellipse.
-            dists = [math.sqrt((x - mean_x) ** 2 + (y - mean_y) ** 2)
-                     for x, y in zip(xs, ys)]
-            sigma = math.sqrt(sum(d * d for d in dists) / hits) if hits else 0
-            ax.add_patch(Circle((mean_x, mean_y), sigma,
+            mean_x, mean_y = stats['centroid']
+            # Concentric precision rings: solid Mean Radius (typical
+            # group size), dashed R95 (95% containment). Both are
+            # measured about the *centroid*, so they describe precision
+            # independent of how far the centroid drifted from the bull.
+            ax.add_patch(Circle((mean_x, mean_y), stats['mr'],
                                 fill=False, edgecolor='#00e0ff',
-                                linewidth=1.8, linestyle='--', zorder=4))
+                                linewidth=1.6, linestyle='-', zorder=4,
+                                label='MR'))
+            ax.add_patch(Circle((mean_x, mean_y), stats['r95'],
+                                fill=False, edgecolor='#9ad0ff',
+                                linewidth=1.4, linestyle='--', zorder=4,
+                                label='R95'))
+            # Faint 1σ covariance ellipse — exposes stringing (vertical or
+            # horizontal elongation) that the radial circles hide.
+            if stats['sigma_x'] > 0 and stats['sigma_y'] > 0:
+                # Eigen-decompose the 2×2 covariance to get the ellipse
+                # axes/angle (same math the elliptical R95 branch uses).
+                sxx = stats['sigma_x'] ** 2
+                syy = stats['sigma_y'] ** 2
+                sxy = stats['rho'] * stats['sigma_x'] * stats['sigma_y']
+                tr = sxx + syy
+                disc = max(0.0, tr * tr / 4.0 - (sxx * syy - sxy * sxy))
+                lam1 = tr / 2.0 + math.sqrt(disc)
+                lam2 = tr / 2.0 - math.sqrt(disc)
+                if abs(sxy) < 1e-12 and abs(sxx - syy) < 1e-12:
+                    angle_deg = 0.0
+                else:
+                    angle_deg = math.degrees(
+                        0.5 * math.atan2(2 * sxy, sxx - syy)
+                    )
+                ax.add_patch(Ellipse(
+                    (mean_x, mean_y),
+                    2 * math.sqrt(max(0.0, lam1)),
+                    2 * math.sqrt(max(0.0, lam2)),
+                    angle=angle_deg,
+                    fill=False, edgecolor='#ffffff', alpha=0.55,
+                    linewidth=1.0, linestyle=':', zorder=4))
+            # Bias arrow from bullseye to centroid — direction the sight
+            # needs to move (or the form needs to compensate for).
+            if stats['mpi'] > 0:
+                ax.add_patch(FancyArrow(
+                    0, 0, mean_x, mean_y,
+                    length_includes_head=True,
+                    width=max(half * 0.004, 0.4),
+                    head_width=max(half * 0.018, 2.5),
+                    head_length=max(half * 0.025, 3.5),
+                    color='#ff3366', alpha=0.85, zorder=5))
             ax.plot(mean_x, mean_y, marker='x', color='#ff3366',
-                    markersize=14, markeredgewidth=2.4, zorder=5)
+                    markersize=14, markeredgewidth=2.4, zorder=6)
         else:
-            mean_x = mean_y = sigma = 0
+            mean_x = mean_y = 0
 
         # Crosshair through target center for left/right and high/low bias.
         ax.axhline(0, color=(1, 1, 1, 0.25), linewidth=0.6, linestyle=':')
@@ -7136,12 +7310,11 @@ def _report_all_shots_per_target(user_id, date_from=None, date_to=None):
         ax.set_ylabel('Y (mm from center)')
         png_b64 = _render_matplotlib_png(fig)
 
-        # Summary stats table — per-shot rows would be huge and not very
-        # useful, so we surface the numbers that describe the cluster.
+        # Summary stats table — split into Accuracy (where the centroid
+        # sits relative to the bull) and Precision (how tight the group
+        # is, independent of where it sits). Misses don't contribute to
+        # either — they're already in the count row above.
         hit_rate = round(hits / total * 100, 1) if total else 0.0
-        mean_dist_from_center = (
-            sum(math.sqrt(x * x + y * y) for x, y in zip(xs, ys)) / hits
-        ) if hits else 0
         columns = ['Metric', 'Value']
         rows_out = [
             ['Total shots', total],
@@ -7149,13 +7322,68 @@ def _report_all_shots_per_target(user_id, date_from=None, date_to=None):
             ['Misses', miss],
             ['Hit rate', f'{hit_rate}%'],
         ]
-        if hits > 0:
+        if stats is not None:
+            mpi_mm = stats['mpi']
+            bx_mm, by_mm = stats['bias_xy']
+            r95_mm = stats['r95']
+            mr_mm = stats['mr']
+            sx_mm = stats['sigma_x']
+            sy_mm = stats['sigma_y']
+            es_mm = stats['extreme_spread']
+            mpi_tip = (
+                "MPI (Mean Point of Impact): magnitude of the group's "
+                "centroid offset from the bullseye. Pure accuracy — "
+                "fix with sight or anchor adjustments, not tuning."
+            )
+            bias_tip = (
+                "Signed bias of the centroid: (Δx, Δy). Direction tells "
+                "you which way to move the sight, not just by how much."
+            )
+            r95_tip = (
+                "R95: radius about the group's own centroid that contains "
+                "95% of its shots. The headline precision number — "
+                "independent of where the centroid sits."
+            )
+            r95_empirical_tip = (
+                f"R95 from empirical percentile because n={stats['n']} is "
+                "below the Rayleigh-fit threshold of 10 shots. Treat as "
+                "approximate until you have more data."
+            )
+            mr_tip = (
+                "Mean Radius: average distance of each shot from the "
+                "group's own centroid. Secondary precision number, "
+                "canonical in shooting-sport testing."
+            )
+            sigma_tip = (
+                "σ_x / σ_y: per-axis standard deviation about the centroid. "
+                "Large σ_y with small σ_x is vertical stringing (release "
+                "or anchor variation); the reverse is horizontal stringing "
+                "(bow torque or grip)."
+            )
+            es_tip = (
+                "Extreme spread: largest pairwise distance between any two "
+                "shots in the group. Familiar from firearm and 3D archery "
+                "scoring — sensitive to one bad shot."
+            )
+            if stats['is_empirical']:
+                r95_label = _tip(f"R95 — empirical, n={stats['n']}",
+                                 r95_empirical_tip)
+            else:
+                r95_label = _tip('R95', r95_tip)
             rows_out.extend([
-                ['Group centroid (X, Y mm)',
-                 f'({round(mean_x, 1)}, {round(mean_y, 1)})'],
-                ['Group spread (1σ radius, mm)', round(sigma, 1)],
-                ['Mean distance from center (mm)',
-                 round(mean_dist_from_center, 1)],
+                [Markup('<em>— Accuracy —</em>'), ''],
+                [_tip('MPI', mpi_tip),
+                 Markup(f'{_mm_val(mpi_mm)} {_mm_unit()}')],
+                [_tip('Bias Δx, Δy (signed)', bias_tip),
+                 _mm_pair(bx_mm, by_mm)],
+                [Markup('<em>— Precision —</em>'), ''],
+                [r95_label, Markup(f'{_mm_val(r95_mm)} {_mm_unit()}')],
+                [_tip('Mean Radius', mr_tip),
+                 Markup(f'{_mm_val(mr_mm)} {_mm_unit()}')],
+                [_tip('σ_x, σ_y', sigma_tip),
+                 _mm_pair(sx_mm, sy_mm)],
+                [_tip('Extreme spread', es_tip),
+                 Markup(f'{_mm_val(es_mm)} {_mm_unit()}')],
             ])
 
         panels.append({
@@ -7458,6 +7686,199 @@ def _holm_bonferroni(p_values):
     return adj
 
 
+# Chi-square critical values for a 2-DOF distribution at common percentiles.
+# Used as the scipy-free fallback when computing CEP / R95 from a fitted 2D
+# Gaussian. R = sqrt(chi2_ppf(q, df=2) * λ) for the isotropic case; for the
+# general case we substitute the geometric mean of the covariance eigenvalues.
+# (chi2_ppf(0.5, 2) = 2·ln(2) ≈ 1.3863, chi2_ppf(0.95, 2) = 2·ln(20) ≈ 5.9915.)
+_CHI2_2DOF_50 = 2.0 * math.log(2.0)
+_CHI2_2DOF_95 = 2.0 * math.log(20.0)
+
+
+def _chi2_ppf_df2(q):
+    """Inverse CDF of χ²(df=2) at quantile q. Closed-form for df=2:
+    F(x) = 1 - exp(-x/2)  ⇒  x = -2·ln(1 - q). No scipy needed."""
+    if q <= 0:
+        return 0.0
+    if q >= 1:
+        return float('inf')
+    return -2.0 * math.log(1.0 - q)
+
+
+def _tip(label, tip):
+    """Wrap a table-cell or column-header label in a CSS-tooltip span.
+
+    The ``[data-tip]`` selector in analyze.html shows the tip on hover
+    without browser delay. Returned as Markup so Jinja's autoescape
+    leaves the span intact; the export sanitizer in ``analyze_export``
+    strips the tag back out for CSV/XLSX downloads.
+    """
+    from html import escape
+    return Markup(
+        f'<span data-tip="{escape(tip)}">{escape(label)}</span>'
+    )
+
+
+def _mm_val(mm, decimals=1):
+    """Render a millimetre measurement as a client-toggleable span.
+
+    The analyze.html ``applyUnits()`` JS reads ``data-mm`` and rewrites
+    the inner text on the imperial toggle (mm/25.4, two-decimal inches).
+    The export sanitizer strips the span tag so CSV/XLSX cells keep the
+    raw mm value — server-side downloads always speak metric.
+    """
+    if mm is None:
+        return Markup('—')
+    try:
+        v = float(mm)
+    except (TypeError, ValueError):
+        return Markup('—')
+    return Markup(
+        f'<span class="metric-len" data-mm="{v:.4f}">'
+        f'{v:.{decimals}f}</span>'
+    )
+
+
+def _mm_unit():
+    """Render the "mm" unit label as a client-toggleable span.
+
+    On imperial toggle the same JS swaps the text to "in", so labels
+    like "MPI (mm)" become "MPI (in)" without a page reload.
+    """
+    return Markup('<span class="metric-unit">mm</span>')
+
+
+def _mm_pair(mm_x, mm_y, decimals=1):
+    """Render a paired (Δx, Δy) mm measurement with one toggleable unit
+    label at the end. Used for centroid bias and σ_x/σ_y tuple cells."""
+    return Markup(
+        f'({_mm_val(mm_x, decimals)}, {_mm_val(mm_y, decimals)}) '
+        f'{_mm_unit()}'
+    )
+
+
+def _archery_stats(xs, ys):
+    """Per-group accuracy + precision stats from a 2D shot cloud.
+
+    Inputs are parallel x/y arrays in any consistent coordinate frame
+    (the caller handles mm vs normalized). Splits the two archery error
+    modes cleanly:
+
+      * Accuracy  = bias of the group centroid relative to (0, 0). MPI is
+        the magnitude; (bias_x, bias_y) carries the direction so the user
+        knows which way to move the sight.
+      * Precision = spread *about the group's own centroid* — independent
+        of bias. Reported as Mean Radius (MR), σ-about-centroid (sigma_r,
+        unbiased), per-axis σ_x / σ_y for stringing, and R95 from a fitted
+        bivariate normal.
+
+    R95 / CEP use the elliptical formula when the fit shows tilt or
+    elongation; otherwise the Rayleigh closed form. For samples below
+    ``min_n_for_fit`` we fall back to empirical percentiles.
+
+    Returns ``None`` if no shots supplied.
+    """
+    n = len(xs)
+    if n == 0 or n != len(ys):
+        return None
+
+    cx = sum(xs) / n
+    cy = sum(ys) / n
+    mpi = math.sqrt(cx * cx + cy * cy)
+
+    # Distances from the group's *own* centroid — the precision raw material.
+    dists_from_centroid = [
+        math.sqrt((x - cx) ** 2 + (y - cy) ** 2) for x, y in zip(xs, ys)
+    ]
+    mr = sum(dists_from_centroid) / n
+    extreme_spread = 0.0
+    if n >= 2:
+        # Naive O(n²) pairwise — fine at the dataset sizes /analyze sees.
+        for i in range(n):
+            for j in range(i + 1, n):
+                d = math.sqrt((xs[i] - xs[j]) ** 2 + (ys[i] - ys[j]) ** 2)
+                if d > extreme_spread:
+                    extreme_spread = d
+
+    if n >= 2:
+        var_x = sum((x - cx) ** 2 for x in xs) / (n - 1)
+        var_y = sum((y - cy) ** 2 for y in ys) / (n - 1)
+        cov_xy = sum((x - cx) * (y - cy) for x, y in zip(xs, ys)) / (n - 1)
+        sigma_x = math.sqrt(max(0.0, var_x))
+        sigma_y = math.sqrt(max(0.0, var_y))
+        denom_rho = sigma_x * sigma_y
+        rho = cov_xy / denom_rho if denom_rho > 0 else 0.0
+        # 1σ radius about centroid: RMS of distance-from-centroid, n-1 normed.
+        sigma_r = math.sqrt(max(0.0, var_x + var_y))
+    else:
+        sigma_x = sigma_y = sigma_r = 0.0
+        cov_xy = 0.0
+        rho = 0.0
+
+    # Bounding box for plot scaling.
+    bbox_w = (max(xs) - min(xs)) if n else 0.0
+    bbox_h = (max(ys) - min(ys)) if n else 0.0
+
+    # CEP / R95: fit-based for n ≥ 10, empirical otherwise. The Rayleigh
+    # closed form (R_q = σ·√(-2·ln(1-q))) needs σ_x ≈ σ_y and ρ ≈ 0; when
+    # those don't hold we use the eigenvalue product of the covariance
+    # matrix, equivalent to the standard bivariate-normal ellipse area.
+    is_empirical = n < 10
+    if is_empirical:
+        sorted_d = sorted(dists_from_centroid)
+        if n == 0:
+            cep = 0.0
+            r95 = 0.0
+        else:
+            # Nearest-rank percentile; with small n this is the honest answer.
+            def _pct(p):
+                if n == 1:
+                    return sorted_d[0]
+                k = max(0, min(n - 1, int(math.ceil(p * n)) - 1))
+                return sorted_d[k]
+            cep = _pct(0.50)
+            r95 = _pct(0.95)
+    else:
+        sx2, sy2 = sigma_x ** 2, sigma_y ** 2
+        rayleigh_ok = (
+            abs(rho) < 0.2
+            and max(sigma_x, sigma_y) <= 1.2 * max(min(sigma_x, sigma_y), 1e-12)
+        )
+        if rayleigh_ok:
+            sigma_iso_sq = (sx2 + sy2) / 2.0
+            cep = math.sqrt(_CHI2_2DOF_50 * sigma_iso_sq)
+            r95 = math.sqrt(_CHI2_2DOF_95 * sigma_iso_sq)
+        else:
+            # Eigenvalues of the 2×2 covariance: trace ± √(tr² − 4·det) / 2.
+            tr = sx2 + sy2
+            det = sx2 * sy2 - cov_xy * cov_xy
+            disc = max(0.0, tr * tr / 4.0 - det)
+            lam1 = tr / 2.0 + math.sqrt(disc)
+            lam2 = tr / 2.0 - math.sqrt(disc)
+            geom = math.sqrt(max(0.0, lam1) * max(0.0, lam2))
+            cep = math.sqrt(_CHI2_2DOF_50 * geom)
+            r95 = math.sqrt(_CHI2_2DOF_95 * geom)
+
+    return {
+        'n': n,
+        'centroid': (cx, cy),
+        'bias_xy': (cx, cy),
+        'mpi': mpi,
+        'mr': mr,
+        'sigma_r': sigma_r,
+        'sigma_x': sigma_x,
+        'sigma_y': sigma_y,
+        'rho': rho,
+        'cep': cep,
+        'r95': r95,
+        'extreme_spread': extreme_spread,
+        'bbox_w': bbox_w,
+        'bbox_h': bbox_h,
+        'dists_from_centroid': dists_from_centroid,
+        'is_empirical': is_empirical,
+    }
+
+
 def _equipment_shot_samples(user_id, column):
     """Pull every shot for ``user_id`` grouped by an equipment column.
 
@@ -7626,7 +8047,12 @@ def _summarize_equipment(shots):
         edge of the face. Lets us pool shots across targets of mixed
         sizes (e.g. 40cm vs 60cm) without the bigger target dominating
         the variance.
-    Returned ``norm_dists`` feeds Welch's t-test for the pairwise test.
+
+    Returned ``norm_dists`` feeds Mann-Whitney U on the "total error"
+    family. ``dists_from_centroid`` (the same shots referenced to *this*
+    group's own centroid, not the bullseye) feeds Brown-Forsythe on the
+    "precision" family — without that change, Brown-Forsythe was testing
+    equal spread of a quantity that already carried each group's bias.
     """
     n_total = len(shots)
     n_miss = 0
@@ -7656,20 +8082,26 @@ def _summarize_equipment(shots):
     hit_rate = (n_hit / n_total * 100) if n_total else 0.0
     mean_raw = (sum(raw_dists) / n_hit) if n_hit else 0.0
     mean_norm = (sum(norm_dists) / n_hit) if n_hit else 0.0
-    if n_hit > 1:
-        var_norm = sum((d - mean_norm) ** 2 for d in norm_dists) / (n_hit - 1)
-        std_norm = math.sqrt(var_norm)
+
+    # Hand the 2D point cloud (in normalized units) to the shared archery
+    # stats helper. Everything precision-related — R95, MR, σ_x/σ_y,
+    # distances-from-centroid — flows from this one fit so every report
+    # speaks consistent numbers.
+    arch = _archery_stats(xs_norm, ys_norm) if n_hit > 0 else None
+    if arch is not None:
+        cx, cy = arch['centroid']
+        r95_norm = arch['r95']
+        mr_norm = arch['mr']
+        sigma_x_norm = arch['sigma_x']
+        sigma_y_norm = arch['sigma_y']
+        dists_from_centroid = arch['dists_from_centroid']
+        is_empirical = arch['is_empirical']
     else:
-        std_norm = 0.0
-    if n_hit > 0:
-        cx = sum(xs_norm) / n_hit
-        cy = sum(ys_norm) / n_hit
-        group_sigma = math.sqrt(
-            sum((x - cx) ** 2 + (y - cy) ** 2 for x, y in zip(xs_norm, ys_norm))
-            / n_hit
-        )
-    else:
-        cx = cy = group_sigma = 0.0
+        cx = cy = 0.0
+        r95_norm = mr_norm = sigma_x_norm = sigma_y_norm = 0.0
+        dists_from_centroid = []
+        is_empirical = True
+
     return {
         'n_total': n_total,
         'n_hit': n_hit,
@@ -7677,31 +8109,45 @@ def _summarize_equipment(shots):
         'hit_rate': hit_rate,
         'mean_raw_mm': mean_raw,
         'mean_norm': mean_norm,
-        'std_norm': std_norm,
         'centroid_norm': (cx, cy),
-        'group_sigma_norm': group_sigma,
+        'mpi_norm': math.sqrt(cx * cx + cy * cy),
+        'r95_norm': r95_norm,
+        'mr_norm': mr_norm,
+        'sigma_x_norm': sigma_x_norm,
+        'sigma_y_norm': sigma_y_norm,
+        # Total-error sample (distance from *target center*) — feeds the
+        # Mann-Whitney "Total error" family.
         'norm_dists': norm_dists,
-        # Per-shot normalized coords — Hotelling's T² needs the 2D points,
-        # not just the radial distance, to test for centroid-level bias.
+        # Pure-precision sample (distance from *each group's own* centroid)
+        # — feeds Brown-Forsythe in the "Precision" family.
+        'dists_from_centroid': dists_from_centroid,
+        # Per-shot normalized coords — Hotelling's T² needs the 2D points
+        # to test for centroid-level (accuracy) bias.
         'xs_norm': xs_norm,
         'ys_norm': ys_norm,
         'n_targets': len(targets),
+        'precision_is_empirical': is_empirical,
     }
 
 
 def _report_equipment_head_to_head(user_id, categories=None, tag_filter=None):
     """Pairwise head-to-head comparison of bows, arrows, and session tags.
 
-    For every pair of bows, arrows, and session tags that the user has
-    shot at least ``_HEAD_TO_HEAD_MIN_SHOTS`` arrows with, render:
-      * a grouped bar chart of the headline accuracy metrics
-        (hit rate, mean distance from center, group spread), with
-        distances normalized by target half-size so mixed targets are
-        comparable on the same axis
-      * a table covering per-piece counts, accuracy metrics, and the
-        pairwise test result (Welch's t, df, p) plus Cohen's d
-    Skips pairs where both pieces have <5 hits — the t-test would be
-    too noisy to interpret.
+    Each pair is judged on three independent axes so the user can tell
+    *what* differs, not just *that* something does:
+
+      * Accuracy — does the centroid sit in a different place?
+        Hotelling's T² on the 2D (x, y) shot vectors.
+      * Precision — does the group cluster more tightly about its own
+        centroid? Brown-Forsythe on distance-from-each-group's-centroid
+        (not from the bullseye; that one mixes accuracy and precision).
+      * Total error — does one piece simply land closer to the bull on
+        average? Mann-Whitney U on distance-from-center. Useful as a
+        practical tiebreaker but cannot attribute the cause.
+
+    All distances are normalized by target half-size so shots from
+    mixed face sizes (40cm vs 60cm etc.) pool fairly. Skips pairs where
+    either side has <2 hits — the tests are uninformative.
     """
     import matplotlib
     matplotlib.use('Agg')
@@ -7775,11 +8221,19 @@ def _report_equipment_head_to_head(user_id, categories=None, tag_filter=None):
                 b_sum = summaries[b_name]
                 if a_sum['n_hit'] < 2 or b_sum['n_hit'] < 2:
                     continue
-                a_d = a_sum['norm_dists']
-                b_d = b_sum['norm_dists']
-                u_stat, p_mw = _mann_whitney_u(a_d, b_d)
-                delta = _cliffs_delta(a_d, b_d)
-                f_bf, df1_bf, df2_bf, p_bf = _brown_forsythe(a_d, b_d)
+                # Total error (radial distance from target center) — for
+                # the practical tiebreaker test (Mann-Whitney + Cliff's δ).
+                a_d_total = a_sum['norm_dists']
+                b_d_total = b_sum['norm_dists']
+                u_stat, p_mw = _mann_whitney_u(a_d_total, b_d_total)
+                delta = _cliffs_delta(a_d_total, b_d_total)
+                # Precision input: distance from each group's *own* centroid.
+                # Feeding norm_dists here (as the prior implementation did)
+                # let any centroid bias leak into the spread test.
+                a_d_prec = a_sum['dists_from_centroid']
+                b_d_prec = b_sum['dists_from_centroid']
+                f_bf, df1_bf, df2_bf, p_bf = _brown_forsythe(a_d_prec, b_d_prec)
+                # Accuracy input: full 2D points for Hotelling.
                 a_xy = list(zip(a_sum['xs_norm'], a_sum['ys_norm']))
                 b_xy = list(zip(b_sum['xs_norm'], b_sum['ys_norm']))
                 t2, f_ht, df1_ht, df2_ht, p_ht = _hotelling_t2(a_xy, b_xy)
@@ -7810,21 +8264,26 @@ def _report_equipment_head_to_head(user_id, categories=None, tag_filter=None):
             ps['p_ht'] = pht
 
         # ── Pass 2: render each pair's panel ─────────────────────────
+        # The bar chart shows the three headline numbers archers care
+        # about — MPI (accuracy), R95 (precision), hit rate (practical
+        # outcome). Mean-distance-from-center is intentionally dropped:
+        # it duplicates the muddled signal the overhaul targets.
         for ps in pair_stats:
             a_name, b_name = ps['a_name'], ps['b_name']
             a_sum, b_sum = ps['a_sum'], ps['b_sum']
 
             fig, axes = plt.subplots(1, 3, figsize=(11, 4))
             metric_titles = [
+                'Accuracy — MPI\n(normalized: 1.0 = target edge)',
+                'Precision — R95\n(normalized, about each group’s centroid)',
                 'Hit rate (%)',
-                'Mean distance from center\n(normalized: 1.0 = target edge)',
-                'Group spread\n(1σ from centroid, normalized)',
             ]
-            a_vals = [a_sum['hit_rate'], a_sum['mean_norm'],
-                      a_sum['group_sigma_norm']]
-            b_vals = [b_sum['hit_rate'], b_sum['mean_norm'],
-                      b_sum['group_sigma_norm']]
-            for ax, title, av, bv in zip(axes, metric_titles, a_vals, b_vals):
+            a_vals = [a_sum['mpi_norm'], a_sum['r95_norm'], a_sum['hit_rate']]
+            b_vals = [b_sum['mpi_norm'], b_sum['r95_norm'], b_sum['hit_rate']]
+            fmt_per_axis = ['{:.3f}', '{:.3f}', '{:.1f}']
+            for ax, title, av, bv, fmt in zip(
+                axes, metric_titles, a_vals, b_vals, fmt_per_axis
+            ):
                 bars = ax.bar([0, 1], [av, bv],
                               color=[COLOR_A, COLOR_B], edgecolor=EDGE)
                 ax.set_title(title, fontsize=10)
@@ -7836,7 +8295,7 @@ def _report_equipment_head_to_head(user_id, categories=None, tag_filter=None):
                 for bar, v in zip(bars, (av, bv)):
                     ax.text(bar.get_x() + bar.get_width() / 2,
                             bar.get_height(),
-                            f'{v:.2f}', ha='center', va='bottom', fontsize=9)
+                            fmt.format(v), ha='center', va='bottom', fontsize=9)
                 ymax = max(av, bv)
                 if ymax > 0:
                     ax.set_ylim(0, ymax * 1.18)
@@ -7870,102 +8329,137 @@ def _report_equipment_head_to_head(user_id, categories=None, tag_filter=None):
                 return f'{label}: inconclusive (p = {_fmt_p(p)})'
 
             verdict = ' · '.join([
-                _verdict(ps['p_mw'], 'Mean'),
-                _verdict(ps['p_bf'], 'Spread'),
-                _verdict(ps['p_ht'], 'Bias'),
+                _verdict(ps['p_ht'], 'Accuracy'),
+                _verdict(ps['p_bf'], 'Precision'),
+                _verdict(ps['p_mw'], 'Total error'),
             ])
 
-            def _tip(label, tip):
-                # Pre-rendered safe Markup so {{ cell }} doesn't escape the
-                # span. data-tip drives the analyze.html CSS tooltip.
-                from html import escape
-                return Markup(
-                    f'<span data-tip="{escape(tip)}">{escape(label)}</span>'
-                )
-
+            ht_tip = (
+                "Hotelling's T² on the 2D shot vectors: tests whether the "
+                "two groups' centroids sit in different places — i.e. an "
+                "*accuracy* (bias) difference, independent of how tight "
+                "either group is."
+            )
+            bf_tip = (
+                "Brown-Forsythe on distance-from-each-group's-own-centroid: "
+                "tests whether one group clusters more tightly than the "
+                "other — pure *precision*, independent of bias. (Earlier "
+                "versions fed this distance-from-bullseye, which mixed "
+                "accuracy and precision.)"
+            )
             mw_tip = (
-                "Mann-Whitney U: nonparametric test for whether one group's "
-                "shot distances tend to be larger than the other's. Robust "
-                "to skew/outliers — preferred over Student/Welch for "
-                "right-skewed distance data."
+                "Mann-Whitney U on distance-from-target-center: practical "
+                "tiebreaker — does one piece simply land closer to the "
+                "bull on average? Cannot attribute *why* (bias vs spread); "
+                "use the Accuracy / Precision rows above for that."
             )
             delta_tip = (
                 "Cliff's δ: effect size for Mann-Whitney. Range −1…+1. "
                 "Positive means this group's distances tend to exceed the "
-                "other's (i.e., the other group is more accurate); 0 means "
-                "no stochastic ordering."
-            )
-            bf_tip = (
-                "Brown-Forsythe (median-centered Levene's test): tests "
-                "whether the two groups have different spread (consistency). "
-                "A significant result with similar means signals one piece "
-                "groups tighter than the other."
-            )
-            ht_tip = (
-                "Hotelling's T² on the 2D centroid: tests whether one piece "
-                "systematically pushes shots in a particular direction "
-                "(left/right/up/down bias) relative to the other."
+                "other's (i.e., the other group has lower total error); "
+                "0 means no stochastic ordering."
             )
             holm_tip = (
-                "Holm-Bonferroni step-down adjustment. Multiplies each "
-                "raw p by the family size (number of pairs in this section) "
-                "minus its rank. Keeps the family-wise false-positive rate "
-                "at α even when many pairs are tested."
+                "Holm-Bonferroni step-down adjustment, applied separately "
+                "within each test family (Accuracy / Precision / Total). "
+                "Multiplies each raw p by the family size minus its rank. "
+                "Keeps the family-wise false-positive rate at α even when "
+                "many pairs are tested."
             )
             verdict_tip = (
-                "Per-test verdict at α = 0.05 using Holm-adjusted p-values. "
+                "Per-axis verdict at α = 0.05 using Holm-adjusted p-values. "
                 "'Inconclusive' rather than 'not significant' because small "
                 "samples often can't reject H₀ even when a real effect "
-                "exists. Treat as exploratory — shots within a session are "
-                "correlated, which Mann-Whitney doesn't model."
+                "exists. Shots within a session are correlated, which "
+                "these tests don't model — treat as exploratory."
             )
+            mpi_tip = (
+                "MPI (Mean Point of Impact): magnitude of the group's "
+                "centroid offset from the bullseye. Pure *accuracy* — "
+                "sight or anchor adjustment, not equipment tuning."
+            )
+            r95_tip = (
+                "R95: radius about each group's own centroid that contains "
+                "95% of its shots. The headline *precision* number — "
+                "independent of where the centroid sits."
+            )
+            mr_tip = (
+                "Mean Radius: average distance of each shot from the "
+                "group's own centroid. Secondary precision number, "
+                "canonical in shooting-sport testing."
+            )
+            sigma_xy_tip = (
+                "σ_x / σ_y: per-axis standard deviation about the group "
+                "centroid. A large σ_y with small σ_x is vertical "
+                "stringing (release / anchor variation); the reverse "
+                "is horizontal stringing (bow torque)."
+            )
+            bias_tip = (
+                "Signed bias of the centroid: (Δx, Δy) in normalized "
+                "units. Sign tells the user *which direction* to move "
+                "the sight, not just by how much."
+            )
+
+            section_a = Markup('<em>— Accuracy (bias) —</em>')
+            section_p = Markup('<em>— Precision (spread about centroid) —</em>')
+            section_t = Markup('<em>— Total error & basics —</em>')
+            section_tests = Markup('<em>— Pairwise tests —</em>')
 
             columns_out = ['Metric', a_name, b_name]
             rows_out = [
+                [section_t, '', ''],
                 ['Total shots', a_sum['n_total'], b_sum['n_total']],
                 ['Hits', a_sum['n_hit'], b_sum['n_hit']],
                 ['Misses', a_sum['n_miss'], b_sum['n_miss']],
                 ['Hit rate (%)',
                  f"{a_sum['hit_rate']:.1f}",
                  f"{b_sum['hit_rate']:.1f}"],
-                ['Mean distance from center (mm)',
-                 f"{a_sum['mean_raw_mm']:.1f}",
-                 f"{b_sum['mean_raw_mm']:.1f}"],
-                ['Mean distance (normalized)',
-                 f"{a_sum['mean_norm']:.3f}",
-                 f"{b_sum['mean_norm']:.3f}"],
-                ['Std dev of distance (normalized)',
-                 f"{a_sum['std_norm']:.3f}",
-                 f"{b_sum['std_norm']:.3f}"],
-                ['Centroid offset (X, Y, normalized)',
+                ['Mean distance from center',
+                 Markup(f"{_mm_val(a_sum['mean_raw_mm'])} {_mm_unit()}"),
+                 Markup(f"{_mm_val(b_sum['mean_raw_mm'])} {_mm_unit()}")],
+                ['Distinct targets used',
+                 a_sum['n_targets'], b_sum['n_targets']],
+                [section_a, '', ''],
+                [_tip('MPI (normalized)', mpi_tip),
+                 f"{a_sum['mpi_norm']:.3f}",
+                 f"{b_sum['mpi_norm']:.3f}"],
+                [_tip('Bias Δx, Δy (normalized, signed)', bias_tip),
                  f"({a_sum['centroid_norm'][0]:.3f}, "
                  f"{a_sum['centroid_norm'][1]:.3f})",
                  f"({b_sum['centroid_norm'][0]:.3f}, "
                  f"{b_sum['centroid_norm'][1]:.3f})"],
-                ['Group spread (1σ, normalized)',
-                 f"{a_sum['group_sigma_norm']:.3f}",
-                 f"{b_sum['group_sigma_norm']:.3f}"],
-                ['Distinct targets used',
-                 a_sum['n_targets'], b_sum['n_targets']],
-                [_tip('Mann-Whitney U (mean accuracy)', mw_tip),
-                 _fmt(ps['u'], 1), ''],
-                [_tip('p-value, Holm-adjusted (mean)', holm_tip),
-                 _fmt_p(ps['p_mw']), ''],
-                [_tip("Cliff's δ (effect size)", delta_tip),
-                 _fmt(ps['delta']), ''],
-                [_tip('Brown-Forsythe F (spread)', bf_tip),
-                 (f"{ps['f_bf']:.3f} (df={ps['df1_bf']},{ps['df2_bf']})"
-                  if ps['f_bf'] is not None else '—'),
-                 ''],
-                [_tip('p-value, Holm-adjusted (spread)', holm_tip),
-                 _fmt_p(ps['p_bf']), ''],
-                [_tip("Hotelling's T² (2D bias)", ht_tip),
+                [section_p, '', ''],
+                [_tip('R95 (normalized)', r95_tip),
+                 f"{a_sum['r95_norm']:.3f}",
+                 f"{b_sum['r95_norm']:.3f}"],
+                [_tip('Mean Radius (normalized)', mr_tip),
+                 f"{a_sum['mr_norm']:.3f}",
+                 f"{b_sum['mr_norm']:.3f}"],
+                [_tip('σ_x, σ_y (normalized)', sigma_xy_tip),
+                 f"({a_sum['sigma_x_norm']:.3f}, "
+                 f"{a_sum['sigma_y_norm']:.3f})",
+                 f"({b_sum['sigma_x_norm']:.3f}, "
+                 f"{b_sum['sigma_y_norm']:.3f})"],
+                [section_tests, '', ''],
+                [_tip("Accuracy — Hotelling's T²", ht_tip),
                  (f"{ps['t2']:.3f} (F={ps['f_ht']:.3f}, "
                   f"df={ps['df1_ht']},{ps['df2_ht']})"
                   if ps['t2'] is not None else '—'),
                  ''],
-                [_tip('p-value, Holm-adjusted (bias)', holm_tip),
+                [_tip('Accuracy — p, Holm-adjusted', holm_tip),
                  _fmt_p(ps['p_ht']), ''],
+                [_tip('Precision — Brown-Forsythe F', bf_tip),
+                 (f"{ps['f_bf']:.3f} (df={ps['df1_bf']},{ps['df2_bf']})"
+                  if ps['f_bf'] is not None else '—'),
+                 ''],
+                [_tip('Precision — p, Holm-adjusted', holm_tip),
+                 _fmt_p(ps['p_bf']), ''],
+                [_tip('Total error — Mann-Whitney U', mw_tip),
+                 _fmt(ps['u'], 1), ''],
+                [_tip('Total error — p, Holm-adjusted', holm_tip),
+                 _fmt_p(ps['p_mw']), ''],
+                [_tip("Total error — Cliff's δ", delta_tip),
+                 _fmt(ps['delta']), ''],
                 [_tip('Verdict (α = 0.05)', verdict_tip), verdict, ''],
             ]
 
@@ -8061,13 +8555,16 @@ def _accuracy_bucket_period(span_days):
 
 
 def _report_accuracy_over_time(user_id, date_from=None, date_to=None):
-    """Per-time-bucket line graph of three accuracy traces:
+    """Per-time-bucket accuracy/precision traces — the two error modes
+    plotted independently so the user can tell *which* improved.
 
-      * MPI — Mean Point of Impact, i.e. |centroid|. Captures systematic
-        bias (sight off, anchor drift) independent of grouping.
-      * σ from center — std dev of distance-from-center. Mixes bias and
-        spread, but is what a coach usually means by "shots within …".
-      * Mean normalized distance — average |shot|. Lower is better.
+      * Accuracy line — MPI (|centroid| in normalized units). Captures
+        systematic bias (sight off, anchor drift) regardless of grouping.
+      * Precision line — R95 about each bucket's own centroid (normalized).
+        How tight the group is, *independent* of where the group sits.
+
+    The table also exposes the supporting numbers (MR, σ_x, σ_y) so
+    stringing trends are visible even when R95 alone is flat.
 
     Misses excluded; only hits with x,y coords contribute.
     """
@@ -8136,20 +8633,10 @@ def _report_accuracy_over_time(user_id, date_from=None, date_to=None):
         ny = y / half
         ndist = math.sqrt(nx * nx + ny * ny)
 
-        begin_raw = r['session_begin_time']
-        if isinstance(begin_raw, datetime):
-            begin_dt = begin_raw
-        else:
-            s = str(begin_raw).strip()
-            begin_dt = None
-            for fmt in (SESSION_DT_FMT_WITH_MS, SESSION_DT_FMT):
-                try:
-                    begin_dt = datetime.strptime(s, fmt)
-                    break
-                except ValueError:
-                    continue
-            if begin_dt is None:
-                continue
+        begin_dt = _utc_to_user(r['session_begin_time'])
+        if begin_dt is None:
+            continue
+        begin_dt = begin_dt.replace(tzinfo=None)
         points.append((begin_dt, nx, ny, ndist))
 
     if not points:
@@ -8174,25 +8661,22 @@ def _report_accuracy_over_time(user_id, date_from=None, date_to=None):
 
     line_x = []
     line_mpi = []
-    line_sigma = []
-    line_mean = []
+    line_r95 = []
     rows_out = []
     for key in bucket_order:
         pts = buckets[key]
         n = len(pts)
-        ndists = [p[2] for p in pts]
-        mean_d = sum(ndists) / n if n else 0.0
-        if n > 1:
-            var = sum((d - mean_d) ** 2 for d in ndists) / (n - 1)
-            sigma = math.sqrt(var)
-        else:
-            sigma = 0.0
         if n:
-            cx = sum(p[0] for p in pts) / n
-            cy = sum(p[1] for p in pts) / n
-            mpi = math.sqrt(cx * cx + cy * cy)
+            xs_b = [p[0] for p in pts]
+            ys_b = [p[1] for p in pts]
+            s = _archery_stats(xs_b, ys_b)
+            mpi = s['mpi']
+            r95 = s['r95']
+            mr = s['mr']
+            sx = s['sigma_x']
+            sy = s['sigma_y']
         else:
-            mpi = 0.0
+            mpi = r95 = mr = sx = sy = 0.0
         if period_label == 'day':
             label = key.strftime('%Y-%m-%d')
         elif period_label == 'week':
@@ -8201,11 +8685,11 @@ def _report_accuracy_over_time(user_id, date_from=None, date_to=None):
             label = key.strftime('%Y-%m')
         line_x.append(key)
         line_mpi.append(mpi)
-        line_sigma.append(sigma)
-        line_mean.append(mean_d)
+        line_r95.append(r95)
         rows_out.append([
             label, n,
-            round(mpi, 3), round(sigma, 3), round(mean_d, 3),
+            round(mpi, 3), round(r95, 3), round(mr, 3),
+            round(sx, 3), round(sy, 3),
         ])
 
     import matplotlib
@@ -8215,14 +8699,12 @@ def _report_accuracy_over_time(user_id, date_from=None, date_to=None):
 
     fig, ax = plt.subplots(figsize=(9, 4.5))
     ax.plot(line_x, line_mpi, color='#c0392b', marker='o', linewidth=1.8,
-            markersize=5, label='MPI (|centroid|)')
-    ax.plot(line_x, line_sigma, color='#1a7a3a', marker='s', linewidth=1.8,
-            markersize=5, label='σ from center')
-    ax.plot(line_x, line_mean, color='#1a3a5c', marker='^', linewidth=1.8,
-            markersize=5, label='Mean normalized distance')
+            markersize=5, label='Accuracy — MPI')
+    ax.plot(line_x, line_r95, color='#1a7a3a', marker='s', linewidth=1.8,
+            markersize=5, label='Precision — R95')
     ax.set_xlabel(f'Session start ({period_label} buckets)')
     ax.set_ylabel('Normalized units (1.0 = target edge)\nlower is better')
-    ax.set_title('Accuracy over time')
+    ax.set_title('Accuracy & precision over time')
     ax.grid(True, axis='y', linestyle='--', alpha=0.4)
     ax.axhline(0.5, color='#888', linewidth=0.7, linestyle=':')
     ax.legend(loc='upper right', fontsize=9)
@@ -8233,21 +8715,949 @@ def _report_accuracy_over_time(user_id, date_from=None, date_to=None):
     png_b64 = _render_matplotlib_png(fig)
 
     if range_from is not None and range_to is not None:
-        report_title = (f'Accuracy over time '
+        report_title = (f'Accuracy & precision over time '
                         f'({date_from} → {date_to})')
     elif range_from is not None:
-        report_title = f'Accuracy over time (from {date_from})'
+        report_title = f'Accuracy & precision over time (from {date_from})'
     elif range_to is not None:
-        report_title = f'Accuracy over time (through {date_to})'
+        report_title = f'Accuracy & precision over time (through {date_to})'
     else:
-        report_title = f'Accuracy over time ({period_label} buckets)'
+        report_title = (
+            f'Accuracy & precision over time ({period_label} buckets)'
+        )
+
+    # Short explainer paragraph rendered above the chart. Accuracy and
+    # precision get conflated constantly — naming them here means the
+    # rest of the page (and the head-to-head split) lands in context.
+    intro_html = Markup(
+        '<p class="report-intro">'
+        '<strong>Accuracy</strong> is how close your group sits to the '
+        'bull — a bias error you fix with sight or anchor adjustments. '
+        '<strong>Precision</strong> is how tightly your shots cluster '
+        'around their own centroid, regardless of where that centroid '
+        'sits — a consistency error you fix with form, tuning, and '
+        'execution. The red <em>MPI</em> trace tracks accuracy; the '
+        'green <em>R95</em> trace tracks precision. Both can improve '
+        'or worsen independently.'
+        '</p>'
+    )
 
     return {
         'key': 'accuracy_over_time',
         'title': report_title,
+        'intro_html': intro_html,
         'png_b64': png_b64,
-        'columns': ['Bucket', 'Shots', 'MPI (norm)', 'σ from center (norm)',
-                    'Mean dist (norm)'],
+        'columns': [
+            'Bucket', 'Shots',
+            _tip('MPI (norm)',
+                 'Mean Point of Impact: magnitude of the bucket centroid\'s '
+                 'offset from the bullseye, normalized by target half-width '
+                 '(1.0 = target edge). Pure accuracy — independent of how '
+                 'tight the group is.'),
+            _tip('R95 (norm)',
+                 'Radius about the bucket centroid that contains 95% of its '
+                 'shots, normalized by target half-width. Headline precision '
+                 'number — independent of where the centroid sits.'),
+            _tip('MR (norm)',
+                 'Mean Radius: average distance of each shot from the '
+                 'bucket centroid (normalized). Secondary precision '
+                 'metric, canonical in shooting-sport testing.'),
+            _tip('σ_x (norm)',
+                 'Per-axis standard deviation about the centroid in the '
+                 'horizontal direction. Large σ_x with small σ_y is '
+                 'horizontal stringing — often a bow-torque or grip cue.'),
+            _tip('σ_y (norm)',
+                 'Per-axis standard deviation about the centroid in the '
+                 'vertical direction. Large σ_y with small σ_x is vertical '
+                 'stringing — often a release or anchor-height cue.'),
+        ],
+        'rows': rows_out,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Quiver-indexed reports (within-session drift, cold-bore vs warmed-up)
+# ---------------------------------------------------------------------------
+# Arrows aren't entered in shot-order — but quivers are, since the user has
+# to commit one quiver before starting the next. So aggregate by
+# (session_id, quiver_index_in_session) rather than arrow_id.
+
+
+def _iter_quivers(user_id):
+    """Yield ``(session_id, quiver_idx_1based, shots_in_quiver, target_id)``
+    for every *completed* quiver across all of ``user_id``'s sessions.
+
+    The slicer mirrors ``get_stats`` — walk shots in id order, group by
+    ``quiver_size`` declared on the first shot of each group, close the
+    group when ``len(group) == quiver_size``. A trailing partial quiver
+    (in-progress or abandoned mid-batch) is intentionally skipped:
+    per-quiver metrics aren't comparable when the group is short.
+    """
+    with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
+        rows = cur.execute(
+            "SELECT a.session_id, a.target_id, a.quiver_size, "
+            "       a.x_coord, a.y_coord, a.arrow_shaft_diameter, "
+            "       t.physical_size_mm AS half_src "
+            "FROM apollo a "
+            "LEFT JOIN targets t ON t.id = a.target_id AND t.user_id = a.user_id "
+            "WHERE a.user_id = %s "
+            "ORDER BY a.session_id ASC, a.id ASC",
+            (user_id,)
+        ).fetchall()
+
+    current_session = None
+    quiver_idx = 0
+    buf = []
+    buf_size = 0
+    buf_target = None
+    for r in rows:
+        sid = r['session_id']
+        if sid != current_session:
+            # New session — reset the quiver walker. Any buffered partial
+            # quiver from the previous session is dropped (won't appear).
+            current_session = sid
+            quiver_idx = 0
+            buf = []
+            buf_size = 0
+        try:
+            row_qs = int(r['quiver_size']) if r['quiver_size'] else 0
+        except (TypeError, ValueError):
+            row_qs = 0
+        if row_qs <= 0:
+            buf = []
+            buf_size = 0
+            continue
+        if not buf:
+            buf_size = row_qs
+            buf_target = r['target_id']
+        buf.append(r)
+        if len(buf) >= buf_size:
+            quiver_idx += 1
+            yield sid, quiver_idx, list(buf), buf_target
+            buf = []
+            buf_size = 0
+
+
+def _quiver_xy(shots):
+    """Extract normalized (x_norm, y_norm) pairs from a quiver's shots,
+    dropping misses and shots on targets with unknown size. Returns
+    (xs, ys) parallel lists in normalized units (1.0 = target edge)."""
+    xs = []
+    ys = []
+    for s in shots:
+        xraw = str(s['x_coord']).strip() if s['x_coord'] is not None else ''
+        yraw = str(s['y_coord']).strip() if s['y_coord'] is not None else ''
+        if xraw == MISS_SENTINEL and yraw == MISS_SENTINEL:
+            continue
+        try:
+            x = float(xraw)
+            y = float(yraw)
+        except ValueError:
+            continue
+        try:
+            half = float(s['half_src']) / 2.0
+        except (TypeError, ValueError):
+            continue
+        if half <= 0:
+            continue
+        xs.append(x / half)
+        ys.append(y / half)
+    return xs, ys
+
+
+def _report_within_session_drift(user_id):
+    """MPI and R95 by quiver-index-in-session, pooled across sessions.
+
+    Reveals whether the user tightens up after a warm-up quiver or
+    starts to loosen late in the session (fatigue). Each quiver index
+    contributes shots from every session that reached at least that
+    many completed quivers — so later indices come from progressively
+    fewer sessions. A "n sessions" bar is rendered alongside MPI/R95
+    so the user can see where confidence drops off.
+    """
+    by_idx = {}  # quiver_idx → {sessions: set, xs: [...], ys: [...]}
+    for sid, qidx, shots, _tgt in _iter_quivers(user_id):
+        xs, ys = _quiver_xy(shots)
+        if not xs:
+            continue
+        bucket = by_idx.setdefault(qidx, {'sessions': set(),
+                                          'xs': [], 'ys': []})
+        bucket['sessions'].add(sid)
+        bucket['xs'].extend(xs)
+        bucket['ys'].extend(ys)
+
+    if not by_idx:
+        return None
+
+    indices = sorted(by_idx.keys())
+    rows_out = []
+    line_x = []
+    line_mpi = []
+    line_r95 = []
+    line_sessions = []
+    for q in indices:
+        b = by_idx[q]
+        s = _archery_stats(b['xs'], b['ys'])
+        if s is None:
+            continue
+        line_x.append(q)
+        line_mpi.append(s['mpi'])
+        line_r95.append(s['r95'])
+        line_sessions.append(len(b['sessions']))
+        rows_out.append([
+            q, len(b['sessions']), s['n'],
+            round(s['mpi'], 3), round(s['r95'], 3),
+            round(s['mr'], 3),
+        ])
+
+    if not line_x:
+        return None
+
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+
+    fig, ax = plt.subplots(figsize=(9, 4.5))
+    # Twin-axis "n sessions" bars in the background so they don't visually
+    # compete with the metric lines; metric scale stays unambiguous.
+    ax_bar = ax.twinx()
+    ax_bar.bar(line_x, line_sessions, color='#c9d3e3',
+               edgecolor='#95abcf', zorder=1, alpha=0.55,
+               label='Sessions reaching this quiver')
+    ax_bar.set_ylabel('Sessions reaching this quiver', color='#5a6b8a')
+    ax_bar.tick_params(axis='y', labelcolor='#5a6b8a')
+    ax.plot(line_x, line_mpi, color='#c0392b', marker='o',
+            linewidth=1.8, markersize=5, zorder=3,
+            label='Accuracy — MPI')
+    ax.plot(line_x, line_r95, color='#1a7a3a', marker='s',
+            linewidth=1.8, markersize=5, zorder=3,
+            label='Precision — R95')
+    ax.set_xlabel('Quiver index within session (1 = first quiver)')
+    ax.set_ylabel('Normalized units (1.0 = target edge)\nlower is better')
+    ax.set_title('Within-session drift')
+    ax.set_xticks(line_x)
+    ax.grid(True, axis='y', linestyle='--', alpha=0.4)
+    ax.set_zorder(ax_bar.get_zorder() + 1)
+    ax.patch.set_visible(False)
+    # Combine legends from both axes.
+    h1, l1 = ax.get_legend_handles_labels()
+    h2, l2 = ax_bar.get_legend_handles_labels()
+    ax.legend(h1 + h2, l1 + l2, loc='upper left', fontsize=9)
+    png_b64 = _render_matplotlib_png(fig)
+
+    intro = Markup(
+        '<p class="report-intro">'
+        '<strong>What this answers:</strong> do you warm up into a tighter '
+        'group as the session goes on, or do you fatigue and open up? '
+        'Each quiver position pools its shots across every session that '
+        'reached that many quivers — so the leftmost bucket sees every '
+        'session, the rightmost only your longest ones. The grey bars '
+        'show how many sessions contributed to each bucket.'
+        '</p>'
+    )
+
+    return {
+        'key': 'within_session_drift',
+        'title': 'Within-session drift',
+        'intro_html': intro,
+        'png_b64': png_b64,
+        'columns': [
+            'Quiver index', 'Sessions', 'Shots',
+            _tip('MPI (norm)',
+                 'Mean Point of Impact at this quiver position, pooled '
+                 'across sessions. Lower = better accuracy.'),
+            _tip('R95 (norm)',
+                 'R95 about each quiver-position\'s pooled centroid. '
+                 'Lower = tighter group.'),
+            _tip('MR (norm)',
+                 'Mean Radius about the pooled centroid.'),
+        ],
+        'rows': rows_out,
+    }
+
+
+def _report_cold_bore_vs_warmed(user_id):
+    """Compare quiver 1 of each session against quivers 2+ of that
+    session. Pools across all sessions, then runs the same
+    accuracy / precision tests the head-to-head report uses.
+    """
+    cold_xs, cold_ys = [], []
+    warm_xs, warm_ys = [], []
+    sessions_with_cold = set()
+    sessions_with_warm = set()
+    for sid, qidx, shots, _tgt in _iter_quivers(user_id):
+        xs, ys = _quiver_xy(shots)
+        if not xs:
+            continue
+        if qidx == 1:
+            cold_xs.extend(xs)
+            cold_ys.extend(ys)
+            sessions_with_cold.add(sid)
+        else:
+            warm_xs.extend(xs)
+            warm_ys.extend(ys)
+            sessions_with_warm.add(sid)
+
+    if len(cold_xs) < 2 or len(warm_xs) < 2:
+        # Not enough data to compare. Return a typed empty so the user
+        # gets a precise reason instead of a silent blank card.
+        bits = []
+        if len(cold_xs) < 2:
+            bits.append('not enough first-quiver shots')
+        if len(warm_xs) < 2:
+            bits.append('not enough later-quiver shots (sessions need 2+ '
+                       'completed quivers)')
+        return {
+            'key': 'cold_bore_vs_warmed',
+            'title': 'Cold bore vs warmed up',
+            'empty': True,
+            'empty_reason': 'Nothing to compare — ' + '; '.join(bits) + '.',
+        }
+
+    cold = _archery_stats(cold_xs, cold_ys)
+    warm = _archery_stats(warm_xs, warm_ys)
+
+    # Pure-precision test: distance-from-each-group's-own-centroid.
+    f_bf, df1_bf, df2_bf, p_bf = _brown_forsythe(
+        cold['dists_from_centroid'], warm['dists_from_centroid']
+    )
+    # Accuracy test: 2D centroid difference.
+    a_xy = list(zip(cold_xs, cold_ys))
+    b_xy = list(zip(warm_xs, warm_ys))
+    t2, f_ht, df1_ht, df2_ht, p_ht = _hotelling_t2(a_xy, b_xy)
+
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    from matplotlib.patches import Patch
+
+    COLOR_A = '#4d6da6'
+    COLOR_B = '#fcba03'
+    EDGE = '#1a3a5c'
+    fig, axes = plt.subplots(1, 3, figsize=(11, 4))
+    titles = [
+        'Accuracy — MPI\n(normalized: 1.0 = target edge)',
+        'Precision — R95\n(normalized, about each pool\'s centroid)',
+        'Shots in pool',
+    ]
+    a_vals = [cold['mpi'], cold['r95'], cold['n']]
+    b_vals = [warm['mpi'], warm['r95'], warm['n']]
+    fmts = ['{:.3f}', '{:.3f}', '{:.0f}']
+    for ax, ti, av, bv, fmt in zip(axes, titles, a_vals, b_vals, fmts):
+        bars = ax.bar([0, 1], [av, bv],
+                      color=[COLOR_A, COLOR_B], edgecolor=EDGE)
+        ax.set_title(ti, fontsize=10)
+        ax.set_xticks([])
+        ax.grid(True, axis='y', linestyle='--', alpha=0.4)
+        for bar, v in zip(bars, (av, bv)):
+            ax.text(bar.get_x() + bar.get_width() / 2,
+                    bar.get_height(),
+                    fmt.format(v), ha='center', va='bottom', fontsize=9)
+        ymax = max(av, bv)
+        if ymax > 0:
+            ax.set_ylim(0, ymax * 1.18)
+    fig.legend(
+        handles=[Patch(facecolor=COLOR_A, edgecolor=EDGE,
+                       label=f'Cold bore (quiver 1 of {len(sessions_with_cold)} sessions)'),
+                 Patch(facecolor=COLOR_B, edgecolor=EDGE,
+                       label=f'Warmed up (quivers 2+ of {len(sessions_with_warm)} sessions)')],
+        loc='upper center', bbox_to_anchor=(0.5, 0.96),
+        ncol=2, frameon=False, fontsize=9)
+    fig.tight_layout(rect=(0, 0, 1, 0.86))
+    png_b64 = _render_matplotlib_png(fig)
+
+    def _fmt_p(p):
+        if p is None:
+            return '—'
+        if p < 0.001:
+            return '< 0.001'
+        return f'{p:.4f}'
+
+    def _verdict(p, label):
+        if p is None:
+            return f'{label}: insufficient data'
+        if p < 0.05:
+            return f'{label}: significant (p = {_fmt_p(p)})'
+        return f'{label}: inconclusive (p = {_fmt_p(p)})'
+
+    verdict = ' · '.join([
+        _verdict(p_ht, 'Accuracy'),
+        _verdict(p_bf, 'Precision'),
+    ])
+
+    intro = Markup(
+        '<p class="report-intro">'
+        '<strong>What this answers:</strong> is your first quiver of '
+        'each session enough to warm you up, or are you losing points '
+        'before you settle in? Pool 1 = the first completed quiver of '
+        'every session; pool 2 = every quiver after that. Two '
+        'independent tests run: <em>Hotelling\'s T²</em> for an '
+        'accuracy shift, <em>Brown-Forsythe</em> for a precision shift.'
+        '</p>'
+    )
+
+    section_basics = Markup('<em>— Pool basics —</em>')
+    section_acc = Markup('<em>— Accuracy —</em>')
+    section_prec = Markup('<em>— Precision —</em>')
+    section_tests = Markup('<em>— Pairwise tests —</em>')
+
+    columns_out = ['Metric', 'Cold bore', 'Warmed up']
+    rows_out = [
+        [section_basics, '', ''],
+        ['Sessions contributing',
+         len(sessions_with_cold), len(sessions_with_warm)],
+        ['Shots', cold['n'], warm['n']],
+        [section_acc, '', ''],
+        [_tip('MPI (normalized)',
+              'Mean Point of Impact: magnitude of the centroid offset. '
+              'Lower = more accurate.'),
+         f"{cold['mpi']:.3f}", f"{warm['mpi']:.3f}"],
+        [_tip('Bias Δx, Δy (normalized, signed)',
+              'Signed centroid offset; direction tells you which way the '
+              'warm-up shifts your group.'),
+         f"({cold['centroid'][0]:.3f}, {cold['centroid'][1]:.3f})",
+         f"({warm['centroid'][0]:.3f}, {warm['centroid'][1]:.3f})"],
+        [section_prec, '', ''],
+        [_tip('R95 (normalized)',
+              '95% containment radius about each pool\'s own centroid. '
+              'Lower = tighter group, independent of accuracy.'),
+         f"{cold['r95']:.3f}", f"{warm['r95']:.3f}"],
+        [_tip('Mean Radius (normalized)',
+              'Average distance from each pool\'s own centroid.'),
+         f"{cold['mr']:.3f}", f"{warm['mr']:.3f}"],
+        [section_tests, '', ''],
+        [_tip("Accuracy — Hotelling's T²",
+              "Hotelling's T² on the 2D shot vectors: tests whether the "
+              "two pools' centroids sit in different places — i.e. an "
+              "accuracy shift after warm-up, independent of spread."),
+         (f"{t2:.3f} (F={f_ht:.3f}, df={df1_ht},{df2_ht})"
+          if t2 is not None else '—'),
+         ''],
+        [_tip('Accuracy — p-value', 'Two-sided p from Hotelling F-test.'),
+         _fmt_p(p_ht), ''],
+        [_tip('Precision — Brown-Forsythe F',
+              "Brown-Forsythe on distance-from-own-centroid: tests "
+              "whether one pool clusters more tightly than the other — "
+              "pure precision, independent of bias."),
+         (f"{f_bf:.3f} (df={df1_bf},{df2_bf})"
+          if f_bf is not None else '—'),
+         ''],
+        [_tip('Precision — p-value', 'Two-sided p from Brown-Forsythe.'),
+         _fmt_p(p_bf), ''],
+        [_tip('Verdict (α = 0.05)',
+              "Per-axis verdict at α = 0.05. Shots within a quiver are "
+              "correlated, so treat as exploratory."),
+         verdict, ''],
+    ]
+
+    return {
+        'key': 'cold_bore_vs_warmed',
+        'title': 'Cold bore vs warmed up',
+        'intro_html': intro,
+        'png_b64': png_b64,
+        'columns': columns_out,
+        'rows': rows_out,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Shot density heatmap
+# ---------------------------------------------------------------------------
+
+
+def _report_shot_density_heatmap(user_id):
+    """Hexbin density of every hit on each target, overlaid on the face.
+
+    Complements the existing scatter report — once a target has more
+    than ~500 shots, dots overlap so heavily that structure is lost.
+    The hexbin shows where shots actually cluster.
+    """
+    with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
+        target_rows = cur.execute(
+            "SELECT id AS rowid, name, image_filename, "
+            "       physical_size_mm, image_size_px "
+            "FROM targets WHERE user_id = %s "
+            "ORDER BY id ASC",
+            (user_id,)
+        ).fetchall()
+    if not target_rows:
+        return None
+
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+
+    panels = []
+    for trow in target_rows:
+        target_id = int(trow['rowid'])
+        target_name = trow['name']
+        target_cfg = target_to_config(trow)
+        with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
+            shots = cur.execute(
+                "SELECT x_coord, y_coord FROM apollo "
+                "WHERE user_id = %s AND target_id = %s",
+                (user_id, target_id)
+            ).fetchall()
+        xs, ys = [], []
+        for s in shots:
+            xraw = str(s['x_coord']).strip() if s['x_coord'] is not None else ''
+            yraw = str(s['y_coord']).strip() if s['y_coord'] is not None else ''
+            if xraw == MISS_SENTINEL and yraw == MISS_SENTINEL:
+                continue
+            try:
+                xs.append(float(xraw))
+                ys.append(float(yraw))
+            except ValueError:
+                continue
+        if len(xs) < 25:
+            # Sparse target — the scatter report already covers this case;
+            # a heatmap on <25 shots is just a bunch of singletons.
+            continue
+        half = float(target_cfg['target_width_mm']) / 2.0
+
+        img_disk_path = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), 'static',
+            target_cfg['target_image']
+        )
+        try:
+            from PIL import Image as PILImage
+            bg = PILImage.open(img_disk_path)
+        except (FileNotFoundError, OSError):
+            bg = None
+
+        fig, ax = plt.subplots(figsize=(7, 7))
+        if bg is not None:
+            ax.imshow(bg, extent=[-half, half, -half, half], origin='upper',
+                      alpha=0.45)
+        else:
+            ax.set_facecolor('#1a3a5c')
+        ax.set_xlim(-half, half)
+        ax.set_ylim(-half, half)
+        ax.set_aspect('equal')
+        # gridsize tuned so each hex covers ~5–6% of the face — fine
+        # enough to show structure, coarse enough to hide single-shot noise.
+        hb = ax.hexbin(xs, ys, gridsize=22,
+                       cmap='YlOrRd', mincnt=1, edgecolors='none',
+                       extent=(-half, half, -half, half))
+        cb = fig.colorbar(hb, ax=ax, fraction=0.046, pad=0.04)
+        cb.set_label('Shots per hex')
+        ax.axhline(0, color=(1, 1, 1, 0.35), linewidth=0.6, linestyle=':')
+        ax.axvline(0, color=(1, 1, 1, 0.35), linewidth=0.6, linestyle=':')
+        ax.set_title(f'{target_name} — shot density ({len(xs)} hits)')
+        ax.set_xlabel('X (mm from center)')
+        ax.set_ylabel('Y (mm from center)')
+        png_b64 = _render_matplotlib_png(fig)
+
+        # Tabulate a quadrant breakdown — actionable summary that the
+        # heatmap itself only hints at.
+        q_counts = {'UR': 0, 'UL': 0, 'LL': 0, 'LR': 0,
+                    'on_axis': 0}
+        for x, y in zip(xs, ys):
+            if x == 0 and y == 0:
+                q_counts['on_axis'] += 1
+            elif x > 0 and y > 0:
+                q_counts['UR'] += 1
+            elif x < 0 and y > 0:
+                q_counts['UL'] += 1
+            elif x < 0 and y < 0:
+                q_counts['LL'] += 1
+            else:
+                q_counts['LR'] += 1
+        n = len(xs)
+        rows_out = [
+            ['Total hits', n],
+            ['Upper-right quadrant',
+             f"{q_counts['UR']} ({q_counts['UR'] / n * 100:.1f}%)"],
+            ['Upper-left quadrant',
+             f"{q_counts['UL']} ({q_counts['UL'] / n * 100:.1f}%)"],
+            ['Lower-left quadrant',
+             f"{q_counts['LL']} ({q_counts['LL'] / n * 100:.1f}%)"],
+            ['Lower-right quadrant',
+             f"{q_counts['LR']} ({q_counts['LR'] / n * 100:.1f}%)"],
+        ]
+
+        panels.append({
+            'key': f'shot_density__{target_id}',
+            'title': f'{target_name} — shot density ({n} hits)',
+            'png_b64': png_b64,
+            'columns': ['Metric', 'Value'],
+            'rows': rows_out,
+        })
+
+    if not panels:
+        return None
+
+    intro = Markup(
+        '<p class="report-intro">'
+        '<strong>What this shows:</strong> where your shots actually '
+        'cluster, not just where they have landed. The scatter report '
+        'plots every shot as a dot; once you have hundreds of shots on '
+        'one face the dots overlap and structure is lost. A hexbin '
+        'density map keeps the picture readable at any shot count. '
+        'Brighter cells = more shots in that area.'
+        '</p>'
+    )
+
+    return {
+        'key': 'shot_density_heatmap',
+        'title': 'Shot density heatmap',
+        'intro_html': intro,
+        'panels': panels,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Expected score from fitted bivariate normal
+# ---------------------------------------------------------------------------
+
+
+def _report_expected_score(user_id):
+    """For each scoring target, fit a 2D Gaussian to the user's shots,
+    Monte-Carlo sample it, and report the expected score per arrow plus
+    expected per-end scores at common end lengths.
+
+    Closes the loop between the practice metrics in the rest of /analyze
+    and what the archer actually scores on tournament day.
+    """
+    with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
+        target_rows = cur.execute(
+            "SELECT t.id AS rowid, t.name, t.image_filename, "
+            "       t.physical_size_mm, t.image_size_px "
+            "FROM targets t "
+            "WHERE t.user_id = %s "
+            "  AND EXISTS (SELECT 1 FROM target_zones z "
+            "              WHERE z.target_id = t.id AND z.user_id = %s) "
+            "ORDER BY t.id ASC",
+            (user_id, user_id)
+        ).fetchall()
+    if not target_rows:
+        return None
+
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    import random as _rng
+
+    N_SAMPLES = 20000  # Monte-Carlo budget per target
+    END_LENGTHS = (3, 6, 10)
+
+    panels = []
+    for trow in target_rows:
+        target_id = int(trow['rowid'])
+        target_name = trow['name']
+        target_cfg = target_to_config(trow)
+        zones = _fetch_target_zones(target_id, user_id)
+        if not _zones_define_scoring(zones):
+            continue
+
+        with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
+            shots = cur.execute(
+                "SELECT x_coord, y_coord, arrow_shaft_diameter "
+                "FROM apollo WHERE user_id = %s AND target_id = %s",
+                (user_id, target_id)
+            ).fetchall()
+        xs_mm, ys_mm = [], []
+        for s in shots:
+            xraw = str(s['x_coord']).strip() if s['x_coord'] is not None else ''
+            yraw = str(s['y_coord']).strip() if s['y_coord'] is not None else ''
+            if xraw == MISS_SENTINEL and yraw == MISS_SENTINEL:
+                continue
+            try:
+                xs_mm.append(float(xraw))
+                ys_mm.append(float(yraw))
+            except ValueError:
+                continue
+        if len(xs_mm) < 10:
+            continue
+
+        stats = _archery_stats(xs_mm, ys_mm)
+        if stats is None:
+            continue
+        cx, cy = stats['centroid']
+        sx = stats['sigma_x']
+        sy = stats['sigma_y']
+        rho = stats['rho']
+        if sx <= 0 or sy <= 0:
+            continue
+        # Cholesky of the 2×2 covariance for correlated sampling:
+        #   X = cx + sx · z1
+        #   Y = cy + sy · (ρ z1 + √(1 − ρ²) z2)
+        rho_clip = max(-0.999, min(0.999, rho))
+        rho_perp = math.sqrt(max(0.0, 1.0 - rho_clip * rho_clip))
+
+        # Empirical miss rate (sentinels were dropped from xs_mm but
+        # we re-count them here so the score model honors misses).
+        n_total = len(shots)
+        n_misses = sum(
+            1 for s in shots
+            if (str(s['x_coord']).strip() if s['x_coord'] else '') == MISS_SENTINEL
+            and (str(s['y_coord']).strip() if s['y_coord'] else '') == MISS_SENTINEL
+        )
+        miss_rate = n_misses / n_total if n_total else 0.0
+
+        ring_hits = [0] * len(zones)
+        ring_points = [int(z['point_value'] or 0) for z in zones]
+        outside = 0
+        shaft_d = None  # No per-shot shaft diameter at sampling time —
+        # use a typical 6mm shaft for the line-cutter test (most arrows
+        # are between 5 and 7 mm; the small mis-classification rate at
+        # ring boundaries is well within Monte-Carlo noise).
+        for _ in range(N_SAMPLES):
+            z1 = _rng.gauss(0, 1)
+            z2 = _rng.gauss(0, 1)
+            x = cx + sx * z1
+            y = cy + sy * (rho_clip * z1 + rho_perp * z2)
+            idx = _classify_shot(f'{x:.4f}', f'{y:.4f}', zones, shaft_d)
+            if idx is None:
+                outside += 1
+            else:
+                ring_hits[idx] += 1
+
+        # Blend in the empirical miss rate: shots that scored zero in
+        # the user's actual history (sentinel-misses) are extra outside
+        # mass that the Gaussian can't model.
+        eff_samples = N_SAMPLES + int(N_SAMPLES * miss_rate /
+                                       max(1e-9, 1 - miss_rate))
+        outside_with_misses = outside + (eff_samples - N_SAMPLES)
+        denom = eff_samples
+
+        p_per_ring = [h / denom for h in ring_hits]
+        p_outside = outside_with_misses / denom
+
+        expected_score = sum(p * pts for p, pts in zip(p_per_ring, ring_points))
+        max_ring_points = max(ring_points) if ring_points else 0
+
+        # Per-end expected scores at common end lengths.
+        end_table = [
+            (n, expected_score * n, max_ring_points * n)
+            for n in END_LENGTHS
+        ]
+
+        # Bar chart: expected % of arrows in each ring.
+        labels = [z['name'] or f'Zone {i + 1}' for i, z in enumerate(zones)]
+        labels.append('Miss / outside')
+        pcts = [p * 100 for p in p_per_ring]
+        pcts.append(p_outside * 100)
+        # Reuse target-face color sampler for visual consistency with
+        # hits-by-boundaries.
+        colors = _sample_zone_colors(zones, target_cfg)
+        colors.append('#e53935')
+
+        fig, ax = plt.subplots(figsize=(7.5, 4.5))
+        bars = ax.bar(labels, pcts, color=colors, edgecolor='#1a3a5c')
+        ax.set_ylabel('Expected % of arrows')
+        ax.set_title(f'Expected hit distribution — {target_name}')
+        ax.grid(True, axis='y', linestyle='--', alpha=0.4)
+        for bar, p in zip(bars, pcts):
+            if p > 0.1:
+                ax.text(bar.get_x() + bar.get_width() / 2,
+                        bar.get_height(),
+                        f'{p:.1f}%', ha='center', va='bottom', fontsize=9)
+        fig.autofmt_xdate(rotation=20)
+        png_b64 = _render_matplotlib_png(fig)
+
+        rows_out = [[Markup('<em>— Expected per arrow —</em>'), '', '']]
+        rows_out.append(['Expected score (points / arrow)',
+                         f'{expected_score:.3f}',
+                         f'(max {max_ring_points})'])
+        rows_out.append([Markup('<em>— Expected per end —</em>'), '', ''])
+        for n, exp, max_n in end_table:
+            pct = (exp / max_n * 100) if max_n else 0.0
+            rows_out.append([f'{n}-arrow end (expected)',
+                             f'{exp:.1f}',
+                             f'(max {max_n}, {pct:.1f}% of max)'])
+        rows_out.append([Markup('<em>— Ring breakdown —</em>'), '', ''])
+        for lab, p, pts in zip(labels[:-1], p_per_ring, ring_points):
+            rows_out.append([lab, f'{p * 100:.2f}%',
+                             f'×{pts} = {p * pts:.3f}'])
+        rows_out.append(['Miss / outside zones',
+                         f'{p_outside * 100:.2f}%', '×0 = 0.000'])
+
+        panels.append({
+            'key': f'expected_score__{target_id}',
+            'title': f'{target_name} — expected score',
+            'png_b64': png_b64,
+            'columns': ['Metric', 'Value', 'Notes'],
+            'rows': rows_out,
+        })
+
+    if not panels:
+        return None
+
+    intro = Markup(
+        '<p class="report-intro">'
+        '<strong>What this answers:</strong> if your current group held, '
+        'what would you score? Each target with scoring zones gets its '
+        'own bivariate-normal fit to your shot history; Monte-Carlo '
+        'sampling integrates that fit over the rings and projects an '
+        'expected score per arrow and per end. Empirical miss rate is '
+        'blended in so total-flyers count against the projection.'
+        '</p>'
+    )
+
+    return {
+        'key': 'expected_score',
+        'title': 'Expected score from fit',
+        'intro_html': intro,
+        'panels': panels,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Calendar heatmap
+# ---------------------------------------------------------------------------
+
+
+def _report_calendar_heatmap(user_id):
+    """GitHub-style year grid of shots-per-day across the user's history."""
+    with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
+        rows = cur.execute(
+            "SELECT st.session_begin_time, COUNT(a.id) AS shots "
+            "FROM session_times st "
+            "LEFT JOIN apollo a ON a.session_id = st.session_id "
+            "                   AND a.user_id   = st.user_id "
+            "WHERE st.user_id = %s AND st.session_begin_time IS NOT NULL "
+            "GROUP BY st.session_id, st.session_begin_time "
+            "ORDER BY st.session_begin_time ASC",
+            (user_id,)
+        ).fetchall()
+    if not rows:
+        return None
+
+    # Aggregate to per-day shot counts in the user's timezone.
+    from collections import defaultdict
+    per_day = defaultdict(int)
+    for r in rows:
+        dt = _utc_to_user(r['session_begin_time'])
+        if dt is None:
+            continue
+        d = dt.date()
+        per_day[d] += int(r['shots'] or 0)
+    if not per_day:
+        return None
+
+    sorted_dates = sorted(per_day.keys())
+    first_d = sorted_dates[0]
+    last_d = sorted_dates[-1]
+
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    import matplotlib.dates as mdates
+    from matplotlib.colors import LinearSegmentedColormap, Normalize
+    from matplotlib.patches import Rectangle
+
+    # Build a year-by-year grid. Each year is a separate calendar so
+    # longer histories don't smear into one impossible-to-read strip.
+    years = list(range(first_d.year, last_d.year + 1))
+    cmap = LinearSegmentedColormap.from_list(
+        'apollo_volume',
+        ['#eef3fa', '#a8c4e8', '#4d6da6', '#c0392b'],
+    )
+    max_shots = max(per_day.values())
+    norm = Normalize(vmin=0, vmax=max(1, max_shots))
+
+    fig, axes = plt.subplots(
+        len(years), 1,
+        figsize=(11, max(2.4, 1.6 * len(years))),
+        squeeze=False,
+    )
+    for ax, yr in zip(axes[:, 0], years):
+        jan1 = datetime(yr, 1, 1).date()
+        dec31 = datetime(yr, 12, 31).date()
+        n_days = (dec31 - jan1).days + 1
+        # The grid: 7 rows (weekdays, Mon top), columns = ISO weeks.
+        # We map each date to (weekday_idx, week_idx_within_year).
+        first_weekday = jan1.weekday()  # Mon=0
+        ax.set_xlim(-0.5, 53.5)
+        ax.set_ylim(-0.5, 6.5)
+        ax.set_aspect('equal')
+        ax.invert_yaxis()  # Mon at top
+        ax.set_yticks(range(7))
+        ax.set_yticklabels(['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'],
+                           fontsize=7)
+        ax.tick_params(axis='y', length=0)
+        # Month ticks along the bottom.
+        from datetime import timedelta as _td
+        month_starts = []
+        for m in range(1, 13):
+            md = datetime(yr, m, 1).date()
+            offset = (md - jan1).days
+            col = (offset + first_weekday) // 7
+            month_starts.append((col, md.strftime('%b')))
+        ax.set_xticks([c for c, _ in month_starts])
+        ax.set_xticklabels([lab for _, lab in month_starts], fontsize=8)
+        ax.tick_params(axis='x', length=0)
+        for spine in ax.spines.values():
+            spine.set_visible(False)
+        # Draw the cells.
+        for i in range(n_days):
+            d = jan1 + _td(days=i)
+            col = (i + first_weekday) // 7
+            row = d.weekday()
+            count = per_day.get(d, 0)
+            if d > last_d:
+                # Future day in the same year as last_d — leave blank.
+                color = '#ffffff'
+            else:
+                color = cmap(norm(count)) if count > 0 else '#eef3fa'
+            ax.add_patch(Rectangle(
+                (col - 0.45, row - 0.45), 0.9, 0.9,
+                facecolor=color, edgecolor='#dde4ee', linewidth=0.35,
+            ))
+        ax.set_title(f'{yr}', loc='left', fontsize=10,
+                     fontweight='bold', color='#1a3a5c')
+
+    fig.suptitle('Shot volume calendar', fontsize=12,
+                 fontweight='bold', color='#1a3a5c')
+    # Colorbar on the side.
+    cax = fig.add_axes([0.92, 0.15, 0.012, 0.7])
+    import matplotlib.cm as cm
+    sm = cm.ScalarMappable(norm=norm, cmap=cmap)
+    sm.set_array([])
+    cb = fig.colorbar(sm, cax=cax)
+    cb.set_label('Shots / day', fontsize=8)
+    cb.ax.tick_params(labelsize=7)
+    # Manual colorbar axes are incompatible with tight_layout; lay out
+    # the main grid via subplots_adjust instead so matplotlib stops
+    # warning.
+    fig.subplots_adjust(left=0.06, right=0.9, top=0.92, bottom=0.08,
+                        hspace=0.55)
+    png_b64 = _render_matplotlib_png(fig)
+
+    # Summary table.
+    total_shots = sum(per_day.values())
+    active_days = sum(1 for v in per_day.values() if v > 0)
+    span_days = (last_d - first_d).days + 1
+    busiest_d, busiest_n = max(per_day.items(), key=lambda kv: kv[1])
+    rows_out = [
+        ['Span', f'{first_d.isoformat()} → {last_d.isoformat()} '
+                 f'({span_days} day{"s" if span_days != 1 else ""})'],
+        ['Active days', f'{active_days} of {span_days} '
+                       f'({active_days / span_days * 100:.1f}%)'],
+        ['Total shots', total_shots],
+        ['Busiest day',
+         f'{busiest_d.isoformat()} — {busiest_n} shot'
+         f'{"s" if busiest_n != 1 else ""}'],
+        ['Average on active days',
+         f'{total_shots / active_days:.1f} shots/day' if active_days else '—'],
+    ]
+
+    intro = Markup(
+        '<p class="report-intro">'
+        '<strong>What this shows:</strong> a GitHub-style year grid of '
+        'shots per calendar day. Streaks and gaps are visible at a '
+        'glance — useful for honest answers to "am I really practicing '
+        'as much as I think?" Brighter cells = busier days.'
+        '</p>'
+    )
+
+    return {
+        'key': 'calendar_heatmap',
+        'title': 'Shot volume calendar',
+        'intro_html': intro,
+        'png_b64': png_b64,
+        'columns': ['Metric', 'Value'],
         'rows': rows_out,
     }
 
@@ -8320,6 +9730,41 @@ REPORTS = {
         # user can scope the comparison instead of generating C(n,2) panels
         # for every tag they've ever used. See ``_tag_inventory``.
         'tag_picker': True,
+    },
+    'within_session_drift': {
+        'label': 'Within-session drift',
+        'description': 'How MPI and R95 change by quiver position across '
+                       'all your sessions. Reveals warm-up gains and '
+                       'late-session fatigue.',
+        'fn': _report_within_session_drift,
+    },
+    'cold_bore_vs_warmed': {
+        'label': 'Cold bore vs warmed up',
+        'description': 'Pool the first quiver of every session against '
+                       'later quivers, then run independent accuracy and '
+                       'precision tests on the two pools.',
+        'fn': _report_cold_bore_vs_warmed,
+    },
+    'shot_density_heatmap': {
+        'label': 'Shot density heatmap',
+        'description': 'Hexbin density of every hit on each target, '
+                       'overlaid on the face. Better than the scatter '
+                       'report once a target has hundreds of shots.',
+        'fn': _report_shot_density_heatmap,
+    },
+    'expected_score': {
+        'label': 'Expected score from fit',
+        'description': 'For each target with scoring zones, fit a '
+                       'bivariate normal to your shots, Monte-Carlo '
+                       'sample it, and project expected points per arrow '
+                       'and per end.',
+        'fn': _report_expected_score,
+    },
+    'calendar_heatmap': {
+        'label': 'Shot volume calendar',
+        'description': 'GitHub-style year-grid of shots per calendar day. '
+                       'Streaks and gaps are visible at a glance.',
+        'fn': _report_calendar_heatmap,
     },
 }
 
@@ -8479,10 +9924,10 @@ def _fit_shot_distribution(user_id, bows=None, arrows=None, tags=None,
             continue
         ts = _row_get(r, 'timestamp')
         if df or dt:
-            ts_str = str(ts) if ts is not None else ''
-            if df and ts_str[:10] < df:
+            ts_str = _ts_date_str(ts)
+            if df and ts_str < df:
                 continue
-            if dt and ts_str[:10] > dt:
+            if dt and ts_str > dt:
                 continue
 
         xraw = _row_get(r, 'x_coord')
@@ -9040,6 +10485,23 @@ def analyze_export():
     #   * a list of dicts, each with `panels` (head-to-head per-kind)
     #   * a single dict flagged `empty: True`
     # Flatten everything into one list of (title, columns, rows) sections.
+    #
+    # Cells may be Markup-wrapped (data-tip spans in the head-to-head
+    # tables, italic <em> section-header markers in the shots-per-target
+    # table) — the HTML render leaves those alone, but Excel and CSV
+    # readers shouldn't see raw tags. Strip them to plain text on the
+    # way out.
+    _tag_re = re.compile(r'<[^>]+>')
+
+    def _plain(cell):
+        if isinstance(cell, Markup):
+            from html import unescape
+            return unescape(_tag_re.sub('', str(cell)))
+        return cell
+
+    def _plain_row(r):
+        return [_plain(c) for c in r]
+
     raw_items = out if isinstance(out, list) else [out]
     sections = []
     multi = False
@@ -9053,9 +10515,15 @@ def analyze_export():
                 # skip them in the export rather than emit empty sheets.
                 if not p.get('columns'):
                     continue
-                sections.append((p['title'], p['columns'], p['rows']))
+                sections.append((
+                    p['title'], _plain_row(p['columns']),
+                    [_plain_row(r) for r in p['rows']],
+                ))
         else:
-            sections.append((item['title'], item['columns'], item['rows']))
+            sections.append((
+                item['title'], _plain_row(item['columns']),
+                [_plain_row(r) for r in item['rows']],
+            ))
     if not sections:
         return "No data to export for this report yet.", 404
 
