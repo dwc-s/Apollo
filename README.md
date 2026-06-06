@@ -233,9 +233,12 @@ an empirical R95 percentile and the table flags them.
 ### Head-to-head statistical model
 
 For every pair of bows / arrows / session tags with at least 5 shots
-each, Apollo decomposes the comparison into **three independent test
-families** so you can tell *what* differs, not just *that* something
-does:
+each — and that have *never been used in the same session* (a pair that
+co-occurs in even one session is dropped, since the head-to-head only
+tells you something meaningful when the two sides are mutually
+exclusive) — Apollo decomposes the comparison into **three independent
+test families** so you can tell *what* differs, not just *that*
+something does:
 
 | Family | Question | Test | Input |
 |---|---|---|---|
@@ -277,6 +280,30 @@ sees.
 
 ---
 
+## Tools (`/tools`)
+
+Seven client-side archery calculators on one page, each in its own
+collapsible card (collapsed by default). All math runs in the browser —
+no DB hits, no server round-trips per keystroke.
+
+| Tool | What it does |
+|---|---|
+| **Wind drift** | Drag-based lateral drift on a cylindrical shaft (`F = ½ρv²·C_d·(L·d)`, `drift = ½(F/m)·t²`). Inputs include arrow mass, shaft OD, length, mean wind, and **peak gust** — the wind² scaling in the drag formula means a 1.5× gust produces 2.25× the drift, surfaced explicitly. Shaft OD displays in inches or mm following the global `⇄ Imperial/Metric` toggle. |
+| **Sight marks** | Piecewise-linear interpolation across any number of known distance/mark pairs. Extrapolates beyond the known range using the nearest segment's slope and flags it as extrapolated. |
+| **Arrow spine selector** | Easton-style adjusted bow weight (±5 lbs/in arrow length, ±1.5 lbs per 25 gr point weight, bow-type correction) → recommended spine band. |
+| **FOC** | Standard ATA `((balance − L/2)/L)·100` with low / target / hunting / EFOC band chips. |
+| **Arrow speed (fps)** | Two methods: **bow specs** (energy-storage model `v = √(2·η·k·F_peak·stroke / m)`, works for any bow type from peak weight, draw length, brace height, arrow mass) and **IBO/ATA rating** (compound-only delta-from-rating). |
+| **Kinetic energy & momentum** | `KE = mv²/450,240` (ft·lb), `momentum = mv/225,400` (slug·ft/s). |
+| **Slope compensator** | Rifleman's rule for arrows: aim for `slant × cos(angle)`, displays the hold-off delta. |
+
+The energy-storage FPS model uses bow-type-tuned constants for the
+force-draw-curve area fraction `k` and mechanical efficiency `η`:
+recurve `k=0.45 / η=0.72`, compound `k=0.65 / η=0.85`, longbow
+`k=0.40 / η=0.70`. Estimates land within published chronograph ranges
+across all three bow types.
+
+---
+
 ## Notes
 
 - **Multi-user.** The first account to register inherits any data left
@@ -294,3 +321,7 @@ sees.
   [documentation/tournament/](documentation/tournament/) for the
   internal rule reference. Verify against current official rulebooks
   before relying on a score for competition.
+- **End-session redirect.** The session-stats screen on `/end_session`
+  auto-redirects to the splash 7 seconds after rendering so a user
+  ending a session and walking away lands on the public page rather
+  than a stale stats card.

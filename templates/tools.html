@@ -1,0 +1,739 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Bungee+Shade&family=Quantico:ital,wght@0,400;0,700;1,400;1,700&family=Rubik+Iso&display=swap" rel="stylesheet">
+    <link rel="stylesheet" type="text/css" href="{{ url_for('static', filename='style.css') }}">
+    <title>Apollo::tools</title>
+    <script defer src="{{ url_for('static', filename='apollo-nav.js') }}"></script>
+    <style>
+        details.tool-panel {
+            background-color: #b3c6e3;
+            border-radius: 25px;
+            padding: 14px 28px;
+            max-width: 720px;
+            margin: 0 auto 16px auto;
+            font-family: "Quantico", sans-serif;
+            color: #1a3a5c;
+        }
+        details.tool-panel[open] {
+            padding: 22px 28px;
+        }
+        details.tool-panel summary {
+            list-style: none;
+            cursor: pointer;
+            user-select: none;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-family: "Quantico", sans-serif;
+            font-weight: 700;
+            font-size: 1.05rem;
+            letter-spacing: 0.04em;
+            color: #1a3a5c;
+        }
+        details.tool-panel summary::-webkit-details-marker { display: none; }
+        details.tool-panel summary::before {
+            content: '\25B8'; /* ▸ */
+            display: inline-block;
+            width: 1em;
+            text-align: center;
+            transition: transform 0.15s;
+        }
+        details.tool-panel[open] summary::before {
+            transform: rotate(90deg);
+        }
+        details.tool-panel summary h3 {
+            display: inline;
+            margin: 0;
+            font-weight: 700;
+            font-size: 1.05rem;
+        }
+        details.tool-panel[open] summary {
+            margin-bottom: 10px;
+        }
+        .tool-panel p.tool-desc {
+            margin: 0 0 14px 0;
+            font-size: 0.85rem;
+            color: #2c4a6b;
+        }
+        .tool-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 12px 18px;
+            margin-bottom: 10px;
+        }
+        .tool-row label {
+            display: inline-flex;
+            flex-direction: column;
+            font-size: 0.72rem;
+            letter-spacing: 0.06em;
+            text-transform: uppercase;
+            font-weight: 700;
+            gap: 4px;
+            min-width: 140px;
+        }
+        .tool-row input[type="number"],
+        .tool-row select {
+            font-family: "Quantico", sans-serif;
+            font-size: 0.9rem;
+            padding: 4px 8px;
+            border: 1px solid #6b80a8;
+            border-radius: 4px;
+            background: #eef2f9;
+            color: #1a3a5c;
+            text-transform: none;
+            letter-spacing: 0;
+            font-weight: 400;
+            width: 140px;
+        }
+        .tool-result {
+            background: #1a3a5c;
+            color: #fcba03;
+            border-radius: 10px;
+            padding: 12px 16px;
+            margin-top: 12px;
+            font-size: 1.05rem;
+        }
+        .tool-result .result-line { margin: 2px 0; }
+        .tool-result .result-sub {
+            color: #b3c6e3;
+            font-size: 0.78rem;
+            margin-top: 4px;
+        }
+        .tool-note {
+            font-size: 0.75rem;
+            color: #2c4a6b;
+            font-style: italic;
+            margin-top: 8px;
+        }
+        .tool-pair-row {
+            display: grid;
+            grid-template-columns: 1fr 1fr auto;
+            gap: 6px;
+            margin-bottom: 4px;
+            align-items: center;
+        }
+        .tool-pair-row input {
+            font-family: "Quantico", sans-serif;
+            font-size: 0.9rem;
+            padding: 4px 8px;
+            border: 1px solid #6b80a8;
+            border-radius: 4px;
+            background: #eef2f9;
+            color: #1a3a5c;
+        }
+        .tool-pair-row button.del-pair {
+            background: #c0392b;
+            color: #fff;
+            border: none;
+            border-radius: 4px;
+            width: 28px;
+            height: 28px;
+            font-size: 1rem;
+            cursor: pointer;
+        }
+        .tool-btn {
+            background: #4d6da6;
+            color: #fff;
+            border: 1px solid #1a3a5c;
+            border-radius: 6px;
+            padding: 6px 14px;
+            font-family: "Quantico", sans-serif;
+            font-size: 0.85rem;
+            cursor: pointer;
+            margin-top: 4px;
+        }
+        .tool-btn:hover { background: #1a3a5c; }
+        .foc-band {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 999px;
+            font-size: 0.75rem;
+            margin-left: 6px;
+        }
+        .foc-band.low { background: #c0392b; color: #fff; }
+        .foc-band.target { background: #fcba03; color: #1a3a5c; }
+        .foc-band.hunting { background: #27ae60; color: #fff; }
+        .foc-band.efoc { background: #8e44ad; color: #fff; }
+    </style>
+</head>
+<body>
+<nav class="side-nav">
+    <a href="/" class="side-nav-brand">Apollo</a>
+    {% if current_user %}
+    <a href="/sesh" class="side-nav-link"><span class="nav-badge">→</span>Start session</a>
+    <a href="/previous_sessions" class="side-nav-link"><span class="nav-badge">→</span>Previous sessions</a>
+    <hr class="side-nav-divider">
+    <a href="/tournament" class="side-nav-link"><span class="nav-badge">★</span>Tournament</a>
+    <hr class="side-nav-divider">
+    <a href="/analyze" class="side-nav-link"><span class="nav-badge">→</span>Analyze data</a>
+    <a href="/predict" class="side-nav-link"><span class="nav-badge">→</span>Predict performance</a>
+    <a href="/tools" class="side-nav-link"><span class="nav-badge">⚙</span>Tools</a>
+    <hr class="side-nav-divider">
+    <a href="/add_bow" class="side-nav-link"><span class="nav-badge">→</span>Add bow</a>
+    <a href="/add_arrow" class="side-nav-link"><span class="nav-badge">→</span>Add arrow</a>
+    <a href="/add_target" class="side-nav-link"><span class="nav-badge">→</span>Add target</a>
+    <hr class="side-nav-divider">
+    <a href="/edit_bows" class="side-nav-link"><span class="nav-badge">→</span>Edit bows</a>
+    <a href="/edit_arrows" class="side-nav-link"><span class="nav-badge">→</span>Edit arrows</a>
+    <a href="/edit_targets" class="side-nav-link"><span class="nav-badge">→</span>Edit targets</a>
+    <hr class="side-nav-divider">
+    <a href="#" id="export-link" class="side-nav-link"><span class="nav-badge">⬇</span>Export data</a>
+    <a href="#" id="import-link" class="side-nav-link"><span class="nav-badge">⬆</span>Import data</a>
+    <hr class="side-nav-divider">
+    <a href="#" id="notes-link" class="side-nav-link"><span class="nav-badge">✎</span>Notes</a>
+    <hr class="side-nav-divider">
+    {% if current_user and current_user.is_root %}
+    <a href="/admin" class="side-nav-link"><span class="nav-badge">★</span>Admin</a>
+    <hr class="side-nav-divider">
+    {% endif %}
+    {% endif %}
+    <button type="button" id="units-toggle" class="side-nav-units-btn">⇄ Imperial</button>
+    <div class="side-nav-spacer"></div>
+    {% if current_user %}
+    <div class="side-nav-user">
+        <span class="username">{{ current_user.username }}</span>
+        <a href="/account">Account</a>
+        <form action="/logout" method="POST">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <button type="submit" class="logout-btn">Sign out</button>
+        </form>
+    </div>
+    {% endif %}
+</nav>
+
+<h1 class="title">Tools</h1>
+
+<!-- ── Wind drift ─────────────────────────────────────────────────────── -->
+<details class="tool-panel" id="tool-wind">
+    <summary><h3>Wind drift</h3></summary>
+    <p class="tool-desc">Drag-based lateral drift on a cylindrical shaft. Drift scales with wind², so a gust catching the arrow mid-flight drifts disproportionately more than the mean wind suggests. Heavier and skinnier shafts drift less. Fletching weathercocks the arrow back toward the apparent wind in flight, so real drift is typically 30–60% of this estimate.</p>
+    <div class="tool-row">
+        <label>Arrow speed (fps)<input type="number" id="wind-speed-fps" value="220" min="1" step="1"></label>
+        <label>Distance (yd)<input type="number" id="wind-dist-yd" value="40" min="1" step="1"></label>
+        <label>Mean wind (mph)<input type="number" id="wind-wind-mph" value="10" min="0" step="0.5"></label>
+        <label>Peak gust (mph)<input type="number" id="wind-gust-mph" value="15" min="0" step="0.5"></label>
+        <label>Wind angle (°)<input type="number" id="wind-angle-deg" value="90" min="0" max="180" step="5"></label>
+        <label>Arrow mass (gr)<input type="number" id="wind-arrow-mass" value="400" min="50" step="1"></label>
+        <label><span>Shaft OD (<span id="wind-arrow-dia-unit-label">in</span>)</span><input type="number" id="wind-arrow-dia" value="0.246" min="0.05" max="25" step="0.001"></label>
+        <label>Arrow length (in)<input type="number" id="wind-arrow-len" value="29" min="20" max="36" step="0.25"></label>
+    </div>
+    <div class="tool-result" id="wind-result">—</div>
+    <p class="tool-note">Wind angle: 0° = headwind/tailwind (no drift), 90° = pure crosswind. Set peak gust = mean wind for a steady-wind result. Real archery wind is typically gust-factor 1.4–1.7 (peak ÷ mean).</p>
+</details>
+
+<!-- ── Sight marks ────────────────────────────────────────────────────── -->
+<details class="tool-panel" id="tool-sight">
+    <summary><h3>Sight marks</h3></summary>
+    <p class="tool-desc">Enter two or more known sight settings, then ask for any other distance. Uses piecewise linear interpolation, extrapolates with the nearest segment's slope.</p>
+    <div id="sight-pairs">
+        <div class="tool-pair-row">
+            <input type="number" placeholder="Distance" class="sight-dist" step="any">
+            <input type="number" placeholder="Mark" class="sight-mark" step="any">
+            <button type="button" class="del-pair" aria-label="remove">×</button>
+        </div>
+        <div class="tool-pair-row">
+            <input type="number" placeholder="Distance" class="sight-dist" step="any">
+            <input type="number" placeholder="Mark" class="sight-mark" step="any">
+            <button type="button" class="del-pair" aria-label="remove">×</button>
+        </div>
+    </div>
+    <button type="button" class="tool-btn" id="sight-add">+ Add row</button>
+    <div class="tool-row" style="margin-top:12px;">
+        <label>Target distance<input type="number" id="sight-target" step="any"></label>
+    </div>
+    <div class="tool-result" id="sight-result">—</div>
+    <p class="tool-note">Distance and mark can be in any units you like — the calculator just interpolates within the column you entered.</p>
+</details>
+
+<!-- ── Spine selector ─────────────────────────────────────────────────── -->
+<details class="tool-panel" id="tool-spine">
+    <summary><h3>Arrow spine selector</h3></summary>
+    <p class="tool-desc">Rough recommendation from your bow's draw weight, arrow length, point weight, and bow type. Always cross-check with the arrow manufacturer's chart before buying a dozen.</p>
+    <div class="tool-row">
+        <label>Bow type
+            <select id="spine-bow-type">
+                <option value="compound">Compound</option>
+                <option value="recurve" selected>Recurve</option>
+                <option value="longbow">Longbow / traditional</option>
+            </select>
+        </label>
+        <label>Draw weight (lbs)<input type="number" id="spine-weight" value="40" min="10" step="1"></label>
+        <label>Arrow length (in)<input type="number" id="spine-length" value="28" min="20" max="36" step="0.25"></label>
+        <label>Point weight (gr)<input type="number" id="spine-point" value="100" min="40" max="400" step="5"></label>
+    </div>
+    <div class="tool-result" id="spine-result">—</div>
+    <p class="tool-note">Adjusted bow weight = draw weight + 5 lbs per inch over 28″ + 1.5 lbs per 25 gr over 100 gr point weight, with a small correction for compound vs recurve vs longbow.</p>
+</details>
+
+<!-- ── FOC ────────────────────────────────────────────────────────────── -->
+<details class="tool-panel" id="tool-foc">
+    <summary><h3>FOC — front-of-center</h3></summary>
+    <p class="tool-desc">FOC% = how far the balance point sits forward of the arrow's geometric center, as a percentage of total length.</p>
+    <div class="tool-row">
+        <label>Total length (in)<input type="number" id="foc-length" value="29" min="10" step="0.125"></label>
+        <label>Balance from throat (in)<input type="number" id="foc-balance" value="15.5" min="1" step="0.0625"></label>
+    </div>
+    <div class="tool-result" id="foc-result">—</div>
+    <p class="tool-note">Bands: &lt;7% low · 7–9% target · 10–15% hunting · 15–30% EFOC. Measure total length from the throat of the nock to the back of the point.</p>
+</details>
+
+<!-- ── FPS estimator ──────────────────────────────────────────────────── -->
+<details class="tool-panel" id="tool-fps">
+    <summary><h3>Arrow speed (fps)</h3></summary>
+    <p class="tool-desc">Two methods. Use IBO/ATA if you already know your bow's advertised speed (compound-only). Use bow specs for an energy-storage estimate that works for any bow type — recurve, compound, or longbow — from physical parameters alone.</p>
+    <div class="tool-row">
+        <label>Method
+            <select id="fps-method">
+                <option value="specs" selected>Bow specs (any bow type)</option>
+                <option value="ibo">IBO/ATA rating (compound)</option>
+            </select>
+        </label>
+    </div>
+
+    <!-- Specs-based mode -->
+    <div id="fps-specs-mode">
+        <div class="tool-row">
+            <label>Bow type
+                <select id="fps-bow-type">
+                    <option value="compound">Compound</option>
+                    <option value="recurve" selected>Recurve</option>
+                    <option value="longbow">Longbow / traditional</option>
+                </select>
+            </label>
+            <label>Peak draw weight (lbs)<input type="number" id="fps-spec-weight" value="40" min="10" step="1"></label>
+            <label>Draw length (in)<input type="number" id="fps-spec-draw" value="28" min="20" max="34" step="0.25"></label>
+            <label>Brace height (in)<input type="number" id="fps-spec-brace" value="8" min="3" max="12" step="0.125"></label>
+            <label>Arrow mass (gr)<input type="number" id="fps-spec-arrow" value="300" min="100" step="1"></label>
+        </div>
+    </div>
+
+    <!-- IBO mode -->
+    <div id="fps-ibo-mode" style="display:none;">
+        <div class="tool-row">
+            <label>Rated speed (fps)<input type="number" id="fps-rated" value="320" min="100" step="1"></label>
+            <label>Draw weight (lbs)<input type="number" id="fps-weight" value="60" min="10" step="1"></label>
+            <label>Draw length (in)<input type="number" id="fps-draw" value="28" min="20" max="34" step="0.25"></label>
+            <label>Arrow weight (gr)<input type="number" id="fps-arrow" value="400" min="100" step="1"></label>
+            <label>String accessories (gr)<input type="number" id="fps-string" value="0" min="0" step="1"></label>
+        </div>
+    </div>
+
+    <div class="tool-result" id="fps-result">—</div>
+    <p class="tool-note" id="fps-note-specs">Energy model: stored energy ≈ k·F<sub>peak</sub>·stroke (k accounts for the force-draw curve shape, including let-off on compounds), then η·E<sub>stored</sub> goes into the arrow as kinetic energy. Recurve k=0.45/η=0.72, compound k=0.65/η=0.85, longbow k=0.40/η=0.70. Always trust a chronograph over a calculator.</p>
+    <p class="tool-note" id="fps-note-ibo" style="display:none;">Adjustments: −2 fps per lb under rated weight · −10 fps per inch under rated draw · −1 fps per 3 gr over rated arrow weight · −1 fps per 3 gr of string accessory weight. Note: IBO and ATA both standardize 70 lb / 30″ / 350 gr — the two ratings give identical numbers here.</p>
+</details>
+
+<!-- ── KE ─────────────────────────────────────────────────────────────── -->
+<details class="tool-panel" id="tool-ke">
+    <summary><h3>Kinetic energy &amp; momentum</h3></summary>
+    <p class="tool-desc">Energy delivered at the chronograph point, plus momentum (a better predictor of penetration than KE for big-game hunters).</p>
+    <div class="tool-row">
+        <label>Arrow weight (gr)<input type="number" id="ke-weight" value="400" min="50" step="1"></label>
+        <label>Velocity (fps)<input type="number" id="ke-speed" value="270" min="1" step="1"></label>
+    </div>
+    <div class="tool-result" id="ke-result">—</div>
+    <p class="tool-note">KE (ft·lb) = mass × velocity² ÷ 450,240. Momentum (slug·ft/s) = mass × velocity ÷ 225,400.</p>
+</details>
+
+<!-- ── Slope ──────────────────────────────────────────────────────────── -->
+<details class="tool-panel" id="tool-slope">
+    <summary><h3>Slope compensator</h3></summary>
+    <p class="tool-desc">Rifleman's rule for arrows: gravity only pulls along the horizontal component of the shot, so aim as if the target were at its horizontal distance, not the slant range.</p>
+    <div class="tool-row">
+        <label>Slant distance<input type="number" id="slope-dist" value="40" min="1" step="any"></label>
+        <label>Angle (°)<input type="number" id="slope-angle" value="20" min="-89" max="89" step="1"></label>
+    </div>
+    <div class="tool-result" id="slope-result">—</div>
+    <p class="tool-note">Positive angle = uphill, negative = downhill. Effective distance is identical for either direction.</p>
+</details>
+
+<script>
+(function () {
+    'use strict';
+
+    const fmt = (v, d) => Number.isFinite(v) ? v.toFixed(d) : '—';
+    const $ = (id) => document.getElementById(id);
+
+    // ── Wind drift ───────────────────────────────────────────────────
+    // Drag-based lateral drift. Wind² in the drag formula means a 1.5×
+    // gust drifts 2.25× the mean, which is the headline gust insight.
+    function recalcWind() {
+        const speed = parseFloat($('wind-speed-fps').value);
+        const dist  = parseFloat($('wind-dist-yd').value);
+        const wind  = parseFloat($('wind-wind-mph').value);
+        const gust  = parseFloat($('wind-gust-mph').value);
+        const angle = parseFloat($('wind-angle-deg').value);
+        const mass  = parseFloat($('wind-arrow-mass').value);  // grains
+        // OD displays in mm or in depending on the global units toggle; the
+        // math always works in inches.
+        const diaRaw = parseFloat($('wind-arrow-dia').value);
+        const dia   = (odDisplayUnit === 'mm') ? diaRaw / 25.4 : diaRaw;
+        const len   = parseFloat($('wind-arrow-len').value);   // inches
+        const out = $('wind-result');
+        if (!(speed > 0) || !(dist > 0) || !(wind >= 0) || !(gust >= 0)
+            || !Number.isFinite(angle)
+            || !(mass > 0) || !(dia > 0) || !(len > 0)) {
+            out.textContent = '—';
+            return;
+        }
+        const mass_kg  = mass * 6.479891e-5;     // grains → kg
+        const dia_m    = dia * 0.0254;            // inches → m
+        const len_m    = len * 0.0254;            // inches → m
+        const speed_ms = speed * 0.3048;          // fps → m/s
+        const dist_m   = dist * 0.9144;           // yards → m
+        const RHO_AIR  = 1.225;
+        const CD       = 1.0;
+        const A_side   = len_m * dia_m;
+        const sinθ     = Math.sin(angle * Math.PI / 180);
+        const t        = dist_m / speed_ms;
+
+        // Drift for a steady wind of v_mph. Returns metres.
+        function driftAt(v_mph) {
+            const v_perp = v_mph * 0.44704 * sinθ;
+            const F = 0.5 * RHO_AIR * v_perp * v_perp * CD * A_side;
+            const a = F / mass_kg;
+            return 0.5 * a * t * t;
+        }
+        const drift_mean_m = driftAt(wind);
+        const drift_peak_m = driftAt(Math.max(gust, wind));
+        const toIn = (m) => Math.abs(m / 0.0254);
+        const toCm = (m) => Math.abs(m * 100);
+
+        const gustFactor = wind > 0 ? gust / wind : 0;
+        const gustLine = (gust > wind)
+            ? '<div class="result-line"><strong>Drift in peak gust:</strong> ' +
+                  fmt(toIn(drift_peak_m), 1) + ' in (' + fmt(toCm(drift_peak_m), 1) + ' cm)</div>'
+            : '';
+        const gustSub = (gust > wind && wind > 0)
+            ? ' · gust factor ' + fmt(gustFactor, 2) +
+              ' (' + fmt(gustFactor * gustFactor, 2) + '× drift)'
+            : '';
+        out.innerHTML =
+            '<div class="result-line"><strong>Drift at mean wind:</strong> ' +
+                fmt(toIn(drift_mean_m), 1) + ' in (' + fmt(toCm(drift_mean_m), 1) + ' cm)</div>' +
+            gustLine +
+            '<div class="result-sub">Time of flight: ' + fmt(t, 2) + ' s · ' +
+                'crosswind: ' + fmt(Math.abs(wind * sinθ), 1) + ' mph' + gustSub + '</div>';
+    }
+    ['wind-speed-fps', 'wind-dist-yd', 'wind-wind-mph', 'wind-gust-mph',
+     'wind-angle-deg', 'wind-arrow-mass', 'wind-arrow-dia', 'wind-arrow-len']
+        .forEach(id => $(id).addEventListener('input', recalcWind));
+    // First recalcWind() runs from refreshUnits() below — odDisplayUnit
+    // (closed over by recalcWind) must be initialized first.
+
+    // ── Global units toggle (shaft OD) ───────────────────────────────
+    // The sidebar's ⇄ button drives the unit shown alongside Shaft OD.
+    // The math always operates in inches; we just convert at the display
+    // boundary so the user can think in whichever system they prefer.
+    const UNITS_KEY = 'apollo_units';
+    const odInput   = $('wind-arrow-dia');
+    const odLabel   = $('wind-arrow-dia-unit-label');
+    const toggleBtn = $('units-toggle');
+    let odDisplayUnit = (localStorage.getItem(UNITS_KEY) === 'imperial') ? 'in' : 'mm';
+    // Initial render: HTML value is in inches; convert to mm if the user is metric.
+    if (odDisplayUnit === 'mm') {
+        const v = parseFloat(odInput.value);
+        if (Number.isFinite(v)) odInput.value = (v * 25.4).toFixed(2);
+    }
+    function refreshUnits() {
+        const wanted = (localStorage.getItem(UNITS_KEY) === 'imperial') ? 'in' : 'mm';
+        toggleBtn.textContent = (wanted === 'in') ? '⇄ Metric' : '⇄ Imperial';
+        if (wanted !== odDisplayUnit) {
+            const v = parseFloat(odInput.value);
+            if (Number.isFinite(v)) {
+                odInput.value = (wanted === 'in')
+                    ? (v / 25.4).toFixed(3)   // mm → in
+                    : (v * 25.4).toFixed(2);  // in → mm
+            }
+            odDisplayUnit = wanted;
+        }
+        odLabel.textContent = wanted;
+        recalcWind();
+    }
+    toggleBtn.addEventListener('click', () => {
+        const current = localStorage.getItem(UNITS_KEY) || 'metric';
+        localStorage.setItem(UNITS_KEY, current === 'metric' ? 'imperial' : 'metric');
+        refreshUnits();
+    });
+    refreshUnits();
+
+    // ── Sight marks ──────────────────────────────────────────────────
+    function readSightPairs() {
+        const rows = document.querySelectorAll('#sight-pairs .tool-pair-row');
+        const pairs = [];
+        rows.forEach(r => {
+            const d = parseFloat(r.querySelector('.sight-dist').value);
+            const m = parseFloat(r.querySelector('.sight-mark').value);
+            if (Number.isFinite(d) && Number.isFinite(m)) pairs.push([d, m]);
+        });
+        pairs.sort((a, b) => a[0] - b[0]);
+        return pairs;
+    }
+    function interpSight(pairs, x) {
+        if (pairs.length < 2) return null;
+        if (x <= pairs[0][0]) {
+            const [x1, y1] = pairs[0];
+            const [x2, y2] = pairs[1];
+            return y1 + (y2 - y1) * (x - x1) / (x2 - x1);
+        }
+        const last = pairs.length - 1;
+        if (x >= pairs[last][0]) {
+            const [x1, y1] = pairs[last - 1];
+            const [x2, y2] = pairs[last];
+            return y1 + (y2 - y1) * (x - x1) / (x2 - x1);
+        }
+        for (let i = 0; i < last; i++) {
+            const [x1, y1] = pairs[i];
+            const [x2, y2] = pairs[i + 1];
+            if (x >= x1 && x <= x2) {
+                return y1 + (y2 - y1) * (x - x1) / (x2 - x1);
+            }
+        }
+        return null;
+    }
+    function recalcSight() {
+        const pairs = readSightPairs();
+        const target = parseFloat($('sight-target').value);
+        const out = $('sight-result');
+        if (pairs.length < 2) {
+            out.textContent = 'Enter at least two distance/mark pairs.';
+            return;
+        }
+        if (!Number.isFinite(target)) {
+            out.textContent = 'Enter a target distance.';
+            return;
+        }
+        const mark = interpSight(pairs, target);
+        if (mark === null) {
+            out.textContent = '—';
+            return;
+        }
+        const inside = target >= pairs[0][0] && target <= pairs[pairs.length - 1][0];
+        out.innerHTML =
+            '<div class="result-line"><strong>Mark at ' + target + ':</strong> ' + fmt(mark, 3) + '</div>' +
+            '<div class="result-sub">' + (inside ? 'Interpolated' : 'Extrapolated — verify at the range') + '</div>';
+    }
+    function bindSightRow(row) {
+        row.querySelectorAll('input').forEach(i => i.addEventListener('input', recalcSight));
+        row.querySelector('.del-pair').addEventListener('click', () => {
+            row.remove();
+            recalcSight();
+        });
+    }
+    document.querySelectorAll('#sight-pairs .tool-pair-row').forEach(bindSightRow);
+    $('sight-add').addEventListener('click', () => {
+        const row = document.createElement('div');
+        row.className = 'tool-pair-row';
+        row.innerHTML =
+            '<input type="number" placeholder="Distance" class="sight-dist" step="any">' +
+            '<input type="number" placeholder="Mark" class="sight-mark" step="any">' +
+            '<button type="button" class="del-pair" aria-label="remove">×</button>';
+        $('sight-pairs').appendChild(row);
+        bindSightRow(row);
+    });
+    $('sight-target').addEventListener('input', recalcSight);
+    recalcSight();
+
+    // ── Spine selector ───────────────────────────────────────────────
+    function spineBand(adj) {
+        // Adjusted-weight → spine range. Rough Easton-style chart.
+        const table = [
+            [22, '1300–1500'],
+            [27, '1000–1300'],
+            [32, '800–1000'],
+            [37, '700–800'],
+            [42, '600–700'],
+            [47, '500–600'],
+            [52, '450–500'],
+            [57, '400–450'],
+            [62, '350–400'],
+            [67, '340–400'],
+            [72, '300–340'],
+            [80, '280–300'],
+            [Infinity, '250–280'],
+        ];
+        for (const [cap, label] of table) {
+            if (adj <= cap) return label;
+        }
+        return '—';
+    }
+    function recalcSpine() {
+        const bow = $('spine-bow-type').value;
+        const w = parseFloat($('spine-weight').value);
+        const L = parseFloat($('spine-length').value);
+        const pt = parseFloat($('spine-point').value);
+        const out = $('spine-result');
+        if (!(w > 0) || !(L > 0) || !(pt > 0)) {
+            out.textContent = '—';
+            return;
+        }
+        const arrowAdj = (L - 28) * 5;
+        const pointAdj = ((pt - 100) / 25) * 1.5;
+        const bowAdj = bow === 'compound' ? 0 : (bow === 'recurve' ? -5 : -10);
+        const adj = w + arrowAdj + pointAdj + bowAdj;
+        out.innerHTML =
+            '<div class="result-line"><strong>Recommended spine:</strong> ' + spineBand(adj) + '</div>' +
+            '<div class="result-sub">Adjusted bow weight: ' + fmt(adj, 1) + ' lb ' +
+                '(arrow ' + (arrowAdj >= 0 ? '+' : '') + fmt(arrowAdj, 1) + ', ' +
+                'point ' + (pointAdj >= 0 ? '+' : '') + fmt(pointAdj, 1) + ', ' +
+                'bow ' + (bowAdj >= 0 ? '+' : '') + bowAdj + ')</div>';
+    }
+    ['spine-bow-type', 'spine-weight', 'spine-length', 'spine-point']
+        .forEach(id => $(id).addEventListener('input', recalcSpine));
+    recalcSpine();
+
+    // ── FOC ──────────────────────────────────────────────────────────
+    function focBand(pct) {
+        if (pct < 7) return ['low', 'low — may flex under spine'];
+        if (pct < 10) return ['target', 'target / barebow'];
+        if (pct < 15) return ['hunting', 'hunting'];
+        if (pct < 30) return ['efoc', 'EFOC'];
+        return ['low', 'extreme — verify measurement'];
+    }
+    function recalcFoc() {
+        const L = parseFloat($('foc-length').value);
+        const B = parseFloat($('foc-balance').value);
+        const out = $('foc-result');
+        if (!(L > 0) || !(B > 0) || B > L) {
+            out.textContent = '—';
+            return;
+        }
+        const foc = ((B - L / 2) / L) * 100;
+        const [cls, lbl] = focBand(foc);
+        out.innerHTML =
+            '<div class="result-line"><strong>FOC:</strong> ' + fmt(foc, 1) + '%' +
+                '<span class="foc-band ' + cls + '">' + lbl + '</span></div>' +
+            '<div class="result-sub">Geometric center at ' + fmt(L / 2, 2) + ' in · ' +
+                'balance ' + fmt(B - L / 2, 2) + ' in forward</div>';
+    }
+    ['foc-length', 'foc-balance']
+        .forEach(id => $(id).addEventListener('input', recalcFoc));
+    recalcFoc();
+
+    // ── FPS estimator ────────────────────────────────────────────────
+    // Two methods: IBO/ATA delta-from-rated (compound only) and an
+    // energy-storage model that handles any bow type from physical specs.
+    const FPS_BOW_PARAMS = {
+        // k = stored-energy fraction (area under force-draw / (F_peak·stroke));
+        // η = mechanical efficiency (fraction of stored energy delivered to arrow).
+        // Tuned against published chronograph data for typical bows.
+        compound: { k: 0.65, eta: 0.85 },
+        recurve:  { k: 0.45, eta: 0.72 },
+        longbow:  { k: 0.40, eta: 0.70 },
+    };
+    function fpsSpecs() {
+        const type = $('fps-bow-type').value;
+        const Fp_lb = parseFloat($('fps-spec-weight').value);
+        const draw_in = parseFloat($('fps-spec-draw').value);
+        const brace_in = parseFloat($('fps-spec-brace').value);
+        const mass_gr = parseFloat($('fps-spec-arrow').value);
+        const out = $('fps-result');
+        if (!(Fp_lb > 0) || !(draw_in > 0) || !(brace_in > 0) || !(mass_gr > 0)
+            || brace_in >= draw_in) {
+            out.textContent = '—';
+            return;
+        }
+        const { k, eta } = FPS_BOW_PARAMS[type];
+        const Fp_N      = Fp_lb * 4.4482216;
+        const stroke_m  = (draw_in - brace_in) * 0.0254;
+        const mass_kg   = mass_gr * 6.479891e-5;
+        const E_stored  = k * Fp_N * stroke_m;       // joules
+        const E_kin     = eta * E_stored;
+        const v_ms      = Math.sqrt(2 * E_kin / mass_kg);
+        const v_fps     = v_ms / 0.3048;
+        const ke_ftlb   = E_kin * 0.737562;
+        out.innerHTML =
+            '<div class="result-line"><strong>Estimated speed:</strong> ' + fmt(v_fps, 1) + ' fps</div>' +
+            '<div class="result-sub">Stored energy ' + fmt(E_stored * 0.737562, 1) + ' ft·lb · ' +
+                'delivered ' + fmt(ke_ftlb, 1) + ' ft·lb · ' +
+                'stroke ' + fmt(draw_in - brace_in, 2) + ' in</div>';
+    }
+    function fpsIbo() {
+        const rated = parseFloat($('fps-rated').value);
+        const w = parseFloat($('fps-weight').value);
+        const d = parseFloat($('fps-draw').value);
+        const a = parseFloat($('fps-arrow').value);
+        const s = parseFloat($('fps-string').value);
+        const out = $('fps-result');
+        if (!(rated > 0) || !(w > 0) || !(d > 0) || !(a > 0) || !(s >= 0)) {
+            out.textContent = '—';
+            return;
+        }
+        const refArrow = 350;             // IBO/ATA both: 5 gr/lb × 70 lb
+        const dWeight = (w - 70) * 2;
+        const dDraw   = (d - 30) * 10;
+        const dArrow  = -(a - refArrow) / 3;
+        const dString = -s / 3;
+        const est = rated + dWeight + dDraw + dArrow + dString;
+        const sign = (v) => (v >= 0 ? '+' : '') + v.toFixed(1);
+        out.innerHTML =
+            '<div class="result-line"><strong>Estimated speed:</strong> ' + fmt(est, 1) + ' fps</div>' +
+            '<div class="result-sub">' +
+                'weight ' + sign(dWeight) + ' · ' +
+                'draw ' + sign(dDraw) + ' · ' +
+                'arrow ' + sign(dArrow) + ' · ' +
+                'string ' + sign(dString) +
+            '</div>';
+    }
+    function recalcFps() {
+        const mode = $('fps-method').value;
+        const showSpecs = (mode === 'specs');
+        $('fps-specs-mode').style.display = showSpecs ? '' : 'none';
+        $('fps-ibo-mode').style.display   = showSpecs ? 'none' : '';
+        $('fps-note-specs').style.display = showSpecs ? '' : 'none';
+        $('fps-note-ibo').style.display   = showSpecs ? 'none' : '';
+        showSpecs ? fpsSpecs() : fpsIbo();
+    }
+    ['fps-method',
+     'fps-bow-type', 'fps-spec-weight', 'fps-spec-draw', 'fps-spec-brace', 'fps-spec-arrow',
+     'fps-rated', 'fps-weight', 'fps-draw', 'fps-arrow', 'fps-string']
+        .forEach(id => $(id).addEventListener('input', recalcFps));
+    recalcFps();
+
+    // ── KE ───────────────────────────────────────────────────────────
+    function recalcKe() {
+        const m = parseFloat($('ke-weight').value);
+        const v = parseFloat($('ke-speed').value);
+        const out = $('ke-result');
+        if (!(m > 0) || !(v > 0)) {
+            out.textContent = '—';
+            return;
+        }
+        const ke = (m * v * v) / 450240;
+        const mom = (m * v) / 225400;
+        out.innerHTML =
+            '<div class="result-line"><strong>KE:</strong> ' + fmt(ke, 1) + ' ft·lb</div>' +
+            '<div class="result-line"><strong>Momentum:</strong> ' + fmt(mom, 3) + ' slug·ft/s</div>';
+    }
+    ['ke-weight', 'ke-speed']
+        .forEach(id => $(id).addEventListener('input', recalcKe));
+    recalcKe();
+
+    // ── Slope ────────────────────────────────────────────────────────
+    function recalcSlope() {
+        const d = parseFloat($('slope-dist').value);
+        const a = parseFloat($('slope-angle').value);
+        const out = $('slope-result');
+        if (!(d > 0) || !Number.isFinite(a)) {
+            out.textContent = '—';
+            return;
+        }
+        const horiz = d * Math.cos(a * Math.PI / 180);
+        const diff = d - horiz;
+        out.innerHTML =
+            '<div class="result-line"><strong>Aim for:</strong> ' + fmt(horiz, 2) + '</div>' +
+            '<div class="result-sub">Slant range ' + fmt(d, 2) + ' · ' +
+                'hold ' + fmt(diff, 2) + ' less than the rangefinder reads</div>';
+    }
+    ['slope-dist', 'slope-angle']
+        .forEach(id => $(id).addEventListener('input', recalcSlope));
+    recalcSlope();
+})();
+</script>
+</body>
+</html>

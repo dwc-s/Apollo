@@ -8037,6 +8037,56 @@ def _tag_shot_samples(user_id):
     return groups
 
 
+def _cooccurring_pairs(user_id, kind):
+    """Names that have ever shared a session — disqualifies head-to-head pairs.
+
+    ``kind`` is 'bow', 'arrow_type', or 'tag'. Returns a set of frozensets
+    of canonical (lowercased) names. Two names land in the set iff at
+    least one session_id has shots from both. The head-to-head report
+    uses this to drop non-mutually-exclusive pairs, since a meaningful
+    A-vs-B comparison requires the two never to have been used together.
+    """
+    if kind not in ('bow', 'arrow_type', 'tag'):
+        raise ValueError(f"Invalid kind: {kind!r}")
+    by_session = {}
+    with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
+        if kind == 'tag':
+            rows = cur.execute(
+                "SELECT session_id, session_tags FROM apollo "
+                "WHERE user_id = %s AND session_id IS NOT NULL "
+                "      AND session_tags IS NOT NULL AND session_tags <> ''",
+                (user_id,)
+            ).fetchall()
+            for r in rows:
+                sid = r['session_id']
+                bucket = by_session.setdefault(sid, set())
+                for part in (r['session_tags'] or '').split(','):
+                    t = part.strip()
+                    if t:
+                        bucket.add(t.lower())
+        else:
+            rows = cur.execute(
+                f"SELECT DISTINCT session_id, {kind} AS eq FROM apollo "
+                f"WHERE user_id = %s AND session_id IS NOT NULL "
+                f"      AND {kind} IS NOT NULL AND {kind} <> ''",
+                (user_id,)
+            ).fetchall()
+            for r in rows:
+                sid = r['session_id']
+                name = (r['eq'] or '').strip()
+                if name:
+                    by_session.setdefault(sid, set()).add(name.lower())
+    pairs = set()
+    for names in by_session.values():
+        if len(names) < 2:
+            continue
+        ordered = list(names)
+        for i in range(len(ordered)):
+            for j in range(i + 1, len(ordered)):
+                pairs.add(frozenset((ordered[i], ordered[j])))
+    return pairs
+
+
 def _summarize_equipment(shots):
     """Per-equipment summary stats used by the head-to-head report.
 
@@ -8199,6 +8249,10 @@ def _report_equipment_head_to_head(user_id, categories=None, tag_filter=None):
         }
         if len(eligible) < 2:
             continue
+        # Drop pairs that have ever co-occurred in the same session — a
+        # head-to-head only tells you something useful when the two sides
+        # are mutually exclusive.
+        cooccur = _cooccurring_pairs(user_id, column)
         # Collect this kind's panels into its own list so we can wrap them
         # in a section titled "{Kind} head-to-head" at the end of the loop.
         panels = []
@@ -8217,6 +8271,8 @@ def _report_equipment_head_to_head(user_id, categories=None, tag_filter=None):
             for j in range(i + 1, len(names_sorted)):
                 a_name = names_sorted[i]
                 b_name = names_sorted[j]
+                if frozenset((a_name.lower(), b_name.lower())) in cooccur:
+                    continue
                 a_sum = summaries[a_name]
                 b_sum = summaries[b_name]
                 if a_sum['n_hit'] < 2 or b_sum['n_hit'] < 2:
@@ -10090,6 +10146,18 @@ def _build_predict_segments(form, user_id):
     max_zone = max((z['point_value'] for z in zones), default=0)
     max_score = max_zone * ends * arrows_per_end
     return [seg], label, max_score
+
+
+@app.route('/tools', methods=['GET'])
+@login_required
+def tools():
+    """Standalone archery calculators. Pure client-side math — no DB.
+
+    Six tools on one page (wind drift, sight-mark interpolator, spine
+    selector, FOC, kinetic energy, slope compensator). The template does
+    all the math in JS so the user gets live updates and we don't burn
+    a server round-trip per keystroke."""
+    return render_template('tools.html')
 
 
 @app.route('/predict', methods=['GET', 'POST'])
