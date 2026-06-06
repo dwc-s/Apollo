@@ -37,6 +37,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Apollo::session</title>
     <script defer src="{{ url_for('static', filename='apollo-nav.js') }}"></script>
+    <script defer src="{{ url_for('static', filename='apollo-tags.js') }}"></script>
 </head>
 <body>
 <nav class="side-nav">
@@ -81,6 +82,20 @@
 </nav>
 
 <h4 class="quantico">Session #{{ session_id }} / <a href="/end_session" data-no-warn="1">End session</a></h4>
+
+<!-- ── Quiver-size prompt modal ──────────────────────────────────────────── -->
+<div class="modal-backdrop" id="quiver-modal" role="dialog" aria-modal="true" aria-labelledby="quiver-modal-title">
+    <div class="modal-card">
+        <h3 id="quiver-modal-title">Set quiver size</h3>
+        <p>How many arrows are in your quiver? Apollo needs this to track shots and quivers completed before recording your first arrow.</p>
+        <input type="text" id="quiver-modal-input" inputmode="numeric" pattern="[0-9]*"
+               style="width:100%;padding:8px;border:1px solid #95abcf;border-radius:4px;background:#fff;font-family:'Quantico',sans-serif;font-size:1rem;box-sizing:border-box;color:#1a3a5c;">
+        <div class="modal-actions" style="margin-top:14px;">
+            <button type="button" class="secondary" id="quiver-modal-cancel">Cancel</button>
+            <button type="button" id="quiver-modal-save">Save &amp; record shot</button>
+        </div>
+    </div>
+</div>
 
 <!-- ── Leave-session warning modal ───────────────────────────────────────── -->
 <div class="modal-backdrop" id="leave-modal" role="dialog" aria-modal="true" aria-labelledby="leave-modal-title">
@@ -227,13 +242,12 @@
             <textarea name="session_notes" id="session_notes" rows="6">{{ session_notes }}</textarea>
 
             <span class="form-label">Tags</span>
-            <div class="tag-input-wrap" style="position:relative;">
-                <input type="text" id="session_tags" name="session_tags"
-                       value="{{ session_tags }}"
-                       autocomplete="off"
-                       placeholder="comma-separated, e.g. windy, lesson, indoor">
-                <ul id="tag-suggestions" class="tag-suggestions" hidden></ul>
-            </div>
+            <div data-tag-chips
+                 id="session-tags-chips"
+                 data-tag-name="session_tags"
+                 data-tag-value="{{ session_tags }}"
+                 data-tag-suggestions='{{ tag_suggestions | tojson }}'
+                 data-tag-placeholder="type a tag, then space"></div>
 
         </div>
     </div>
@@ -901,103 +915,76 @@ document.addEventListener('keydown', evt => {
     if (evt.key === 'Escape' && leaveModal.classList.contains('open')) closeLeaveModal();
 });
 
-// ── Tag autocomplete ─────────────────────────────────────────────────────
+// ── Quiver-size guard ────────────────────────────────────────────────────
+// A submit with quiver_size empty/0 was previously bouncing off the server
+// with a plain-text 400. Intercept here, prompt for the value, then resume.
 (function () {
-    const input = document.getElementById('session_tags');
-    const list  = document.getElementById('tag-suggestions');
-    if (!input || !list) return;
+    const quiverInput = document.getElementById('quiver_size');
+    const modal       = document.getElementById('quiver-modal');
+    if (!quiverInput || !modal) return;
+    const modalInput  = document.getElementById('quiver-modal-input');
+    const modalSave   = document.getElementById('quiver-modal-save');
+    const modalCancel = document.getElementById('quiver-modal-cancel');
 
-    const ALL_TAGS = {{ tag_suggestions | tojson }} || [];
-    let activeIdx = -1;
-    let currentMatches = [];
-
-    function splitTags(value) {
-        // Returns {before, current} — everything up to and including the
-        // last comma, and the in-progress fragment after it.
-        const lastComma = value.lastIndexOf(',');
-        if (lastComma === -1) return { before: '', current: value };
-        return {
-            before: value.slice(0, lastComma + 1),
-            current: value.slice(lastComma + 1),
-        };
+    function needsQuiverSize() {
+        const n = parseInt(quiverInput.value, 10);
+        return !n || n <= 0;
     }
 
-    function usedTagsLower(value) {
-        return new Set(
-            value.split(',')
-                 .map(t => t.trim().toLowerCase())
-                 .filter(Boolean)
-        );
+    function openModal() {
+        modalInput.value = '';
+        modal.classList.add('open');
+        setTimeout(() => modalInput.focus(), 0);
+    }
+    function closeModal() {
+        modal.classList.remove('open');
     }
 
-    function render(matches) {
-        list.innerHTML = '';
-        if (!matches.length) { list.hidden = true; return; }
-        matches.forEach((tag, i) => {
-            const li = document.createElement('li');
-            li.textContent = tag;
-            li.dataset.idx = String(i);
-            if (i === activeIdx) li.classList.add('active');
-            li.addEventListener('mousedown', evt => {
-                // mousedown (not click) so the input doesn't blur first
-                evt.preventDefault();
-                pick(i);
-            });
-            list.appendChild(li);
-        });
-        list.hidden = false;
+    function cancelShot() {
+        // The user backed out — drop the placed coordinates so a future
+        // submit doesn't fire with stale values.
+        closeModal();
+        xInput.value = '';
+        yInput.value = '';
+        clearMarker();
+        readout.innerHTML = '<span style="color:#636a80">— click target —</span>';
+        if (confirmBtn) confirmBtn.style.display = 'none';
     }
 
-    function compute() {
-        const { current } = splitTags(input.value);
-        const frag = current.trim().toLowerCase();
-        const used = usedTagsLower(input.value);
-        // Exclude tags already present (other than the in-progress one).
-        currentMatches = ALL_TAGS.filter(tag => {
-            const lc = tag.toLowerCase();
-            if (used.has(lc) && lc !== frag) return false;
-            if (!frag) return !used.has(lc);
-            return lc.includes(frag) && lc !== frag;
-        }).slice(0, 8);
-        activeIdx = currentMatches.length ? 0 : -1;
-        render(currentMatches);
-    }
-
-    function pick(i) {
-        const tag = currentMatches[i];
-        if (!tag) return;
-        const { before } = splitTags(input.value);
-        const next = (before ? before.replace(/\s*$/, '') + ' ' : '') + tag + ', ';
-        input.value = next;
-        input.focus();
-        compute();
-    }
-
-    input.addEventListener('input', compute);
-    input.addEventListener('focus', compute);
-    input.addEventListener('blur', () => {
-        // Delay so a mousedown on a suggestion still fires pick()
-        setTimeout(() => { list.hidden = true; }, 120);
+    modalCancel.addEventListener('click', cancelShot);
+    modal.addEventListener('click', evt => {
+        if (evt.target === modal) cancelShot();
     });
-    input.addEventListener('keydown', evt => {
-        if (list.hidden || !currentMatches.length) return;
-        if (evt.key === 'ArrowDown') {
+    modalInput.addEventListener('keydown', evt => {
+        if (evt.key === 'Enter') { evt.preventDefault(); modalSave.click(); }
+        else if (evt.key === 'Escape') { evt.preventDefault(); cancelShot(); }
+    });
+    modalSave.addEventListener('click', () => {
+        const v = parseInt(modalInput.value, 10);
+        if (!v || v <= 0) { modalInput.focus(); modalInput.select(); return; }
+        quiverInput.value = String(v);
+        closeModal();
+        form.submit();
+    });
+
+    // Two submission paths to guard:
+    //   1. user-driven 'submit' event (Enter in a form field, browser default)
+    //   2. JS-driven form.submit() — does NOT fire 'submit' events, so we
+    //      wrap the method too.
+    form.addEventListener('submit', evt => {
+        if (needsQuiverSize()) {
             evt.preventDefault();
-            activeIdx = (activeIdx + 1) % currentMatches.length;
-            render(currentMatches);
-        } else if (evt.key === 'ArrowUp') {
-            evt.preventDefault();
-            activeIdx = (activeIdx - 1 + currentMatches.length) % currentMatches.length;
-            render(currentMatches);
-        } else if (evt.key === 'Enter' || evt.key === 'Tab') {
-            if (activeIdx >= 0) {
-                evt.preventDefault();
-                pick(activeIdx);
-            }
-        } else if (evt.key === 'Escape') {
-            list.hidden = true;
+            openModal();
         }
     });
+    const nativeSubmit = form.submit.bind(form);
+    form.submit = function () {
+        if (needsQuiverSize()) {
+            openModal();
+            return;
+        }
+        nativeSubmit();
+    };
 })();
 
 </script>

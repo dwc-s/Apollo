@@ -294,6 +294,7 @@
     </style>
     <script defer src="{{ url_for('static', filename='apollo-nav.js') }}"></script>
     <script defer src="{{ url_for('static', filename='apollo-replay.js') }}"></script>
+    <script defer src="{{ url_for('static', filename='apollo-tags.js') }}"></script>
 </head>
 <body>
 <nav class="side-nav">
@@ -355,13 +356,12 @@
                 <input type="text" name="q_notes" value="{{ filters.q_notes }}" placeholder="text in session notes">
             </label>
             <label>Tags
-                <div class="tag-input-wrap" style="position:relative;">
-                    <input type="text" id="q_tags" name="q_tags"
-                           value="{{ filters.q_tags }}"
-                           autocomplete="off"
-                           placeholder="comma-separated tags">
-                    <ul id="q-tag-suggestions" class="tag-suggestions" hidden></ul>
-                </div>
+                <div data-tag-chips
+                     id="q-tags-chips"
+                     data-tag-name="q_tags"
+                     data-tag-value="{{ filters.q_tags }}"
+                     data-tag-suggestions='{{ tag_suggestions | tojson }}'
+                     data-tag-placeholder="type a tag, then space"></div>
             </label>
             <label>Target
                 <select name="q_target">
@@ -444,12 +444,20 @@
       {% set qs = (rows[0]['quiver_size'] | string | int) if rows else 0 %}
       {% set is_practice = namespace(v=False) %}
       {% set is_tournament = namespace(v=False) %}
+      {% set tournament_key = namespace(v=None) %}
       {% for row in rows %}
         {% for tag in (row['session_tags'] or '').split(',') %}
-          {% if tag.strip()|lower == 'practice' %}{% set is_practice.v = True %}{% endif %}
-          {% if tag.strip().lower().startswith('tournament:') %}{% set is_tournament.v = True %}{% endif %}
+          {% set t = tag.strip().lower() %}
+          {% if t == 'practice' %}{% set is_practice.v = True %}{% endif %}
+          {% if t.startswith('tournament:') %}
+            {% set is_tournament.v = True %}
+            {% if tournament_key.v is none %}
+              {% set tournament_key.v = t.split(':', 1)[1] %}
+            {% endif %}
+          {% endif %}
         {% endfor %}
       {% endfor %}
+      {% set tournament_round_name = tournament_rounds.get(tournament_key.v, {}).get('name') if tournament_key.v else None %}
       {# Fall back to the global default target when this session's target row
          was hard-deleted — without this the replay canvas paints black. #}
       {% set replay_target = data['target'] or default_target %}
@@ -461,8 +469,21 @@
           <div class="session-header-row">
             <span>
               <span class="session-toggle" aria-hidden="true">&#9656;</span>
-              Session {{ session_id }} &mdash; {{ stats['session_date'] }} &mdash; {{ stats['pretty_session_length'] }}
-              {% if is_practice.v %}<span class="practice-badge" title="Tournament round flagged as practice — not counted as a real competition.">Practice</span>{% endif %}
+              {# Hours/minutes only — seconds are noise at the header level. #}
+              {% if stats['pretty_session_length'] == 'Session incomplete' %}
+                {% set header_duration = 'Session incomplete' %}
+              {% else %}
+                {% set header_duration = stats['hours'] ~ ' hours, ' ~ stats['minutes'] ~ ' minutes' %}
+              {% endif %}
+              Session {{ session_id }} &mdash; {{ stats['session_date'] }} &mdash; {{ header_duration }}
+              {% if is_tournament.v and is_practice.v %}
+                <span class="practice-badge" title="Tournament round flagged as practice — not counted as a real competition.">Competition practice</span>
+              {% elif is_tournament.v %}
+                <span class="practice-badge" style="background:#1a3a5c;"
+                      title="Recorded as a tournament round.">Competition: {{ tournament_round_name or tournament_key.v }}</span>
+              {% elif is_practice.v %}
+                <span class="practice-badge" title="Flagged as practice.">Practice</span>
+              {% endif %}
               &nbsp;&nbsp;|&nbsp;&nbsp;
               {{ stats['arrows_shot'] }} arrows &nbsp;&mdash;&nbsp;
               {{ stats['hit_shots'] }} hit ({{ stats['percent_hit'] }}%),
@@ -716,95 +737,6 @@ document.querySelectorAll('tr.session-group-header').forEach(header => {
     });
 });
 
-// ── Tag autocomplete (search filter) ─────────────────────────────────────
-(function () {
-    const input = document.getElementById('q_tags');
-    const list  = document.getElementById('q-tag-suggestions');
-    if (!input || !list) return;
-
-    const ALL_TAGS = {{ tag_suggestions | tojson }} || [];
-    let activeIdx = -1;
-    let currentMatches = [];
-
-    function splitTags(value) {
-        const lastComma = value.lastIndexOf(',');
-        if (lastComma === -1) return { before: '', current: value };
-        return {
-            before: value.slice(0, lastComma + 1),
-            current: value.slice(lastComma + 1),
-        };
-    }
-
-    function usedTagsLower(value) {
-        return new Set(
-            value.split(',').map(t => t.trim().toLowerCase()).filter(Boolean)
-        );
-    }
-
-    function render(matches) {
-        list.innerHTML = '';
-        if (!matches.length) { list.hidden = true; return; }
-        matches.forEach((tag, i) => {
-            const li = document.createElement('li');
-            li.textContent = tag;
-            if (i === activeIdx) li.classList.add('active');
-            li.addEventListener('mousedown', evt => {
-                evt.preventDefault();
-                pick(i);
-            });
-            list.appendChild(li);
-        });
-        list.hidden = false;
-    }
-
-    function compute() {
-        const { current } = splitTags(input.value);
-        const frag = current.trim().toLowerCase();
-        const used = usedTagsLower(input.value);
-        currentMatches = ALL_TAGS.filter(tag => {
-            const lc = tag.toLowerCase();
-            if (used.has(lc) && lc !== frag) return false;
-            if (!frag) return !used.has(lc);
-            return lc.includes(frag) && lc !== frag;
-        }).slice(0, 8);
-        activeIdx = currentMatches.length ? 0 : -1;
-        render(currentMatches);
-    }
-
-    function pick(i) {
-        const tag = currentMatches[i];
-        if (!tag) return;
-        const { before } = splitTags(input.value);
-        input.value = (before ? before.replace(/\s*$/, '') + ' ' : '') + tag + ', ';
-        input.focus();
-        compute();
-    }
-
-    input.addEventListener('input', compute);
-    input.addEventListener('focus', compute);
-    input.addEventListener('blur', () => {
-        setTimeout(() => { list.hidden = true; }, 120);
-    });
-    input.addEventListener('keydown', evt => {
-        if (list.hidden || !currentMatches.length) return;
-        if (evt.key === 'ArrowDown') {
-            evt.preventDefault();
-            activeIdx = (activeIdx + 1) % currentMatches.length;
-            render(currentMatches);
-        } else if (evt.key === 'ArrowUp') {
-            evt.preventDefault();
-            activeIdx = (activeIdx - 1 + currentMatches.length) % currentMatches.length;
-            render(currentMatches);
-        } else if (evt.key === 'Enter' || evt.key === 'Tab') {
-            if (activeIdx >= 0) {
-                evt.preventDefault();
-                pick(activeIdx);
-            }
-        } else if (evt.key === 'Escape') {
-            list.hidden = true;
-        }
-    });
-})();
 </script>
 </body>
 </html>

@@ -160,6 +160,66 @@ h4 {
 .tag-input-wrap {
     position: relative;
 }
+
+/* ── Tag chip input ──────────────────────────────── */
+.tag-chip-input {
+    position: relative;
+    width: 100%;
+    box-sizing: border-box;
+    border: 1px solid #95abcf;
+    border-radius: 4px;
+    background: #e8f0f8;
+    padding: 4px 6px;
+    cursor: text;
+    min-height: 36px;
+}
+.tag-chip-inner {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    align-items: center;
+}
+.tag-chip-input .tag-chip {
+    display: inline-flex;
+    align-items: center;
+    background: #757a9c;
+    color: #cfe0f7;
+    border: 1px solid #3a4a66;
+    border-radius: 10px;
+    padding: 1px 4px 1px 8px;
+    margin: 0;
+    font-family: 'Quantico', sans-serif;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    white-space: nowrap;
+}
+.tag-chip-input .tag-chip-x {
+    appearance: none;
+    background: transparent;
+    border: 0;
+    margin: 0 0 0 4px;
+    padding: 0 2px;
+    color: #cfe0f7;
+    cursor: pointer;
+    font-size: 0.95rem;
+    line-height: 1;
+}
+.tag-chip-input .tag-chip-x:hover {
+    color: #fff;
+}
+.tag-chip-input input.tag-chip-typing {
+    flex: 1 1 80px;
+    min-width: 80px;
+    border: 0 !important;
+    background: transparent !important;
+    outline: none;
+    padding: 4px !important;
+    margin: 0;
+    font-family: "Quantico", sans-serif;
+    font-size: 0.92rem;
+    box-shadow: none;
+    color: #1a3a5c;
+}
 .tag-suggestions {
     list-style: none;
     margin: 2px 0 0 0;

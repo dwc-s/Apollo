@@ -4745,7 +4745,8 @@ def previous_sessions():
                            bow_options=bow_options,
                            arrow_options=arrow_options,
                            target_options=target_options,
-                           tag_suggestions=_distinct_user_tags(user_id))
+                           tag_suggestions=_distinct_user_tags(user_id),
+                           tournament_rounds=TOURNAMENT_ROUNDS)
 
 
 def _session_matches_filters(rows, target_cfg, filters):
