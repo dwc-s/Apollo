@@ -415,72 +415,59 @@ h4 {
     -webkit-tap-highlight-color: transparent;
 }
 
-/* ── Touch-hold aiming loupe ──────────────────────────
-   Floats above the fingertip while the user is holding,
-   showing a zoomed view of the area under the touch
-   point so they can fine-tune the shot without the
-   finger covering it. */
-.aim-loupe {
+/* Inner wrapper that gets transform-scaled during press-and-hold zoom.
+   Stage stays put as the clipping viewport; this wrapper scales up around
+   the touch point so the fingertip covers less of the visible board. */
+.target-stage-inner {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    transform-origin: 0 0;
+    transition: transform 120ms ease-out;
+}
+
+/* Thin crosshair lines shown during press-and-hold so the user sees exactly
+   which row/column they're aiming at, even while the fingertip covers the
+   intersection itself. Sits inside .target-stage-inner so it scales with
+   the zoom. */
+.aim-crosshair {
     position: absolute;
-    width: 160px;
-    height: 160px;
-    border-radius: 50%;
-    overflow: hidden;
-    border: 3px solid #1a3a5c;
-    box-shadow: 0 4px 14px rgba(0,0,0,0.45);
-    background: #fff;
+    inset: 0;
     pointer-events: none;
     z-index: 5;
     display: none;
 }
-.aim-loupe.active { display: block; }
-.aim-loupe-content {
+.aim-crosshair.active { display: block; }
+.aim-crosshair-h, .aim-crosshair-v {
     position: absolute;
-    top: 0;
+    background: rgba(220, 30, 30, 0.9);
+}
+.aim-crosshair-h {
     left: 0;
-    transform-origin: 0 0;
-    pointer-events: none;
+    right: 0;
+    height: 1px;
 }
-.aim-loupe-cross {
-    position: absolute;
-    top: 50%;
-    left: 50%;
-    width: 18px;
-    height: 18px;
-    transform: translate(-50%, -50%);
-    pointer-events: none;
-}
-.aim-loupe-cross::before,
-.aim-loupe-cross::after {
-    content: '';
-    position: absolute;
-    background: rgba(26, 58, 92, 0.85);
-}
-.aim-loupe-cross::before {
-    left: 50%;
+.aim-crosshair-v {
     top: 0;
-    width: 2px;
-    height: 100%;
-    margin-left: -1px;
+    bottom: 0;
+    width: 1px;
 }
-.aim-loupe-cross::after {
-    top: 50%;
-    left: 0;
-    height: 2px;
-    width: 100%;
-    margin-top: -1px;
-}
-.aim-loupe-circle {
+
+/* Yellow ring showing the diameter of the currently selected arrow's
+   shaft at the touch point. Lives inside .target-stage-inner so it
+   scales with the zoom — sized in pre-scale image px. */
+.aim-shaft-ring {
     position: absolute;
-    top: 50%;
-    left: 50%;
-    transform: translate(-50%, -50%);
     border: 2px solid #fcba03;
     background: rgba(252, 186, 3, 0.20);
     border-radius: 50%;
     pointer-events: none;
     box-sizing: border-box;
+    transform: translate(-50%, -50%);
+    z-index: 10;
+    display: none;
 }
+.aim-shaft-ring.active { display: block; }
 
 #target-img {
     display: block;

@@ -355,7 +355,7 @@
             <!-- Touch input mode toggle (mobile only) -->
             <div class="autosubmit-bar" id="touch-input-bar" style="margin-top:4px;display:none;">
                 <span class="autosubmit-label has-tooltip"
-                      data-tooltip="Tap — tap to place, then tap Confirm to record. Press & hold — press the target, drag the circle to fine-tune, release to record.">Input:</span>
+                      data-tooltip="Tap — tap to place, then tap Confirm to record. Press & hold — press the target to zoom in, drag to fine-tune the aim, release to record.">Input:</span>
                 <div class="radio-group" style="margin:0;">
                     <label class="radio-option">
                         <input type="radio" name="touch_input_mode" value="tap" checked>
@@ -364,16 +364,18 @@
                     <label class="radio-option">
                         <input type="radio" name="touch_input_mode" value="hold">
                         <span class="has-tooltip"
-                              data-tooltip="A loupe magnifies the area under your finger so you can aim without it being covered. The yellow ring around the crosshair is the diameter of your selected arrow's shaft — any part of it touching a higher-scoring zone counts as that zone.">Press &amp; hold</span>
+                              data-tooltip="Press the target — it zooms in around your fingertip so you can aim without it being covered. Drag to fine-tune, release to record.">Press &amp; hold</span>
                     </label>
                 </div>
             </div>
 
             <div class="target-stage" id="stage">
-                <img id="target-img"
-                     src="{{ url_for('static', filename=target_config.target_image) }}"
-                     alt="Tournament target face" />
-                <svg id="overlay" xmlns="http://www.w3.org/2000/svg"></svg>
+                <div class="target-stage-inner" id="stage-inner">
+                    <img id="target-img"
+                         src="{{ url_for('static', filename=target_config.target_image) }}"
+                         alt="Tournament target face" />
+                    <svg id="overlay" xmlns="http://www.w3.org/2000/svg"></svg>
+                </div>
             </div>
 
             <div class="coord-display">
@@ -717,128 +719,23 @@ if (IS_TOUCH) {
 let holdActive = false;
 let holdCx = 0, holdCy = 0;
 
-// ── Aiming loupe ─────────────────────────────────────────────────────────
-// While the user is holding, their fingertip covers the exact spot they're
-// trying to place. A floating circular magnifier shows a zoomed view of
-// that spot, positioned above (or below) the finger so they can fine-tune
-// before releasing.
-const LOUPE_SIZE   = 160;
-const LOUPE_ZOOM   = 2.5;
-const LOUPE_OFFSET = 110;
-// Inside this radius of dead-center, the loupe holds whichever quadrant
-// it was last in instead of flipping every time the finger crosses a
-// midline. Without it, touches near the bullseye jitter the loupe between
-// quadrants.
-const LOUPE_DEADZONE_MM = 20;
+// ── Zoom-the-board press-and-hold ────────────────────────────────────────
+// On touchstart, scale the target image and overlay around the touch point
+// so the fingertip covers a much smaller portion of the visible board.
+// The user drags to fine-tune, releases to record.
+const HOLD_ZOOM = 2.5;
+// Distance (in pre-scale image px) between the fingertip and the aim
+// indicator. Lifted above the finger so the crosshair + shaft ring + shot
+// all land at the same visible spot instead of being hidden under the
+// fingertip. Visually scaled by HOLD_ZOOM.
+const AIM_OFFSET = 32;
+const stageInner = document.getElementById('stage-inner');
 
-let loupeEl, loupeContent, loupeCircle;
-let lastQuadrant = null;
-
-function buildLoupe() {
-    if (!loupeEl) {
-        loupeEl = document.createElement('div');
-        loupeEl.className = 'aim-loupe';
-        loupeContent = document.createElement('div');
-        loupeContent.className = 'aim-loupe-content';
-        loupeEl.appendChild(loupeContent);
-        const cross = document.createElement('div');
-        cross.className = 'aim-loupe-cross';
-        loupeEl.appendChild(cross);
-        loupeCircle = document.createElement('div');
-        loupeCircle.className = 'aim-loupe-circle';
-        loupeEl.appendChild(loupeCircle);
-        stage.appendChild(loupeEl);
-    }
-    loupeContent.innerHTML = '';
-    const liveW = img.clientWidth;
-    const liveH = img.clientHeight;
-    const clone = stage.cloneNode(true);
-    clone.querySelectorAll('.aim-loupe').forEach(l => l.remove());
-    // Stripping IDs loses the #target-img / #overlay sizing rules, so the
-    // clone collapses to intrinsic size and the zoom math points at the
-    // wrong area. Pin the cloned img + svg to the live dimensions.
-    // Tournament hides the placeholder img via #target-img { visibility:hidden };
-    // mirror that on the clone so only the SVG ring layer shows in the loupe.
-    const clonedImg = clone.querySelector('img');
-    if (clonedImg) {
-        clonedImg.style.visibility = getComputedStyle(img).visibility;
-        clonedImg.style.width  = liveW + 'px';
-        clonedImg.style.height = liveH + 'px';
-        clonedImg.style.maxWidth  = 'none';
-        clonedImg.style.maxHeight = 'none';
-        clonedImg.style.display = 'block';
-    }
-    const clonedSvg = clone.querySelector('svg');
-    if (clonedSvg) {
-        clonedSvg.style.position = 'absolute';
-        clonedSvg.style.top = '0';
-        clonedSvg.style.left = '0';
-        clonedSvg.style.width  = liveW + 'px';
-        clonedSvg.style.height = liveH + 'px';
-    }
-    if (clone.id) clone.id = '';
-    clone.querySelectorAll('[id]').forEach(el => el.removeAttribute('id'));
-    clone.style.position = 'absolute';
-    clone.style.top = '0';
-    clone.style.left = '0';
-    clone.style.width  = liveW + 'px';
-    clone.style.height = liveH + 'px';
-    clone.style.border = 'none';
-    clone.style.borderRadius = '0';
-    clone.style.boxShadow = 'none';
-    clone.style.cursor = '';
-    loupeContent.appendChild(clone);
-
-    const w = img.clientWidth;
-    if (w) {
-        const dPx = currentShaftDiameterMm() * (w / window.APOLLO.target_width_mm) * LOUPE_ZOOM;
-        loupeCircle.style.width  = dPx + 'px';
-        loupeCircle.style.height = dPx + 'px';
-    }
-}
-
-function positionLoupe(touchDx, touchDy) {
-    const w = img.clientWidth;
-    const h = img.clientHeight;
-    // Anchor the loupe in the opposite quadrant from the touch so the
-    // user's hand doesn't cover it. Inside a small deadzone around dead-
-    // center, hold the previous quadrant so the loupe doesn't jitter.
-    const mmPerPxX = window.APOLLO.target_width_mm  / w;
-    const mmPerPxY = window.APOLLO.target_height_mm / h;
-    const dxMm = (touchDx - w / 2) * mmPerPxX;
-    const dyMm = (touchDy - h / 2) * mmPerPxY;
-    const distMm = Math.hypot(dxMm, dyMm);
-    if (distMm >= LOUPE_DEADZONE_MM || !lastQuadrant) {
-        lastQuadrant = {
-            qx: touchDx < w / 2 ? 'right' : 'left',
-            qy: touchDy < h / 2 ? 'bottom' : 'top',
-        };
-    }
-    const cxIdeal = lastQuadrant.qx === 'right' ? w * 0.75 : w * 0.25;
-    const cyIdeal = lastQuadrant.qy === 'bottom' ? h * 0.75 : h * 0.25;
-    const cx = Math.max(LOUPE_SIZE/2, Math.min(w - LOUPE_SIZE/2, cxIdeal));
-    const cy = Math.max(LOUPE_SIZE/2, Math.min(h - LOUPE_SIZE/2, cyIdeal));
-    loupeEl.style.left = (cx - LOUPE_SIZE/2) + 'px';
-    loupeEl.style.top  = (cy - LOUPE_SIZE/2) + 'px';
-    const tx = LOUPE_SIZE/2 - touchDx * LOUPE_ZOOM;
-    const ty = LOUPE_SIZE/2 - touchDy * LOUPE_ZOOM;
-    loupeContent.style.transform = `translate(${tx}px, ${ty}px) scale(${LOUPE_ZOOM})`;
-}
-
-function showLoupe(touchDx, touchDy) {
-    buildLoupe();
-    positionLoupe(touchDx, touchDy);
-    loupeEl.classList.add('active');
-}
-
-function moveLoupe(touchDx, touchDy) {
-    if (!loupeEl) return;
-    positionLoupe(touchDx, touchDy);
-}
-
-function hideLoupe() {
-    if (loupeEl) loupeEl.classList.remove('active');
-}
+let zoomOx = 0, zoomOy = 0;   // transform-origin in pre-scale stage px
+let preRect = null;            // img rect captured before scaling
+let aimCrosshair = null;       // crosshair shown at the aim point during hold
+let aimShaftRing = null;       // yellow ring sized to the arrow's shaft diameter
+let aimAbove = true;            // whether the aim sits above the finger (vs. below near top edge)
 
 function clampToImage(clientX, clientY) {
     const r = img.getBoundingClientRect();
@@ -847,36 +744,124 @@ function clampToImage(clientX, clientY) {
     return { dx, dy, rect: r };
 }
 
+function touchToPreScale(clientX, clientY) {
+    const localX = clientX - preRect.left;
+    const localY = clientY - preRect.top;
+    return {
+        dx: (localX - zoomOx) / HOLD_ZOOM + zoomOx,
+        dy: (localY - zoomOy) / HOLD_ZOOM + zoomOy,
+    };
+}
+
+function applyZoom(ox, oy) {
+    zoomOx = ox; zoomOy = oy;
+    stageInner.style.transformOrigin = `${ox}px ${oy}px`;
+    stageInner.style.transform = `scale(${HOLD_ZOOM})`;
+}
+
+function clearZoom() {
+    stageInner.style.transform = '';
+}
+
+function showAimCrosshair(dx, dy) {
+    if (!aimCrosshair) {
+        aimCrosshair = document.createElement('div');
+        aimCrosshair.className = 'aim-crosshair';
+        const h = document.createElement('div'); h.className = 'aim-crosshair-h';
+        const v = document.createElement('div'); v.className = 'aim-crosshair-v';
+        aimCrosshair.appendChild(h);
+        aimCrosshair.appendChild(v);
+        stageInner.appendChild(aimCrosshair);
+    }
+    moveAimCrosshair(dx, dy);
+    aimCrosshair.classList.add('active');
+}
+
+function moveAimCrosshair(dx, dy) {
+    if (!aimCrosshair) return;
+    aimCrosshair.firstElementChild.style.top  = dy + 'px';
+    aimCrosshair.lastElementChild.style.left = dx + 'px';
+}
+
+function hideAimCrosshair() {
+    if (aimCrosshair) aimCrosshair.classList.remove('active');
+}
+
+function showAimShaftRing(dx, dy) {
+    if (!aimShaftRing) {
+        aimShaftRing = document.createElement('div');
+        aimShaftRing.className = 'aim-shaft-ring';
+        stageInner.appendChild(aimShaftRing);
+    }
+    const w = preRect ? preRect.width : img.clientWidth;
+    if (w) {
+        const dPx = currentShaftDiameterMm() * (w / window.APOLLO.target_width_mm);
+        aimShaftRing.style.width  = dPx + 'px';
+        aimShaftRing.style.height = dPx + 'px';
+    }
+    moveAimShaftRing(dx, dy);
+    aimShaftRing.classList.add('active');
+}
+
+function moveAimShaftRing(dx, dy) {
+    if (!aimShaftRing) return;
+    aimShaftRing.style.left = dx + 'px';
+    aimShaftRing.style.top  = dy + 'px';
+}
+
+function fingertipToAim(touchDx, touchDy) {
+    const w = preRect ? preRect.width  : img.clientWidth;
+    const h = preRect ? preRect.height : img.clientHeight;
+    const dy = aimAbove ? touchDy - AIM_OFFSET : touchDy + AIM_OFFSET;
+    return {
+        dx: Math.max(0, Math.min(w, touchDx)),
+        dy: Math.max(0, Math.min(h, dy)),
+    };
+}
+
+function hideAimShaftRing() {
+    if (aimShaftRing) aimShaftRing.classList.remove('active');
+}
+
 stage.addEventListener('touchstart', e => {
     if (ROUND_COMPLETE || !isHoldMode()) return;
     const t = e.touches[0];
     if (!t) return;
-    const { dx, dy } = clampToImage(t.clientX, t.clientY);
+    preRect = img.getBoundingClientRect();
+    const { dx: touchDx, dy: touchDy } = clampToImage(t.clientX, t.clientY);
+    aimAbove = touchDy >= AIM_OFFSET + 4;
+    const { dx, dy } = fingertipToAim(touchDx, touchDy);
     holdActive = true;
     holdCx = dx; holdCy = dy;
-    showLoupe(dx, dy);
+    applyZoom(touchDx, touchDy);
+    showAimCrosshair(dx, dy);
+    showAimShaftRing(dx, dy);
 }, { passive: true });
 
 stage.addEventListener('touchmove', e => {
     if (!holdActive) return;
     const t = e.touches[0];
     if (!t) return;
-    const { dx, dy } = clampToImage(t.clientX, t.clientY);
+    const { dx: touchDx, dy: touchDy } = touchToPreScale(t.clientX, t.clientY);
+    const { dx, dy } = fingertipToAim(touchDx, touchDy);
     holdCx = dx; holdCy = dy;
-    moveLoupe(dx, dy);
+    moveAimCrosshair(dx, dy);
+    moveAimShaftRing(dx, dy);
 }, { passive: true });
 
 stage.addEventListener('touchend', e => {
     if (!holdActive) return;
     holdActive = false;
     e.preventDefault();   // suppress the synthetic click that follows
-    hideLoupe();
 
-    const r = img.getBoundingClientRect();
-    const sx = window.APOLLO.target_width_mm  / r.width;
-    const sy = window.APOLLO.target_height_mm / r.height;
-    const cartX = Math.round((holdCx - r.width  / 2) * sx * 10) / 10;
-    const cartY = Math.round(-(holdCy - r.height / 2) * sy * 10) / 10;
+    const sx = window.APOLLO.target_width_mm  / preRect.width;
+    const sy = window.APOLLO.target_height_mm / preRect.height;
+    const cartX = Math.round((holdCx - preRect.width  / 2) * sx * 10) / 10;
+    const cartY = Math.round(-(holdCy - preRect.height / 2) * sy * 10) / 10;
+
+    hideAimCrosshair();
+    hideAimShaftRing();
+    clearZoom();
 
     if (isOffTarget(cartX, cartY)) { recordMiss(); return; }
 
@@ -890,7 +875,9 @@ stage.addEventListener('touchend', e => {
 stage.addEventListener('touchcancel', () => {
     if (!holdActive) return;
     holdActive = false;
-    hideLoupe();
+    hideAimCrosshair();
+    hideAimShaftRing();
+    clearZoom();
 });
 
 stage.addEventListener('click', e => {
