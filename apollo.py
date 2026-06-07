@@ -4367,6 +4367,45 @@ def _distinct_user_tags(user_id):
     return out
 
 
+def _last_effective_dw_by_bow(user_id):
+    """Return a dict ``{bow_model: last_effective_draw_weight}`` so the
+    session page can prefill the per-session draw weight field whenever
+    the archer picks a bow they've used before.
+
+    Effective draw weight changes whenever the string is put back on the
+    bow, so it lives on the session (denormalized onto each apollo row),
+    not on the bow row. This helper looks up the most recent non-blank
+    value the user has ever recorded per bow model. Returns an empty
+    dict on error so the template still renders.
+    """
+    if user_id is None:
+        return {}
+    try:
+        with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
+            rows = cur.execute(
+                "SELECT a.bow, a.effective_draw_weight FROM apollo a "
+                "INNER JOIN ("
+                "    SELECT bow, MAX(id) AS max_id FROM apollo "
+                "    WHERE user_id = %s "
+                "      AND effective_draw_weight IS NOT NULL "
+                "      AND effective_draw_weight <> '' "
+                "      AND bow IS NOT NULL AND bow <> '' "
+                "    GROUP BY bow"
+                ") latest ON latest.bow = a.bow AND latest.max_id = a.id "
+                "WHERE a.user_id = %s",
+                (user_id, user_id)
+            ).fetchall()
+    except SQLAlchemyError:
+        return {}
+    out = {}
+    for row in rows or []:
+        bow = row['bow'] if 'bow' in row else row[0]
+        dw  = row['effective_draw_weight'] if 'effective_draw_weight' in row else row[1]
+        if bow and dw not in (None, ''):
+            out[str(bow)] = str(dw)
+    return out
+
+
 def _last_session_tags(user_id, session_id):
     """Return the most recently stored session_tags string for this session,
     so a mid-session reload repopulates the tags input."""
@@ -4378,6 +4417,28 @@ def _last_session_tags(user_id, session_id):
                 "SELECT session_tags FROM apollo "
                 "WHERE user_id = %s AND session_id = %s "
                 "AND session_tags IS NOT NULL AND session_tags <> '' "
+                "ORDER BY id DESC LIMIT 1",
+                (user_id, session_id)
+            ).fetchone()
+    except SQLAlchemyError:
+        return ''
+    if not row:
+        return ''
+    return row[0] or ''
+
+
+def _current_session_effective_dw(user_id, session_id):
+    """Return the effective_draw_weight string stored on the latest shot in
+    this session, so a mid-session reload repopulates the input."""
+    if user_id is None or session_id is None:
+        return ''
+    try:
+        with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
+            row = cur.execute(
+                "SELECT effective_draw_weight FROM apollo "
+                "WHERE user_id = %s AND session_id = %s "
+                "AND effective_draw_weight IS NOT NULL "
+                "AND effective_draw_weight <> '' "
                 "ORDER BY id DESC LIMIT 1",
                 (user_id, session_id)
             ).fetchone()
@@ -4525,6 +4586,13 @@ def sesh():
         distance         = request.form.get('distance', '')
         session_notes    = request.form.get('session_notes', '')
         session_tags     = _normalize_tags(request.form.get('session_tags', ''))
+        # Per-session effective draw weight. Optional; blank means
+        # "use the rated draw weight from the bow row". Stored as a
+        # string for parity with bow_draw_weight (which is also string).
+        effective_dw_raw = (request.form.get('effective_draw_weight') or '').strip()
+        effective_dw_session = effective_dw_raw if effective_dw_raw else None
+        if effective_dw_session is not None and _parse_float(effective_dw_session) is None:
+            return "Error: effective draw weight must be a number", 400
         x                = request.form.get("x_coord", "")
         y                = request.form.get("y_coord", "")
         is_precise       = _form_int('is_precise', 0)
@@ -4619,7 +4687,7 @@ def sesh():
                         # the row remains self-describing even if the bow row
                         # is later deleted.
                         bow_row = cur.execute(
-                            "SELECT nock_height, bow_draw_weight, effective_draw_weight, "
+                            "SELECT nock_height, bow_draw_weight, "
                             "amo, bow_type FROM bows "
                             "WHERE bow_model = %s AND user_id = %s LIMIT 1",
                             (bow, user_id)
@@ -4627,11 +4695,12 @@ def sesh():
                         if bow_row is not None:
                             nock_height          = bow_row['nock_height']           if 'nock_height'           in bow_row else bow_row[0]
                             shot_bow_draw_weight = bow_row['bow_draw_weight']       if 'bow_draw_weight'       in bow_row else bow_row[1]
-                            shot_effective_dw    = bow_row['effective_draw_weight'] if 'effective_draw_weight' in bow_row else bow_row[2]
-                            shot_bow_amo         = bow_row['amo']                   if 'amo'                   in bow_row else bow_row[3]
-                            shot_bow_type        = bow_row['bow_type']              if 'bow_type'              in bow_row else bow_row[4]
+                            shot_bow_amo         = bow_row['amo']                   if 'amo'                   in bow_row else bow_row[2]
+                            shot_bow_type        = bow_row['bow_type']              if 'bow_type'              in bow_row else bow_row[3]
                         else:
-                            nock_height = shot_bow_draw_weight = shot_effective_dw = shot_bow_amo = shot_bow_type = None
+                            nock_height = shot_bow_draw_weight = shot_bow_amo = shot_bow_type = None
+                        # Effective DW now comes from the session form, not the bows row.
+                        shot_effective_dw = effective_dw_session
 
                         # Same snapshot for the arrow side: capture every
                         # field on the arrows row so a later rename/edit
@@ -4734,6 +4803,8 @@ def sesh():
                                    arrows_remaining=arrows_remaining,
                                    bow=bow,
                                    bows=bow_models,
+                                   effective_draw_weight=effective_dw_raw,
+                                   effective_dw_by_bow=_last_effective_dw_by_bow(user_id),
                                    session_notes=session_notes,
                                    session_tags=session_tags,
                                    tag_suggestions=_distinct_user_tags(user_id),
@@ -4788,6 +4859,9 @@ def sesh():
                            arrows_remaining=get_arrows_remaining,
                            bow='',
                            bows=bow_models,
+                           effective_draw_weight=_current_session_effective_dw(
+                               user_id, session['session_id']),
+                           effective_dw_by_bow=_last_effective_dw_by_bow(user_id),
                            session_notes='',
                            session_tags=_last_session_tags(user_id, session['session_id']),
                            tag_suggestions=_distinct_user_tags(user_id),
@@ -5113,10 +5187,15 @@ def tournament():
         session['current_quiver_size'] = arrows_per_end
 
         # Equipment-row snapshots — same code path as /sesh.
+        # Per-session effective draw weight from the form (same rules as /sesh).
+        t_effective_dw_raw = (request.form.get('effective_draw_weight') or '').strip()
+        t_effective_dw = t_effective_dw_raw if t_effective_dw_raw else None
+        if t_effective_dw is not None and _parse_float(t_effective_dw) is None:
+            return "Error: effective draw weight must be a number", 400
         try:
             with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
                 bow_row = cur.execute(
-                    "SELECT nock_height, bow_draw_weight, effective_draw_weight, "
+                    "SELECT nock_height, bow_draw_weight, "
                     "amo, bow_type FROM bows "
                     "WHERE bow_model = %s AND user_id = %s LIMIT 1",
                     (bow, user_id)
@@ -5124,11 +5203,12 @@ def tournament():
                 if bow_row is not None:
                     nock_height          = bow_row['nock_height']           if 'nock_height'           in bow_row else bow_row[0]
                     shot_bow_draw_weight = bow_row['bow_draw_weight']       if 'bow_draw_weight'       in bow_row else bow_row[1]
-                    shot_effective_dw    = bow_row['effective_draw_weight'] if 'effective_draw_weight' in bow_row else bow_row[2]
-                    shot_bow_amo         = bow_row['amo']                   if 'amo'                   in bow_row else bow_row[3]
-                    shot_bow_type        = bow_row['bow_type']              if 'bow_type'              in bow_row else bow_row[4]
+                    shot_bow_amo         = bow_row['amo']                   if 'amo'                   in bow_row else bow_row[2]
+                    shot_bow_type        = bow_row['bow_type']              if 'bow_type'              in bow_row else bow_row[3]
                 else:
-                    nock_height = shot_bow_draw_weight = shot_effective_dw = shot_bow_amo = shot_bow_type = None
+                    nock_height = shot_bow_draw_weight = shot_bow_amo = shot_bow_type = None
+                # Effective DW now comes from the session form, not the bows row.
+                shot_effective_dw = t_effective_dw
 
                 arrow_row = cur.execute(
                     "SELECT length, spine, shaft_weight, shaft_diameter, "
@@ -5252,6 +5332,8 @@ def tournament():
         arrow_shaft_diameters=_arrow_shaft_diameters_for_user(user_id),
         arrow_types=arrow_types,
         bow_models=bow_models,
+        effective_draw_weight=_current_session_effective_dw(user_id, session_id),
+        effective_dw_by_bow=_last_effective_dw_by_bow(user_id),
         arrows_per_end=arrows_per_end,
         max_arrows_per_end=max_arrows_per_end,
         arrows_remaining=arrows_remaining_display,
@@ -6284,7 +6366,7 @@ def edit_session(session_id):
             rows = cur.execute(
                 "SELECT id, session_id, timestamp, bow, arrow_type, quiver_size, "
                 "arrows_remaining, distance, session_notes, session_tags, "
-                "x_coord, y_coord, is_precise, target_id "
+                "x_coord, y_coord, is_precise, target_id, effective_draw_weight "
                 "FROM apollo WHERE session_id = %s AND user_id = %s "
                 "ORDER BY timestamp, id",
                 (session_id, user_id)
@@ -6299,6 +6381,13 @@ def edit_session(session_id):
                 new_distance = (request.form.get('distance') or '').strip()
                 new_notes    = request.form.get('session_notes', '')
                 new_tags     = _normalize_tags(request.form.get('session_tags', ''))
+                # Effective draw weight is now per-session. Blank means
+                # "use the bow's rated draw weight in analysis".
+                edw_raw      = (request.form.get('effective_draw_weight') or '').strip()
+                new_effective_dw = edw_raw if edw_raw else None
+                if new_effective_dw is not None and _parse_float(new_effective_dw) is None:
+                    flash("Effective draw weight must be a number.")
+                    return redirect(url_for('edit_session', session_id=session_id))
                 posted_tid   = (request.form.get('target_id') or '').strip()
                 try:
                     new_target_id = int(posted_tid) if posted_tid else first['target_id']
@@ -6309,19 +6398,21 @@ def edit_session(session_id):
                     new_target_id = first['target_id']
 
                 # Refresh bow snapshot from the current bows row, if any.
+                # Effective draw weight is taken from the form (session-level),
+                # not from the bows row.
                 bow_row = cur.execute(
-                    "SELECT nock_height, bow_draw_weight, effective_draw_weight, "
+                    "SELECT nock_height, bow_draw_weight, "
                     "amo, bow_type FROM bows WHERE bow_model = %s AND user_id = %s LIMIT 1",
                     (new_bow, user_id)
                 ).fetchone()
                 if bow_row is not None:
                     bow_snap = (
                         bow_row['nock_height'], bow_row['bow_draw_weight'],
-                        bow_row['effective_draw_weight'], bow_row['amo'],
+                        new_effective_dw, bow_row['amo'],
                         bow_row['bow_type'],
                     )
                 else:
-                    bow_snap = (None, None, None, None, None)
+                    bow_snap = (None, None, new_effective_dw, None, None)
 
                 # Refresh arrow snapshot from the current arrows row, if any.
                 arrow_row = cur.execute(
@@ -6426,6 +6517,7 @@ def edit_session(session_id):
         'session_notes': first['session_notes'] or '',
         'session_tags':  first['session_tags'] or '',
         'target_id':     first['target_id'],
+        'effective_draw_weight': first['effective_draw_weight'] or '',
     }
     # Per-row miss flag for the template — same rule as the replay payload.
     shot_view = []
@@ -6750,10 +6842,6 @@ def add_bow():
             new_bow_model         = request.form.get('new_bow_model')
             new_bow_type          = request.form.get('new_bow_type')
             new_bow_draw_weight   = request.form.get('new_bow_draw_weight')
-            # Effective draw weight is optional — blank means "use the
-            # rated draw weight above". Stored separately so analysis can
-            # tell the difference between "rated == effective" and "never set".
-            new_effective_dw      = (request.form.get('new_effective_draw_weight') or '').strip() or None
             new_bow_amo           = request.form.get('new_bow_amo')
             new_nock_height       = request.form.get('new_nock_height')
 
@@ -6764,8 +6852,6 @@ def add_bow():
             # don't blow up later.
             if new_bow_draw_weight not in (None, '') and _parse_float(new_bow_draw_weight) is None:
                 return "Error: bow draw weight must be a positive number", 400
-            if new_effective_dw is not None and _parse_float(new_effective_dw) is None:
-                return "Error: effective draw weight must be a positive number", 400
             if new_bow_amo not in (None, '') and _parse_float(new_bow_amo) is None:
                 return "Error: AMO must be a positive number", 400
             if new_nock_height not in (None, '') and _parse_nonneg_float(new_nock_height) is None:
@@ -6774,10 +6860,10 @@ def add_bow():
             with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
                 cur.execute(
                     "INSERT INTO bows (user_id, bow_model, bow_type, bow_draw_weight, "
-                    "effective_draw_weight, amo, nock_height) "
-                    "VALUES (%s, %s, %s, %s, %s, %s, %s)",
+                    "amo, nock_height) "
+                    "VALUES (%s, %s, %s, %s, %s, %s)",
                     (user_id, new_bow_model, new_bow_type, new_bow_draw_weight,
-                     new_effective_dw, new_bow_amo, new_nock_height)
+                     new_bow_amo, new_nock_height)
                 )
                 con.commit()
             if session.get('session_id') is None:
@@ -6850,8 +6936,6 @@ def edit_bows():
         else:
             bow_model             = request.form.get('bow_model')
             bow_draw_weight       = request.form.get('bow_draw_weight')
-            # Optional — blank means "fall back to bow_draw_weight in analysis".
-            effective_draw_weight = (request.form.get('effective_draw_weight') or '').strip() or None
             bow_amo               = request.form.get('bow_amo')
             nock_height           = request.form.get('nock_height')
             # NB: ``bow_type`` is intentionally *not* in the UPDATE — it's
@@ -6863,9 +6947,9 @@ def edit_bows():
                 with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
                     cur.execute(
                         "UPDATE bows SET bow_model = %s, bow_draw_weight = %s, "
-                        "effective_draw_weight = %s, amo = %s, nock_height = %s "
+                        "amo = %s, nock_height = %s "
                         "WHERE id = %s AND user_id = %s",
-                        (bow_model, bow_draw_weight, effective_draw_weight,
+                        (bow_model, bow_draw_weight,
                          bow_amo, nock_height, rowid, user_id)
                     )
                     con.commit()
@@ -10374,6 +10458,565 @@ def _report_within_session_drift(user_id):
     }
 
 
+def _report_accuracy_precision_traces(user_id, date_from=None, date_to=None):
+    """Combined accuracy + precision traces over time, three granularities.
+
+    Plots six lines on one date-axis:
+      * Accuracy per session  (MPI of every shot in the session)
+      * Precision per session (R95 about the session centroid)
+      * Accuracy per quiver   (MPI of every shot in each completed quiver)
+      * Precision per quiver  (R95 about the quiver centroid)
+      * Accuracy all-time     (running MPI through every shot to date)
+      * Precision all-time    (running R95 through every shot to date)
+
+    All values are normalized by the target half-width (1.0 = target edge)
+    so mixed-target histories are comparable, matching the convention in
+    the other normalized reports. Misses are excluded.
+    """
+    range_from = None
+    range_to = None
+    if date_from:
+        try:
+            range_from = datetime.strptime(date_from, '%Y-%m-%d')
+        except ValueError:
+            range_from = None
+    if date_to:
+        try:
+            range_to = datetime.strptime(date_to, '%Y-%m-%d') \
+                + timedelta(days=1) - timedelta(microseconds=1)
+        except ValueError:
+            range_to = None
+
+    # Pull every shot with its session_id, quiver_size, target width and
+    # the parent session's begin time. Quiver bookkeeping needs the rows
+    # in (session, id) order so the slicer reproduces the same quiver
+    # grouping the per-shot machinery used at recording time.
+    with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
+        sql = (
+            "SELECT a.session_id, a.id, a.quiver_size, "
+            "       a.x_coord, a.y_coord, "
+            "       t.physical_size_mm AS width_mm, "
+            "       st.session_begin_time "
+            "FROM apollo a "
+            "LEFT JOIN session_times st "
+            "  ON st.session_id = a.session_id AND st.user_id = a.user_id "
+            "LEFT JOIN targets t "
+            "  ON t.id = a.target_id AND t.user_id = a.user_id "
+            "WHERE a.user_id = %s "
+            "  AND st.session_begin_time IS NOT NULL "
+            "  AND t.physical_size_mm IS NOT NULL"
+        )
+        params = [user_id]
+        if range_from is not None:
+            sql += " AND st.session_begin_time >= %s"
+            params.append(range_from)
+        if range_to is not None:
+            sql += " AND st.session_begin_time <= %s"
+            params.append(range_to)
+        sql += " ORDER BY a.session_id ASC, a.id ASC"
+        rows = cur.execute(sql, tuple(params)).fetchall()
+
+    # First pass: per-shot normalized coords, in (session, id) order so
+    # the quiver slicer can walk them naturally below.
+    by_session = {}  # session_id → list of (begin_dt, nx, ny, quiver_size)
+    for r in rows:
+        xraw = str(r['x_coord']).strip() if r['x_coord'] is not None else ''
+        yraw = str(r['y_coord']).strip() if r['y_coord'] is not None else ''
+        if xraw == MISS_SENTINEL and yraw == MISS_SENTINEL:
+            continue
+        try:
+            x = float(xraw)
+            y = float(yraw)
+        except ValueError:
+            continue
+        try:
+            width_mm = float(r['width_mm'])
+        except (TypeError, ValueError):
+            continue
+        if width_mm <= 0:
+            continue
+        half = width_mm / 2.0
+        nx = x / half
+        ny = y / half
+        begin_dt = _utc_to_user(r['session_begin_time'])
+        if begin_dt is None:
+            continue
+        begin_dt = begin_dt.replace(tzinfo=None)
+        try:
+            qs = int(r['quiver_size']) if r['quiver_size'] else 0
+        except (TypeError, ValueError):
+            qs = 0
+        by_session.setdefault(r['session_id'], []).append(
+            (begin_dt, nx, ny, qs)
+        )
+
+    if not by_session:
+        return None
+
+    # Sessions sorted by begin date — this is also the chronological
+    # walk-order for the all-time rolling series.
+    sessions_sorted = sorted(
+        by_session.items(),
+        key=lambda kv: kv[1][0][0]
+    )
+
+    session_dates = []
+    session_mpi = []
+    session_r95 = []
+    quiver_dates = []
+    quiver_mpi = []
+    quiver_r95 = []
+    alltime_dates = []
+    alltime_mpi = []
+    alltime_r95 = []
+    table_rows = []
+
+    rolling_xs = []
+    rolling_ys = []
+
+    for sid, shots in sessions_sorted:
+        if not shots:
+            continue
+        sess_dt = shots[0][0]
+        xs_sess = [p[1] for p in shots]
+        ys_sess = [p[2] for p in shots]
+        s_sess = _archery_stats(xs_sess, ys_sess)
+        if s_sess is None:
+            continue
+        session_dates.append(sess_dt)
+        session_mpi.append(s_sess['mpi'])
+        session_r95.append(s_sess['r95'])
+
+        # Walk quivers within this session using the recorded quiver_size
+        # on the first shot of each group — same slicer logic as
+        # _iter_quivers. Trailing partial quiver is intentionally skipped.
+        buf_x, buf_y = [], []
+        buf_size = 0
+        n_quivers_in_session = 0
+        for (_dt, nx, ny, qs) in shots:
+            if qs <= 0:
+                buf_x = []
+                buf_y = []
+                buf_size = 0
+                continue
+            if not buf_x:
+                buf_size = qs
+            buf_x.append(nx)
+            buf_y.append(ny)
+            if len(buf_x) >= buf_size:
+                s_q = _archery_stats(buf_x, buf_y)
+                if s_q is not None:
+                    quiver_dates.append(sess_dt)
+                    quiver_mpi.append(s_q['mpi'])
+                    quiver_r95.append(s_q['r95'])
+                    n_quivers_in_session += 1
+                buf_x = []
+                buf_y = []
+                buf_size = 0
+
+        # Update the rolling all-time pool with this session's shots and
+        # emit a point at the session's date.
+        rolling_xs.extend(xs_sess)
+        rolling_ys.extend(ys_sess)
+        s_all = _archery_stats(rolling_xs, rolling_ys)
+        if s_all is not None:
+            alltime_dates.append(sess_dt)
+            alltime_mpi.append(s_all['mpi'])
+            alltime_r95.append(s_all['r95'])
+
+        table_rows.append([
+            sess_dt.strftime('%Y-%m-%d'),
+            sid,
+            s_sess['n'],
+            n_quivers_in_session,
+            round(s_sess['mpi'], 3),
+            round(s_sess['r95'], 3),
+            round(s_all['mpi'], 3) if s_all else '',
+            round(s_all['r95'], 3) if s_all else '',
+        ])
+
+    if not session_dates:
+        return None
+
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+
+    fig, ax = plt.subplots(figsize=(10, 5.2))
+
+    # Accuracy traces — red family. Precision traces — green family.
+    # Vary style/marker per granularity so the six lines are tellable
+    # apart at a glance.
+    if session_dates:
+        ax.plot(session_dates, session_mpi, color='#c0392b',
+                marker='o', markersize=4, linewidth=1.4,
+                linestyle='-', label='Accuracy — per session (MPI)')
+        ax.plot(session_dates, session_r95, color='#1a7a3a',
+                marker='s', markersize=4, linewidth=1.4,
+                linestyle='-', label='Precision — per session (R95)')
+    if quiver_dates:
+        ax.plot(quiver_dates, quiver_mpi, color='#e67e6f',
+                marker='.', markersize=4, linewidth=0.9,
+                linestyle=':', alpha=0.75,
+                label='Accuracy — per quiver (MPI)')
+        ax.plot(quiver_dates, quiver_r95, color='#6fb88a',
+                marker='.', markersize=4, linewidth=0.9,
+                linestyle=':', alpha=0.75,
+                label='Precision — per quiver (R95)')
+    if alltime_dates:
+        ax.plot(alltime_dates, alltime_mpi, color='#7a1a10',
+                marker='^', markersize=4, linewidth=2.0,
+                linestyle='--', label='Accuracy — all-time rolling (MPI)')
+        ax.plot(alltime_dates, alltime_r95, color='#0d4a23',
+                marker='v', markersize=4, linewidth=2.0,
+                linestyle='--', label='Precision — all-time rolling (R95)')
+
+    ax.set_xlabel('Date')
+    ax.set_ylabel('Normalized units (1.0 = target edge)\nlower is better')
+    ax.set_title('Accuracy & precision traces')
+    ax.grid(True, axis='y', linestyle='--', alpha=0.4)
+    fig.autofmt_xdate()
+    ax.legend(loc='upper left', fontsize=8, ncol=2, framealpha=0.85)
+    png_b64 = _render_matplotlib_png(fig)
+
+    intro = Markup(
+        '<p class="report-intro">'
+        '<strong>What this answers:</strong> are you getting more '
+        'accurate (centroid closer to bullseye) or more precise '
+        '(tighter group), and on what timescale? Six traces share a '
+        'date axis: per-session (solid), per-quiver (dotted), and the '
+        'all-time rolling pool (dashed). Red traces are accuracy '
+        '(MPI); green traces are precision (R95). All values are '
+        'normalized by target half-width so mixed targets are '
+        'comparable. Misses are excluded.'
+        '</p>'
+    )
+
+    return {
+        'key': 'accuracy_precision_traces',
+        'title': 'Accuracy & precision traces',
+        'intro_html': intro,
+        'png_b64': png_b64,
+        'columns': [
+            'Session date', 'Session id',
+            _tip('Shots',
+                 'Hits in this session that contributed to the stats. '
+                 'Misses excluded.'),
+            _tip('Quivers',
+                 'Number of completed quivers in this session — a '
+                 'partial last quiver is intentionally skipped.'),
+            _tip('Session MPI (norm)',
+                 'Accuracy for this session: distance from origin to '
+                 "this session's shot centroid."),
+            _tip('Session R95 (norm)',
+                 'Precision for this session: 95% radius about the '
+                 "session's centroid."),
+            _tip('All-time MPI (norm)',
+                 'Rolling accuracy across every shot through this '
+                 'session, inclusive.'),
+            _tip('All-time R95 (norm)',
+                 'Rolling precision across every shot through this '
+                 'session, inclusive.'),
+        ],
+        'rows': table_rows,
+    }
+
+
+def _report_draw_weight_traces(user_id, date_from=None, date_to=None):
+    """Accuracy and precision vs draw weight, per bow.
+
+    X-axis is draw weight in lb; y-axis is the same normalized error
+    metric the other accuracy/precision reports use. Every bow gets up
+    to four traces:
+
+      * Accuracy at effective DW  (per-session MPI vs the session's
+        effective draw weight)
+      * Precision at effective DW (per-session R95, same x positions)
+      * Accuracy at rated DW      (per-session MPI for sessions where
+        the archer was effectively shooting at the bow's rated DW;
+        plotted at the rated DW value)
+      * Precision at rated DW     (per-session R95, same x positions)
+
+    A session is classed "effective" when its snapshotted
+    effective_draw_weight differs from the rated bow_draw_weight by
+    more than 0.05 lb; otherwise it's "rated" (and the rated value is
+    used for the x position). The split tells the archer whether
+    re-tuning to a different effective draw weight actually changed
+    how the bow shoots. Misses excluded; normalized by target
+    half-width so mixed-target histories are comparable.
+    """
+    range_from = None
+    range_to = None
+    if date_from:
+        try:
+            range_from = datetime.strptime(date_from, '%Y-%m-%d')
+        except ValueError:
+            range_from = None
+    if date_to:
+        try:
+            range_to = datetime.strptime(date_to, '%Y-%m-%d') \
+                + timedelta(days=1) - timedelta(microseconds=1)
+        except ValueError:
+            range_to = None
+
+    # Pull every shot together with the snapshotted bow + DW values
+    # and the parent session's begin time for the x-axis.
+    with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
+        sql = (
+            "SELECT a.session_id, a.id, a.bow, "
+            "       a.bow_draw_weight, a.effective_draw_weight, "
+            "       a.x_coord, a.y_coord, "
+            "       t.physical_size_mm AS width_mm, "
+            "       st.session_begin_time "
+            "FROM apollo a "
+            "LEFT JOIN session_times st "
+            "  ON st.session_id = a.session_id AND st.user_id = a.user_id "
+            "LEFT JOIN targets t "
+            "  ON t.id = a.target_id AND t.user_id = a.user_id "
+            "WHERE a.user_id = %s "
+            "  AND st.session_begin_time IS NOT NULL "
+            "  AND t.physical_size_mm IS NOT NULL "
+            "  AND a.bow IS NOT NULL AND a.bow <> ''"
+        )
+        params = [user_id]
+        if range_from is not None:
+            sql += " AND st.session_begin_time >= %s"
+            params.append(range_from)
+        if range_to is not None:
+            sql += " AND st.session_begin_time <= %s"
+            params.append(range_to)
+        sql += " ORDER BY a.bow, a.session_id ASC, a.id ASC"
+        rows = cur.execute(sql, tuple(params)).fetchall()
+
+    def _parse_dw(raw):
+        if raw is None:
+            return None
+        s = str(raw).strip()
+        if not s:
+            return None
+        try:
+            return float(s)
+        except ValueError:
+            return None
+
+    # Bucket: bow → session_id → {kind: 'rated'|'effective', dt, xs, ys}
+    # The kind is determined from the shot's denormalized DW snapshot:
+    # treat the session as "effective" if any shot in it has a non-blank
+    # effective_draw_weight that differs from the bow's rated value.
+    by_bow = {}
+    for r in rows:
+        xraw = str(r['x_coord']).strip() if r['x_coord'] is not None else ''
+        yraw = str(r['y_coord']).strip() if r['y_coord'] is not None else ''
+        if xraw == MISS_SENTINEL and yraw == MISS_SENTINEL:
+            continue
+        try:
+            x = float(xraw)
+            y = float(yraw)
+        except ValueError:
+            continue
+        try:
+            width_mm = float(r['width_mm'])
+        except (TypeError, ValueError):
+            continue
+        if width_mm <= 0:
+            continue
+        half = width_mm / 2.0
+        nx = x / half
+        ny = y / half
+        begin_dt = _utc_to_user(r['session_begin_time'])
+        if begin_dt is None:
+            continue
+        begin_dt = begin_dt.replace(tzinfo=None)
+        rated = _parse_dw(r['bow_draw_weight'])
+        eff = _parse_dw(r['effective_draw_weight'])
+        # "Effective" if the user explicitly entered a value that differs
+        # from the rated spec by more than 0.05 lb (tolerance for typos
+        # like "40.0" vs 40). Otherwise the user was effectively shooting
+        # at the rated spec.
+        if eff is not None and rated is not None and abs(eff - rated) > 0.05:
+            kind = 'effective'
+        elif eff is not None and rated is None:
+            kind = 'effective'
+        else:
+            kind = 'rated'
+
+        bow_buckets = by_bow.setdefault(r['bow'], {})
+        bucket = bow_buckets.setdefault(r['session_id'], {
+            'dt': begin_dt, 'kind': kind, 'xs': [], 'ys': [],
+            'rated': rated, 'eff': eff,
+        })
+        # If any shot in the session was 'effective', the whole session
+        # is treated as effective — the user's intent didn't flip mid-
+        # session. This guards against blank effective_draw_weight on
+        # historical rows mixed with set ones in the same session.
+        if kind == 'effective':
+            bucket['kind'] = 'effective'
+            if eff is not None:
+                bucket['eff'] = eff
+        bucket['xs'].append(nx)
+        bucket['ys'].append(ny)
+
+    if not by_bow:
+        return None
+
+    # Compute per-session stats and collect into per-bow per-kind series,
+    # keyed by the draw weight value that defines the x position.
+    bow_series = {}  # bow → {
+                     #   eff_xs, eff_mpi, eff_r95,
+                     #   rated_xs, rated_mpi, rated_r95,
+                     # }
+    table_rows = []
+    for bow in sorted(by_bow.keys()):
+        sessions = by_bow[bow]
+        ser = {
+            'eff_xs': [], 'eff_mpi': [], 'eff_r95': [],
+            'rated_xs': [], 'rated_mpi': [], 'rated_r95': [],
+        }
+        for sid in sorted(sessions, key=lambda s: sessions[s]['dt']):
+            b = sessions[sid]
+            s = _archery_stats(b['xs'], b['ys'])
+            if s is None:
+                continue
+            # X position = the draw weight the user was actually pulling.
+            # For "effective" sessions that's the effective DW; for
+            # "rated" sessions it's the bow's rated DW. Skip sessions
+            # whose DW we don't know — without an x they can't be plotted.
+            if b['kind'] == 'effective':
+                dw_x = b['eff']
+            else:
+                dw_x = b['rated']
+            if dw_x is None:
+                continue
+            if b['kind'] == 'effective':
+                ser['eff_xs'].append(dw_x)
+                ser['eff_mpi'].append(s['mpi'])
+                ser['eff_r95'].append(s['r95'])
+            else:
+                ser['rated_xs'].append(dw_x)
+                ser['rated_mpi'].append(s['mpi'])
+                ser['rated_r95'].append(s['r95'])
+            table_rows.append([
+                b['dt'].strftime('%Y-%m-%d'),
+                bow,
+                sid,
+                s['n'],
+                b['kind'],
+                ('' if b['rated'] is None else round(b['rated'], 1)),
+                ('' if b['eff'] is None else round(b['eff'], 1)),
+                round(dw_x, 1),
+                round(s['mpi'], 3),
+                round(s['r95'], 3),
+            ])
+        if ser['eff_xs'] or ser['rated_xs']:
+            bow_series[bow] = ser
+
+    if not bow_series:
+        return None
+
+    # Sort table rows by draw weight then bow for at-a-glance trends.
+    table_rows.sort(key=lambda r: (r[1], r[7]))
+
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+
+    # Each bow gets a base hue. Accuracy and precision share the hue;
+    # marker shape and linestyle differentiate the four traces per bow.
+    palette = [
+        '#c0392b', '#2e7a8e', '#7a4ec0', '#c97a4a', '#1a7a3a',
+        '#7a1a5c', '#1a3a7a', '#7a6a1a', '#5c1a7a', '#1a7a7a',
+    ]
+    fig, ax = plt.subplots(figsize=(10, 5.6))
+    bow_keys = list(bow_series.keys())
+
+    def _sorted_pairs(xs, ys):
+        # Sort by x so the connecting line walks the draw-weight axis
+        # left-to-right rather than zigzagging in date order.
+        paired = sorted(zip(xs, ys), key=lambda p: p[0])
+        return [p[0] for p in paired], [p[1] for p in paired]
+
+    for i, bow in enumerate(bow_keys):
+        ser = bow_series[bow]
+        hue = palette[i % len(palette)]
+        if ser['eff_xs']:
+            ex, em = _sorted_pairs(ser['eff_xs'], ser['eff_mpi'])
+            _, er = _sorted_pairs(ser['eff_xs'], ser['eff_r95'])
+            ax.plot(ex, em, color=hue,
+                    linestyle='-', marker='o', markersize=5,
+                    linewidth=1.4,
+                    label=f'{bow} — Accuracy @ effective DW')
+            ax.plot(ex, er, color=hue,
+                    linestyle='-', marker='s', markersize=5,
+                    linewidth=1.4, alpha=0.55,
+                    label=f'{bow} — Precision @ effective DW')
+        if ser['rated_xs']:
+            rx, rm = _sorted_pairs(ser['rated_xs'], ser['rated_mpi'])
+            _, rr = _sorted_pairs(ser['rated_xs'], ser['rated_r95'])
+            ax.plot(rx, rm, color=hue,
+                    linestyle='--', marker='^', markersize=6,
+                    linewidth=1.4,
+                    label=f'{bow} — Accuracy @ rated DW')
+            ax.plot(rx, rr, color=hue,
+                    linestyle='--', marker='v', markersize=6,
+                    linewidth=1.4, alpha=0.55,
+                    label=f'{bow} — Precision @ rated DW')
+
+    ax.set_xlabel('Draw weight (lb)')
+    ax.set_ylabel('Normalized units (1.0 = target edge)\nlower is better')
+    ax.set_title('Accuracy & precision by draw weight')
+    ax.grid(True, linestyle='--', alpha=0.4)
+    ax.legend(loc='upper left', fontsize=7, ncol=2, framealpha=0.85)
+    png_b64 = _render_matplotlib_png(fig)
+
+    intro = Markup(
+        '<p class="report-intro">'
+        '<strong>What this answers:</strong> does re-tuning to a different '
+        'effective draw weight actually change how the bow shoots? Each '
+        'bow contributes up to four traces: accuracy (MPI, circle/triangle '
+        'markers) and precision (R95, square/diamond markers), split by '
+        'whether the session was shot at the bow’s rated draw weight '
+        '(dashed lines) or at a re-tuned effective draw weight (solid '
+        'lines). Values are normalized by target half-width so mixed-'
+        'target histories are comparable. Misses excluded.'
+        '</p>'
+    )
+
+    return {
+        'key': 'draw_weight_traces',
+        'title': 'Accuracy & precision by draw weight',
+        'intro_html': intro,
+        'png_b64': png_b64,
+        'columns': [
+            'Session date', 'Bow', 'Session id',
+            _tip('Shots',
+                 'Hits in this session that contributed to the stats. '
+                 'Misses excluded.'),
+            _tip('Pool',
+                 '"effective" = the user set an effective_draw_weight '
+                 'different from the bow’s rated draw weight for '
+                 'this session; "rated" = the user was effectively '
+                 'shooting at the bow’s rated spec.'),
+            _tip('Rated DW (lb)',
+                 'Rated draw weight on the bow row at shot time. '
+                 'Snapshotted per shot so historical attribution stays '
+                 'correct after edits.'),
+            _tip('Effective DW (lb)',
+                 'Effective (actual) draw weight recorded for this '
+                 'session’s shots, if the user entered one.'),
+            _tip('DW used (lb)',
+                 'The draw weight used to position this session on the '
+                 'chart — the effective DW when the user set one, '
+                 'otherwise the rated DW.'),
+            _tip('MPI (norm)',
+                 'Per-session Mean Point of Impact — distance from origin '
+                 'to the session’s shot centroid.'),
+            _tip('R95 (norm)',
+                 'Per-session 95% radius about the session’s centroid.'),
+        ],
+        'rows': table_rows,
+    }
+
+
 def _report_cold_bore_vs_warmed(user_id):
     """Compare quiver 1 of each session against quivers 2+ of that
     session. Pools across all sessions, then runs the same
@@ -11101,6 +11744,30 @@ REPORTS = {
                        'are normalized by target half-width so mixed '
                        'targets are comparable.',
         'fn': _report_accuracy_over_time,
+        'accepts_date_range': True,
+    },
+    'accuracy_precision_traces': {
+        'label': 'Accuracy & precision traces',
+        'description': 'Accuracy and precision on a single timeline at '
+                       'three granularities, overlaid: per session, per '
+                       'quiver, and as an all-time rolling pool. Red '
+                       'traces are accuracy (MPI); green traces are '
+                       'precision (R95). Values are normalized by target '
+                       'half-width so mixed-target histories are '
+                       'comparable. Misses excluded.',
+        'fn': _report_accuracy_precision_traces,
+        'accepts_date_range': True,
+    },
+    'draw_weight_traces': {
+        'label': 'Accuracy & precision by draw weight',
+        'description': 'Per-bow accuracy and precision traces over time, '
+                       'split by whether the session was shot at the '
+                       'bow’s rated draw weight (dashed) or a different '
+                       'effective draw weight (solid). Up to four traces '
+                       'per bow — useful for spotting whether re-tuning '
+                       'actually changed how the bow shoots. Values are '
+                       'normalized by target half-width. Misses excluded.',
+        'fn': _report_draw_weight_traces,
         'accepts_date_range': True,
     },
     'equipment_head_to_head': {

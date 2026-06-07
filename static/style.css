@@ -1093,11 +1093,17 @@ h4 {
     .arrow-right { display: none; }
 
     /* ── Titles ──────────────────────────────────────────── */
-    /* Override the desktop !important so titles fit the viewport. */
+    /* Override the desktop !important so titles fit the viewport.
+       Allow wrapping and disable overflow clipping so long titles
+       like "Previous sessions" or "Tournament setup" stay fully
+       legible at narrow widths instead of getting cut off. */
     .title {
-        font-size: clamp(36px, 13vw, 72px) !important;
+        font-size: clamp(28px, 11vw, 72px) !important;
         width: 100%;
         -webkit-text-stroke-width: 1px;
+        white-space: normal;
+        overflow: visible;
+        line-height: 1.05;
     }
     .title-splash {
         font-size: clamp(48px, 16vw, 110px);

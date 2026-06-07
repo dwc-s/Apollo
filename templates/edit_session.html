@@ -175,6 +175,13 @@
         <input type="text" name="distance" value="{{ current.distance }}">
     </label>
 
+    <label>Effective draw weight (lbs, optional)
+        <input type="text" name="effective_draw_weight"
+               value="{{ current.effective_draw_weight or '' }}"
+               inputmode="decimal"
+               placeholder="leave blank to use bow's rated draw weight">
+    </label>
+
     <label>Session notes
         <textarea name="session_notes">{{ current.session_notes }}</textarea>
     </label>

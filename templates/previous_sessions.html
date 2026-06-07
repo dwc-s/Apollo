@@ -515,10 +515,10 @@
           {% if session_notes or session_tags %}
           <div class="quiver-meta" style="margin-left:6px;">
             {% if session_notes %}
-              <span class="quiver-meta-label">Notes</span>{{ session_notes }}
+              <span class="quiver-meta-label">Notes:</span> {{ session_notes }}
             {% endif %}
             {% if session_tags %}
-              <span class="quiver-meta-label" style="margin-left:14px;">Tags</span>
+              <span class="quiver-meta-label" style="margin-left:14px;">Tags:</span>
               {% for tag in session_tags.split(',') if tag.strip() %}
                 {{ tag_link(tag.strip()) }}
               {% endfor %}

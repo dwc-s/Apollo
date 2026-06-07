@@ -51,7 +51,16 @@
         let currentMatches = [];
 
         function syncHidden() {
-            hidden.value = tags.join(', ');
+            // Always include the in-progress draft text so the form POST
+            // carries it even if a blur/submit race on mobile skips the
+            // explicit commitDraft() call. The draft is space-stripped to
+            // match commitDraft()'s canonicalisation.
+            const draftRaw = (input ? input.value : '').replace(/\s+/g, '').trim();
+            const all = tags.slice();
+            if (draftRaw && !all.some(t => t.toLowerCase() === draftRaw.toLowerCase())) {
+                all.push(draftRaw);
+            }
+            hidden.value = all.join(', ');
         }
 
         function renderChips() {
@@ -141,6 +150,10 @@
                 });
                 input.value = tail || '';
             }
+            // Mirror the in-progress draft into the hidden input on every
+            // keystroke — defends against mobile blur/submit races where
+            // the user taps a button before the chip commits.
+            syncHidden();
             compute();
         });
         input.addEventListener('focus', compute);

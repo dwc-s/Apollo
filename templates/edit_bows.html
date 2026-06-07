@@ -96,12 +96,6 @@
             <span class="form-label">Bow draw weight (lbs)</span>
             <input type="text" name="bow_draw_weight" value="{{ bow_data[i][0]['bow_draw_weight'] }}">
 
-            <span class="form-label has-tooltip"
-                  data-tooltip="Actual draw weight as opposed to rated draw weight. Effective draw weight can either be measured or estimated (add or subtract 2.5 pounds for each inch of draw length over or below the standard 28 inches).">Effective draw weight (optional)</span>
-            <input type="text" name="effective_draw_weight"
-                   value="{{ bow_data[i][0]['effective_draw_weight'] or '' }}"
-                   placeholder="leave blank if same as bow draw weight">
-
             <span class="form-label amo-label">Bow length (AMO, inches)</span>
             <input type="text" name="bow_amo" value="{{ bow_data[i][0]['amo'] }}">
 

@@ -472,6 +472,14 @@
             </select>
             <div class="links-row"><a href="/add_bow">+ add bow</a></div>
 
+            <span class="form-label has-tooltip"
+                  data-tooltip="Actual draw weight as opposed to rated draw weight. Re-measure whenever the string is put back on the bow.">Effective draw weight (lbs, optional)</span>
+            <input type="text" id="effective_draw_weight" name="effective_draw_weight"
+                   value="{{ effective_draw_weight or '' }}"
+                   inputmode="decimal"
+                   placeholder="leave blank to use bow's rated draw weight">
+            <script id="effective-dw-by-bow" type="application/json">{{ effective_dw_by_bow | tojson }}</script>
+
             <span class="form-label">Arrow</span>
             <select id="arrow_type" name="arrow_type">
                 {% for arrow in arrow_types %}
@@ -910,6 +918,23 @@ stage.addEventListener('click', e => {
 });
 
 document.getElementById('miss-btn').addEventListener('click', recordMiss);
+
+// ── Effective draw weight prefill ────────────────────────────────────────
+(function () {
+    const bowSel  = document.getElementById('bow');
+    const dwInput = document.getElementById('effective_draw_weight');
+    const dataEl  = document.getElementById('effective-dw-by-bow');
+    if (!bowSel || !dwInput || !dataEl) return;
+    let prefillMap = {};
+    try { prefillMap = JSON.parse(dataEl.textContent || '{}'); }
+    catch (_) { prefillMap = {}; }
+    bowSel.addEventListener('change', () => {
+        const stored = prefillMap[bowSel.value];
+        if (stored !== undefined && stored !== null && stored !== '') {
+            dwInput.value = stored;
+        }
+    });
+})();
 
 // ── Recall arrow button ──────────────────────────────────────────────────
 // Undo the most recent shot in this tournament session — for accidental

@@ -6,7 +6,7 @@ sessions, run formal tournament rounds, and review hit rate, group
 geometry, and equipment comparisons over time. Supports multiple users,
 bows, arrows, and target faces.
 
-A hosted instance lives at <https://apolloshoots.org>.
+You can also join and use it at <https://www.apolloshoots.org>.
 
 ---
 

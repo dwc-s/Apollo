@@ -207,6 +207,14 @@
             </select>
             <div class="links-row"><a href="/add_bow">+ add bow</a></div>
 
+            <span class="form-label has-tooltip"
+                  data-tooltip="Actual draw weight as opposed to rated draw weight. Re-measure whenever the string is put back on the bow. Effective draw weight can be measured or estimated (add or subtract 2.5 lbs for each inch of draw length over or below the standard 28 inches).">Effective draw weight (lbs, optional)</span>
+            <input type="text" id="effective_draw_weight" name="effective_draw_weight"
+                   value="{{ effective_draw_weight or '' }}"
+                   inputmode="decimal"
+                   placeholder="leave blank to use bow's rated draw weight">
+            <script id="effective-dw-by-bow" type="application/json">{{ effective_dw_by_bow | tojson }}</script>
+
             <span class="form-label">Arrow</span>
             <select id="arrow_type" name="arrow_type">
                 {% for arrow in arrow_types %}
@@ -841,6 +849,35 @@ applyUnits();
 // ── Missed target button ─────────────────────────────────────────────────
 document.getElementById('miss-btn').addEventListener('click', recordMiss);
 
+// ── Effective draw weight prefill ────────────────────────────────────────
+// Each bow remembers the last effective draw weight the user recorded with
+// it. When the bow selector changes, autofill the field from that map so
+// the value sticks across sessions without locking the user out of
+// editing (e.g. after restringing). If the field already has a value the
+// user typed, don't clobber it.
+(function () {
+    const bowSel  = document.getElementById('bow');
+    const dwInput = document.getElementById('effective_draw_weight');
+    const dataEl  = document.getElementById('effective-dw-by-bow');
+    if (!bowSel || !dwInput || !dataEl) return;
+    let prefillMap = {};
+    try { prefillMap = JSON.parse(dataEl.textContent || '{}'); }
+    catch (_) { prefillMap = {}; }
+    function applyPrefill(force) {
+        const bow = bowSel.value;
+        if (!bow) return;
+        const stored = prefillMap[bow];
+        if (stored === undefined || stored === null || stored === '') return;
+        if (force || !dwInput.value.trim()) {
+            dwInput.value = stored;
+        }
+    }
+    bowSel.addEventListener('change', () => applyPrefill(true));
+    // Don't apply on first load — server already populated the field with
+    // the current session's value (which may intentionally differ from
+    // the last recorded value).
+})();
+
 // ── Recall arrow button ──────────────────────────────────────────────────
 // Undo the most recent shot in this session — for the "I tapped the wrong
 // place by accident" case. Fires a POST to /recall_arrow, then reloads so
@@ -858,6 +895,13 @@ if (recallBtn) {
             try { payload = await res.json(); } catch (_) {}
             if (res.ok && payload.ok) {
                 sessionStorage.setItem('apollo_recall_notice', '1');
+                // Stash the current tag string so a recall that removes the
+                // only tagged shot doesn't blank the chip input on the
+                // reload that follows.
+                const tagsHidden = document.querySelector('input[name="session_tags"]');
+                if (tagsHidden && tagsHidden.value) {
+                    sessionStorage.setItem('apollo_recall_tags', tagsHidden.value);
+                }
                 // Navigate via GET, not reload — the current page is the
                 // response to the last shot's POST, and reload() would
                 // prompt Firefox to resubmit it.
@@ -877,6 +921,24 @@ if (recallBtn) {
     if (sessionStorage.getItem('apollo_recall_notice')) {
         sessionStorage.removeItem('apollo_recall_notice');
         readout.innerHTML = '<span style="color:#1a3a5c;font-weight:700;">ARROW RECALLED — re-enter the shot</span>';
+        // Restore tags if the server returned blank (recalled shot was the
+        // last carrier of the session's tags). The tag chip input has
+        // already initialized at this point, so set the hidden field and
+        // re-init the chip UI.
+        const stashed = sessionStorage.getItem('apollo_recall_tags');
+        sessionStorage.removeItem('apollo_recall_tags');
+        if (stashed) {
+            const chipContainer = document.getElementById('session-tags-chips');
+            const tagsHidden = document.querySelector('input[name="session_tags"]');
+            if (chipContainer && (!tagsHidden || !tagsHidden.value)) {
+                // Reset and re-initialise the chip widget with the stashed value.
+                chipContainer.setAttribute('data-tag-value', stashed);
+                chipContainer.removeAttribute('data-tag-inited');
+                if (window.ApolloTags && window.ApolloTags.initAll) {
+                    window.ApolloTags.initAll(chipContainer.parentNode);
+                }
+            }
+        }
     }
 }
 
