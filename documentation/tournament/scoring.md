@@ -143,7 +143,7 @@ config so the UI can render a timer ring when it's ready.
 
 ## Distance enforcement
 
-Tournament rounds with multiple distances (1440, NFAA 900, NASP)
+Tournament rounds with multiple distances (1440, NFAA 900, course rounds)
 prompt the user to confirm distance at the start of each new segment.
 Apollo stores the round's currently-active segment in the Flask
 session cookie under `tournament_segment_idx`; advancing happens when

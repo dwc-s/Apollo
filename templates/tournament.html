@@ -70,19 +70,6 @@
             font-family: "Quantico", sans-serif;
             font-weight: 700;
         }
-        .practice-badge {
-            display: inline-block;
-            background: #c97a4a;
-            color: #fff;
-            border-radius: 6px;
-            padding: 2px 10px;
-            margin-left: 8px;
-            font-family: "Quantico", sans-serif;
-            font-size: 0.8rem;
-            letter-spacing: 0.1em;
-            text-transform: uppercase;
-            vertical-align: middle;
-        }
         /* ── Per-end shot clock ────────────────────────────────────────
            Mirrors a range-light shot clock: green > 30s, yellow ≤ 30s,
            red at 0. The countdown is informational — Apollo does not
@@ -188,16 +175,6 @@
             font-weight: 700;
             cursor: pointer;
         }
-        .practice-toggle {
-            display: flex;
-            align-items: center;
-            gap: 6px;
-            font-size: 0.8rem;
-            margin: 8px 0 0 0;
-            cursor: pointer;
-            user-select: none;
-        }
-        .practice-toggle input { margin: 0; }
         .org-header {
             font-family: "Quantico", sans-serif;
             font-weight: 700;
@@ -289,20 +266,28 @@
         <h4>{{ r.name }}</h4>
         <p>{{ r.description }}</p>
         <div class="spec">
-            {{ r.arrows_per_end }} arrows × {{ r.ends }} ends = {{ r.total_arrows }} shots ·
-            max {{ r.max_score }} ·
-            {% if r.distance_m %}{{ '%.1f'|format(r.distance_m) }} m{% endif %}
+            {% if r.is_course %}
+                {{ r.arrows_per_end }} arrows × {{ r.ends }} targets = {{ r.total_arrows }} shots ·
+                max {{ r.max_score }} ·
+                varied distances
+            {% else %}
+                {{ r.arrows_per_end }} arrows × {{ r.ends }} ends = {{ r.total_arrows }} shots ·
+                max {{ r.max_score }} ·
+                {% if r.is_multi_segment %}varied distances{% elif r.distance_m %}{{ '%.1f'|format(r.distance_m) }} m{% endif %}
+            {% endif %}
             {% if r.equipment_class != 'any' %} · {{ r.equipment_class }}{% endif %}
         </div>
-        <form action="/tournament/start" method="POST">
+        <form method="POST" class="round-start-form">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <input type="hidden" name="round_key" value="{{ r.key }}">
-            <label class="practice-toggle"
-                   title="Practice runs are not counted as actual competitions. Every shot is tagged 'practice' so the session is marked in your history.">
-                <input type="checkbox" name="practice" value="1">
-                Practice (not a real competition)
-            </label>
-            <button type="submit">Start round</button>
+            <button type="submit" formaction="/tournament/start"
+                    title="Tap the target after every arrow on this device. Best for solo practice or a friendly shoot where one person tracks the group.">
+                Shoot live on target
+            </button>
+            <button type="submit" formaction="/tournament/score_sheet/setup"
+                    title="Skip the canvas — type each arrow's ring number from a paper scorecard. Use this to log a real competition (yours or your team's) after the fact.">
+                Enter scores from paper
+            </button>
         </form>
     </div>
     {% endfor %}
@@ -315,7 +300,6 @@
 
 <h4 class="quantico">
     Tournament: {{ round_def.name }} (#{{ session_id }})
-    {% if is_practice %}<span class="practice-badge" title="This round is flagged as practice — it will not count as an actual competition.">Practice</span>{% endif %}
     / <a href="/end_session" data-no-warn="1">End round</a>
 </h4>
 
@@ -454,18 +438,31 @@
                 </div>
                 <div style="margin-top:8px;font-size:0.8rem;opacity:0.75;">
                     {{ round_def.org }} ·
-                    {{ round_def.arrows_per_end }} arrows / end ·
-                    {% if round_def.end_time_s %}{{ round_def.end_time_s }}s per end ·{% endif %}
+                    {% if is_course_round %}
+                        Target {{ current_segment_idx + 1 }} of {{ segment_count }} ·
+                        {{ arrows_per_end }} arrows ·
+                    {% else %}
+                        {{ arrows_per_end }} arrows / end ·
+                        {% if round_def.end_time_s %}{{ round_def.end_time_s }}s per end ·{% endif %}
+                    {% endif %}
                     {{ '%.1f'|format(current_distance_m) }} m ·
                     {{ face_def.name }}
                 </div>
             </div>
 
+            {% if is_course_round %}
+            <span class="form-label">Arrows left at this target</span>
+            <br><pre>{{ arrows_remaining }}</pre>
+
+            <span class="form-label">Targets completed</span>
+            <br><pre>{{ quivers_completed }}</pre>
+            {% else %}
             <span class="form-label">Arrows left in this end</span>
             <br><pre>{{ arrows_remaining }}</pre>
 
             <span class="form-label">Ends completed</span>
             <br><pre>{{ quivers_completed }}</pre>
+            {% endif %}
 
             <span class="form-label">Bow</span>
             <select id="bow" name="bow">
@@ -484,13 +481,13 @@
             <div class="links-row"><a href="/add_arrow">+ add arrow</a></div>
 
             {% if progress.ends %}
-            <span class="form-label">Ends scorecard</span>
+            <span class="form-label">{% if is_course_round %}Targets scorecard{% else %}Ends scorecard{% endif %}</span>
             <table class="end-table">
                 <thead>
                     <tr>
-                        <th>End</th>
-                        {% for i in range(arrows_per_end) %}<th>A{{ i+1 }}</th>{% endfor %}
-                        <th>End</th>
+                        <th>{% if is_course_round %}Tgt{% else %}End{% endif %}</th>
+                        {% for i in range(max_arrows_per_end) %}<th>A{{ i+1 }}</th>{% endfor %}
+                        <th>{% if is_course_round %}Tgt{% else %}End{% endif %}</th>
                         <th>Run</th>
                     </tr>
                 </thead>
@@ -501,7 +498,7 @@
                         {% for a in end.arrows %}
                             <td class="{% if a.miss %}arrow-miss{% endif %}">{% if a.miss %}M{% else %}{{ a.points }}{% endif %}</td>
                         {% endfor %}
-                        {% for _ in range(arrows_per_end - end.arrows|length) %}<td></td>{% endfor %}
+                        {% for _ in range(max_arrows_per_end - end.arrows|length) %}<td></td>{% endfor %}
                         <td><strong>{{ end.end_total }}</strong></td>
                         <td>{{ end.running }}</td>
                     </tr>
@@ -1227,6 +1224,555 @@ applyUnits();
 </script>
 
 {% endif %}
+
+
+{% if view == 'score_sheet' %}
+<style>
+    /* Score sheet layout — Quantico everywhere, content-sized cards,
+       generous padding around each score cell. */
+    #score-sheet-form {
+        font-family: "Quantico", sans-serif;
+        max-width: max-content;
+        margin: 0 auto;
+        padding: 0 16px;
+    }
+    #score-sheet-form h2,
+    #score-sheet-form h3,
+    #score-sheet-form h4,
+    #score-sheet-form h5,
+    #score-sheet-form label,
+    #score-sheet-form p,
+    #score-sheet-form input,
+    #score-sheet-form textarea,
+    #score-sheet-form button,
+    #score-sheet-form table {
+        font-family: "Quantico", sans-serif;
+    }
+    .score-card {
+        display: inline-block;        /* card width = content width */
+        max-width: 100%;
+        margin: 18px auto;
+        padding: 18px 22px;
+        border: 1px solid #c3d0e3;
+        border-radius: 10px;
+        background: #fbfdff;
+        box-shadow: 0 1px 3px rgba(26,58,92,0.06);
+    }
+    .score-card.competition-meta-card {
+        display: block;
+    }
+    .participant-scorecard {
+        display: block;
+        text-align: left;
+    }
+    .meta-grid {
+        display: grid;
+        grid-template-columns: max-content 1fr;
+        column-gap: 14px;
+        row-gap: 10px;
+        align-items: center;
+        margin-top: 6px;
+    }
+    .meta-grid label {
+        font-weight: 700;
+        color: #1a3a5c;
+        white-space: nowrap;
+    }
+    .meta-grid input,
+    .meta-grid textarea,
+    .participant-fields input,
+    .participant-fields textarea {
+        font-family: "Quantico", sans-serif;
+        font-size: 0.95rem;
+        padding: 6px 8px;
+        border: 1px solid #b9c6d8;
+        border-radius: 4px;
+        background: #fff;
+    }
+    .participant-fields {
+        display: grid;
+        grid-template-columns: max-content 1fr;
+        column-gap: 14px;
+        row-gap: 8px;
+        align-items: center;
+        margin-bottom: 14px;
+    }
+    .participant-fields label {
+        font-weight: 700;
+        color: #1a3a5c;
+        white-space: nowrap;
+    }
+    .participant-fields textarea {
+        min-height: 56px;
+        resize: vertical;
+    }
+    /* Score grid — big horizontal padding between cells */
+    .score-card table.end-table {
+        border-collapse: separate;
+        border-spacing: 14px 4px;   /* horizontal · vertical */
+        margin: 6px 0 4px 0;
+    }
+    .score-card table.end-table th,
+    .score-card table.end-table td {
+        border: none;
+        padding: 4px 6px;
+        text-align: center;
+        font-size: 0.95rem;
+    }
+    .score-card table.end-table th {
+        font-weight: 700;
+        color: #1a3a5c;
+        border-bottom: 1px solid #c3d0e3;
+    }
+    .score-card table.end-table td.end-total,
+    .score-card table.end-table td.end-running {
+        font-weight: 700;
+        background: #f0f5fb;
+        border-radius: 4px;
+    }
+    .ring-input {
+        width: 2.4em;
+        text-align: center;
+        padding: 4px 0;
+        border: 1px solid #b9c6d8;
+        border-radius: 4px;
+        font-family: "Quantico", sans-serif;
+    }
+    .segment-label {
+        font-size: 0.85rem;
+        color: #4a5a73;
+        margin: 12px 0 4px 0;
+    }
+    .participant-summary {
+        margin-top: 12px;
+        font-size: 1rem;
+        text-align: right;
+        color: #1a3a5c;
+    }
+    .rm-participant {
+        background: transparent;
+        border: 1px solid #c64a4a;
+        color: #c64a4a;
+        border-radius: 14px;
+        width: 26px;
+        height: 26px;
+        line-height: 18px;
+        font-weight: 700;
+        cursor: pointer;
+    }
+    .add-archer-btn {
+        margin: 8px 0 16px 0;
+        background: #1a3a5c;
+        color: #fff;
+        border: 0;
+        padding: 8px 14px;
+        border-radius: 4px;
+        cursor: pointer;
+        font-family: "Quantico", sans-serif;
+    }
+    .add-archer-btn:hover { background: #2a5a8c; }
+    .submit-btn {
+        font-family: "Quantico", sans-serif;
+        font-size: 1.05rem;
+        padding: 10px 28px;
+        background: #1a3a5c;
+        color: #fff;
+        border: 0;
+        border-radius: 4px;
+        cursor: pointer;
+    }
+    .submit-btn:hover { background: #2a5a8c; }
+</style>
+
+<h2 class="quantico" style="text-align:center;color:#1a3a5c;">
+    Enter scores from paper: {{ round_def.name }}
+</h2>
+<p class="selector-intro" style="font-family:'Quantico',sans-serif;">
+    Type each arrow's ring value into the grid. Use <code>X</code> for
+    an inner-10 (or inner-X on Field), <code>M</code> for a miss, or
+    the printed ring number. Empty cells count as misses. Add a row
+    for each archer who shot this round — Apollo will email each
+    competitor their own PDF / CSV / Excel scorecard when you submit.
+</p>
+
+<form action="/tournament/score_sheet" method="POST" id="score-sheet-form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="round_key" value="{{ round_key }}">
+
+    <div class="score-card competition-meta-card" style="text-align:left;">
+        <div class="meta-grid">
+            <label for="competition_name">Competition name</label>
+            <input type="text" id="competition_name" name="competition_name"
+                   placeholder="e.g. 2026 Spring Indoor Classic">
+
+            <label for="competition_date">Date</label>
+            <input type="date" id="competition_date" name="competition_date"
+                   value="{{ today_iso }}">
+
+            <label for="competition_location">Location</label>
+            <input type="text" id="competition_location" name="competition_location"
+                   placeholder="e.g. Riverside Archery Club, Boise ID">
+        </div>
+    </div>
+
+    <h4 style="margin-top:24px;">Competitors</h4>
+    <div id="participants-list">
+        <div class="score-card participant-scorecard"
+             data-pidx="0">
+            <h5 style="margin-top:0;" class="participant-card-title">Competitor 1</h5>
+            <div class="participant-fields">
+                <label>Competitor name</label>
+                <input type="text" name="participant_0_name"
+                       placeholder="Real name (e.g. Robin Hood)"
+                       required>
+
+                <label>Email</label>
+                <input type="email" name="participant_0_email"
+                       placeholder="email@example.com"
+                       value="{{ owner_email }}">
+
+                <label style="align-self:start;">Notes</label>
+                <textarea name="participant_0_notes"
+                          placeholder="Optional — anything noteworthy about the round."></textarea>
+            </div>
+            <div class="scorecard-grids-host"></div>
+            <div class="participant-summary">
+                Total: <strong class="participant-total">0</strong>
+                · X: <strong class="participant-x-count">0</strong>
+            </div>
+        </div>
+    </div>
+
+    <button type="button" id="add-participant" class="add-archer-btn">+ Add another archer</button>
+
+    <p style="font-size:0.85rem;opacity:0.8;">
+        Total arrows in this round: <strong>{{ total_arrows }}</strong>.
+        {% if sheet_segments|length > 1 %}
+        End size changes by segment — sub-tables show the face and
+        distance for each block.
+        {% endif %}
+    </p>
+
+    <div style="margin:24px 0;text-align:center;">
+        <button type="submit" class="submit-btn">Submit scorecard</button>
+    </div>
+</form>
+
+<template id="participant-card-template">
+    <div class="score-card participant-scorecard" data-pidx="__IDX__">
+        <div style="display:flex;justify-content:space-between;align-items:center;">
+            <h5 style="margin-top:0;" class="participant-card-title">Competitor __N__</h5>
+            <button type="button" class="rm-participant" title="Remove this competitor">×</button>
+        </div>
+        <div class="participant-fields">
+            <label>Competitor name</label>
+            <input type="text" name="participant___IDX___name"
+                   placeholder="Real name (e.g. Robin Hood)" required>
+
+            <label>Email</label>
+            <input type="email" name="participant___IDX___email"
+                   placeholder="email@example.com">
+
+            <label style="align-self:start;">Notes</label>
+            <textarea name="participant___IDX___notes"
+                      placeholder="Optional — anything noteworthy about the round."></textarea>
+        </div>
+        <div class="scorecard-grids-host"></div>
+        <div class="participant-summary">
+            Total: <strong class="participant-total">0</strong>
+            · X: <strong class="participant-x-count">0</strong>
+        </div>
+    </div>
+</template>
+
+<template id="scorecard-grids-template">
+    {% for seg in sheet_segments %}
+    <div>
+        <div class="segment-label">
+            {{ seg.face_name }} at {{ '%.1f'|format(seg.distance_m) }} m
+            · {{ seg.arrows_per_end }} arrows/end
+        </div>
+        <table class="end-table">
+            <thead>
+                <tr>
+                    <th>End</th>
+                    {% for i in range(seg.arrows_per_end) %}<th>A{{ i+1 }}</th>{% endfor %}
+                    <th>End</th>
+                    <th>Run</th>
+                </tr>
+            </thead>
+            <tbody>
+            {% for end in seg.ends %}
+                <tr data-end-number="{{ end.end_number }}"
+                    data-segment-idx="{{ seg.segment_idx }}">
+                    <td>{{ end.end_number }}</td>
+                    {% for arrow_n in range(1, end.arrows_per_end + 1) %}
+                    <td>
+                        <input type="text" maxlength="2"
+                               name="participant___IDX___end_{{ end.end_number }}_arrow_{{ arrow_n }}"
+                               class="ring-input"
+                               data-choices="{{ seg.choices|join(',') }}"
+                               data-segment-idx="{{ seg.segment_idx }}">
+                    </td>
+                    {% endfor %}
+                    <td class="end-total"></td>
+                    <td class="end-running"></td>
+                </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% endfor %}
+</template>
+
+<script>
+(function() {
+    // Server pre-computes the ring-label → point-value table per
+    // segment. Keys are stringified segment indices; values are
+    // { 'X': pv, '10': pv, … , 'M': 0 }.
+    const POINTS_BY_SEG = {{ points_by_segment_json|safe }};
+
+    function pointsFor(segIdx, label) {
+        const lbl = (label || '').toString().trim().toUpperCase();
+        if (lbl === '' || lbl === 'M') return 0;
+        const map = POINTS_BY_SEG[segIdx] || {};
+        if (Object.prototype.hasOwnProperty.call(map, lbl)) return map[lbl];
+        return 0;
+    }
+
+    function isX(label) {
+        return (label || '').toString().trim().toUpperCase() === 'X';
+    }
+
+    function renumberParticipants() {
+        document.querySelectorAll('#participants-list .participant-scorecard')
+            .forEach((card, i) => {
+                const nameInput = card.querySelector('input[type=text]');
+                const label = (nameInput.value || ('Competitor ' + (i+1))).trim()
+                            || ('Competitor ' + (i+1));
+                card.querySelector('.participant-card-title').textContent = label;
+            });
+    }
+
+    function recalcCardTotals(card) {
+        let running = 0;
+        let xCount = 0;
+        const segIdx = (row) => parseInt(row.dataset.segmentIdx || '0', 10);
+        card.querySelectorAll('tbody tr').forEach((row) => {
+            let endTotal = 0;
+            row.querySelectorAll('input.ring-input').forEach((inp) => {
+                const v = inp.value;
+                endTotal += pointsFor(segIdx(row), v);
+                if (isX(v)) xCount += 1;
+            });
+            running += endTotal;
+            row.querySelector('.end-total').textContent = endTotal || '';
+            row.querySelector('.end-running').textContent = running;
+        });
+        card.querySelector('.participant-total').textContent = running;
+        card.querySelector('.participant-x-count').textContent = xCount;
+    }
+
+    function attachRingInputBehavior(input) {
+        input.addEventListener('input', () => {
+            input.value = (input.value || '').toUpperCase();
+            recalcCardTotals(input.closest('.participant-scorecard'));
+        });
+        input.addEventListener('blur', () => {
+            const v = (input.value || '').toUpperCase().trim();
+            if (!v) return;
+            const choices = (input.dataset.choices || '').split(',');
+            if (choices.indexOf(v) === -1) {
+                input.style.borderColor = '#c64a4a';
+                input.title = 'Valid: ' + choices.join(' / ');
+            } else {
+                input.style.borderColor = '';
+                input.title = '';
+            }
+        });
+    }
+
+    function injectScorecardGrids(card, idx) {
+        const gridTpl = document.getElementById('scorecard-grids-template').innerHTML;
+        const host = card.querySelector('.scorecard-grids-host');
+        host.innerHTML = gridTpl.replaceAll('__IDX__', idx);
+        host.querySelectorAll('input.ring-input').forEach(attachRingInputBehavior);
+    }
+
+    function addParticipant() {
+        const list = document.getElementById('participants-list');
+        const idx = list.querySelectorAll('.participant-scorecard').length;
+        const cardTpl = document.getElementById('participant-card-template').innerHTML;
+        list.insertAdjacentHTML('beforeend',
+            cardTpl.replaceAll('__IDX__', idx).replaceAll('__N__', idx + 1));
+        const newCard = list.lastElementChild;
+        injectScorecardGrids(newCard, idx);
+        newCard.querySelector('.rm-participant').addEventListener('click', () => {
+            newCard.remove();
+            renumberParticipants();
+        });
+        newCard.querySelector('input[type=text]').addEventListener('input', renumberParticipants);
+    }
+
+    // Bootstrap the first scorecard for the pre-filled participant
+    function bootstrapFirstCard() {
+        const firstCard = document.querySelector('.participant-scorecard[data-pidx="0"]');
+        injectScorecardGrids(firstCard, 0);
+        firstCard.querySelector('input[type=text]')
+            .addEventListener('input', renumberParticipants);
+    }
+
+    document.getElementById('add-participant').addEventListener('click', addParticipant);
+    bootstrapFirstCard();
+    renumberParticipants();
+})();
+</script>
+{% endif %}
+
+
+{% if view == 'results' %}
+<style>
+    .results-page {
+        font-family: "Quantico", sans-serif;
+        max-width: max-content;
+        margin: 0 auto;
+        padding: 0 16px;
+    }
+    .results-page p, .results-page h2, .results-page h3, .results-page h4,
+    .results-page button, .results-page a {
+        font-family: "Quantico", sans-serif;
+    }
+    .results-card {
+        display: block;
+        margin: 18px auto;
+        padding: 16px 22px;
+        border: 1px solid #c3d0e3;
+        border-radius: 10px;
+        background: #fbfdff;
+        box-shadow: 0 1px 3px rgba(26,58,92,0.06);
+        max-width: max-content;
+    }
+    .results-meta {
+        margin: 4px 0 14px 0;
+        font-size: 0.95rem;
+        color: #1a3a5c;
+    }
+    .results-meta strong { font-weight: 700; }
+</style>
+
+<div class="results-page">
+<h2 class="quantico" style="text-align:center;color:#1a3a5c;">
+    Results: {{ round_def.name }}
+</h2>
+{% if results[0].competition_name or results[0].competition_date or results[0].competition_location %}
+<div class="results-meta" style="text-align:center;">
+    {% if results[0].competition_name %}
+        <strong>{{ results[0].competition_name }}</strong>
+        {% if results[0].competition_date or results[0].competition_location %} · {% endif %}
+    {% endif %}
+    {% if results[0].competition_date %}
+        {{ results[0].competition_date }}
+        {% if results[0].competition_location %} · {% endif %}
+    {% endif %}
+    {% if results[0].competition_location %}{{ results[0].competition_location }}{% endif %}
+</div>
+{% endif %}
+<p class="selector-intro" style="font-family:'Quantico',sans-serif;">
+    Saved. Each competitor's full scorecard is below — download a copy
+    in PDF, CSV, or Excel, or email everyone their report in one click.
+</p>
+
+{% for r in results %}
+<div class="results-card">
+    <div style="display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:16px;">
+        <div>
+            <h4 style="margin:0;">{{ loop.index }}. {{ r.name }}</h4>
+            {% if r.email %}<div style="font-size:0.8rem;opacity:0.7;">{{ r.email }}</div>{% endif %}
+        </div>
+        <div style="font-size:1.15rem;">
+            <strong>{{ r.scorecard.total_score }}</strong> / {{ round_def.max_score }}
+            · X: {{ r.scorecard.x_count }}
+        </div>
+    </div>
+    {% if r.notes %}
+    <div style="margin-top:10px;font-size:0.9rem;color:#1a3a5c;">
+        <strong>Notes:</strong> {{ r.notes }}
+    </div>
+    {% endif %}
+    <div style="margin-top:14px;display:flex;gap:8px;flex-wrap:wrap;">
+        <a href="/tournament/match/{{ match_id }}/download/{{ r.session_id }}/pdf"
+           class="download-btn">Download PDF</a>
+        <a href="/tournament/match/{{ match_id }}/download/{{ r.session_id }}/csv"
+           class="download-btn">Download CSV</a>
+        <a href="/tournament/match/{{ match_id }}/download/{{ r.session_id }}/xlsx"
+           class="download-btn">Download Excel</a>
+    </div>
+</div>
+{% endfor %}
+
+<div style="margin-top:24px;text-align:center;">
+    <form action="/tournament/match/{{ match_id }}/email" method="POST" id="email-form">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        {% if email_enabled %}
+            <button type="submit" style="font-size:1rem;padding:10px 18px;">
+                Email each participant their scorecard
+            </button>
+            <p style="font-size:0.8rem;opacity:0.7;margin-top:6px;">
+                Sends a separate email to each archer with PDF, CSV, and Excel attached.
+            </p>
+        {% else %}
+            <p style="font-size:0.85rem;opacity:0.7;">
+                Email isn't configured on this server (set <code>RESEND_API_KEY</code>
+                to enable). Use the per-archer download buttons above instead.
+            </p>
+        {% endif %}
+    </form>
+    <p style="margin-top:14px;">
+        <a href="/tournament">← Back to tournament rounds</a>
+    </p>
+</div>
+</div>
+
+<style>
+.download-btn {
+    display:inline-block;padding:6px 12px;background:#1a3a5c;color:#fff;
+    border-radius:4px;text-decoration:none;font-size:0.85rem;
+}
+.download-btn:hover { background:#2a5a8c; }
+</style>
+
+<script>
+(function(){
+    const f = document.getElementById('email-form');
+    if (!f) return;
+    f.addEventListener('submit', async (ev) => {
+        ev.preventDefault();
+        const btn = f.querySelector('button[type=submit]');
+        if (btn) { btn.disabled = true; btn.textContent = 'Sending…'; }
+        try {
+            const res = await fetch(f.action, {
+                method: 'POST',
+                headers: { 'X-CSRFToken': f.querySelector('input[name=csrf_token]').value },
+                body: new FormData(f),
+            });
+            const data = await res.json();
+            const sentN = (data.sent || []).length;
+            const skipped = (data.skipped || []);
+            let msg = `Sent ${sentN} email${sentN === 1 ? '' : 's'}.`;
+            if (skipped.length) {
+                msg += '\nSkipped:\n' + skipped.map(s => `  ${s.name}: ${s.reason}`).join('\n');
+            }
+            alert(msg);
+        } catch (e) {
+            alert('Email failed: ' + e.message);
+        } finally {
+            if (btn) { btn.disabled = false; btn.textContent = 'Email each participant their scorecard'; }
+        }
+    });
+})();
+</script>
+{% endif %}
+
 
 </body>
 </html>

@@ -14,6 +14,7 @@ dialect by metadata.create_all() at import time.
 """
 import csv
 import hashlib
+import json
 import io
 import math
 import secrets
@@ -163,10 +164,10 @@ def _wa_zones_10(face_radius_mm, x_ring_radius_mm):
 
 
 def _wa_zones_6(face_radius_mm, x_ring_radius_mm):
-    """WA 80cm 6-ring (compound 50m) and WA Field 6-ring faces.
+    """WA 80cm 6-ring face (compound 50m) — rings 10..5 visible plus the
+    inner-10 X ring. Anything outside the 5 ring scores M (miss).
 
-    Only rings 5-10 are printed; below 5 is a miss. Same ring widths as
-    the full 10-zone face.
+    Ring widths match the underlying 10-zone face (face_radius_mm / 10).
     """
     ring_w = face_radius_mm / 10.0
     out = [(10, x_ring_radius_mm, '#fff44f')]
@@ -180,16 +181,76 @@ def _wa_zones_6(face_radius_mm, x_ring_radius_mm):
     return out
 
 
+def _wa_zones_vegas(spot_radius_mm, x_ring_radius_mm):
+    """Vegas 3-spot per-spot face — only rings 10..6 are printed, so the
+    spot edge is the 6 ring. Anything outside scores M.
+
+    Ring widths come from the parent 40cm 10-zone face, so each ring is
+    spot_radius_mm / 5 wide (5 visible rings filling the spot radius).
+    """
+    ring_w = spot_radius_mm / 5.0
+    out = [(10, x_ring_radius_mm, '#fff44f')]
+    for i in range(5):
+        pv = 10 - i
+        r = (i + 1) * ring_w
+        color = ('#fff44f', '#fff44f', '#ff4f4f', '#ff4f4f',
+                 '#5fb0d6')[i]
+        out.append((pv, r, color))
+    return out
+
+
+def _wa_field_zones(face_diameter_mm):
+    """WA Field face — 6 equal-width scoring rings (6..1, center→out)
+    with an inner-X ring (compound tiebreak). Used on 80/60/40/20 cm
+    faces at varied distances on the WA Field round.
+
+    Ring width = face_radius_mm / 6. Outer edge of the 6 ring is the
+    yellow/black boundary; the X-ring radius is half the 6-ring radius.
+    """
+    face_radius_mm = face_diameter_mm / 2.0
+    ring_w = face_radius_mm / 6.0
+    out = [(6, ring_w / 2.0, '#fff44f')]  # inner-X
+    palette = ('#fff44f', '#fff44f',  # 6 / 5 yellow
+               '#1a1a1a', '#1a1a1a',  # 4 / 3 black
+               '#1a1a1a', '#1a1a1a')  # 2 / 1 black
+    for i in range(6):
+        pv = 6 - i
+        r = (i + 1) * ring_w
+        out.append((pv, r, palette[i]))
+    return out
+
+
+def _wa_field_zones_compound(face_diameter_mm):
+    """WA Field face — compound variant for the 20 cm face. Outer 6
+    scores 5; only the inner-6 (X) ring scores 6. All other rings
+    unchanged.
+    """
+    face_radius_mm = face_diameter_mm / 2.0
+    ring_w = face_radius_mm / 6.0
+    out = [(6, ring_w / 2.0, '#fff44f')]  # inner-X = 6
+    # Outer 6 demoted to 5 for compound.
+    palette = ('#fff44f', '#fff44f',
+               '#1a1a1a', '#1a1a1a',
+               '#1a1a1a', '#1a1a1a')
+    values = (5, 5, 4, 3, 2, 1)
+    for i in range(6):
+        pv = values[i]
+        r = (i + 1) * ring_w
+        out.append((pv, r, palette[i]))
+    return out
+
+
 # NFAA Indoor Blue face: white rings on blue background, 5/4/3/2/1
-# with X inside the inner 5. Approximate radii per NFAA Vermont-style
-# spec — verify against current NFAA rulebook before relying for
-# competition.
+# with X inside the inner 5. Confirmed against the NFAA 2026/27
+# Constitution & By-Laws (Article VI § Indoor Target Round).
 _NFAA_BLUE_BG = '#1a3a5c'
 _NFAA_RING_FG = '#ffffff'
 
 
 def _nfaa_indoor_blue_zones():
-    # X ring is half the inner-5 radius (4cm dia X inside 8cm dia 5).
+    # 40cm face. X ring: 4cm diameter (20mm radius). 5 ring: 8cm
+    # diameter (40mm radius). Subsequent rings widen by 40mm radius
+    # each: 4=80, 3=120, 2=160, 1=200.
     return [
         (5, 20.0,  _NFAA_RING_FG),   # X ring
         (5, 40.0,  _NFAA_RING_FG),   # inner 5
@@ -204,21 +265,30 @@ def _nfaa_5spot_zones():
     """NFAA 5-spot — Apollo flattens the 5-face layout into one logical
     face with two zones (X / 5). The per-spot constraint is enforced
     visually only; users can click anywhere they actually hit."""
-    # X ring is half the 5-ring radius (4cm dia X inside 8cm dia 5).
+    # Per-spot 5 ring is 8cm diameter (40mm radius); X is 4cm diameter
+    # (20mm radius). Outside the 5 = miss.
     return [
         (5, 20.0, _NFAA_RING_FG),
         (5, 40.0, _NFAA_RING_FG),
     ]
 
 
-# Field round face: 5 / 4 / 3 with X inside the 5. The published radii
-# scale with face size; here we encode the 65cm face as the default.
-def _nfaa_field_zones(face_radius_mm):
+def _nfaa_field_zones(face_diameter_mm):
+    """NFAA Field / Hunter face — 3 scoring rings (5/4/3) with an inner
+    X tiebreak ring. Sized by face diameter; standard NFAA face sizes
+    are 65 / 50 / 35 / 20 cm.
+
+    Ring outer radii as fraction of face diameter (so the 3-ring outer
+    edge coincides with the face edge at 0.50):
+      X = 0.10, 5 = 0.20, 4 = 0.334, 3 = 0.50.
+    For the 65 cm face this yields X=65, 5=130, 4≈217, 3=325 mm — the
+    published NFAA Field face dimensions.
+    """
     return [
-        (5, face_radius_mm * 0.10, _NFAA_RING_FG),
-        (5, face_radius_mm * 0.20, _NFAA_RING_FG),
-        (4, face_radius_mm * 0.33, _NFAA_RING_FG),
-        (3, face_radius_mm * 0.50, _NFAA_RING_FG),
+        (5, face_diameter_mm * 0.10,   _NFAA_RING_FG),
+        (5, face_diameter_mm * 0.20,   _NFAA_RING_FG),
+        (4, face_diameter_mm * 0.334,  _NFAA_RING_FG),
+        (3, face_diameter_mm * 0.50,   _NFAA_RING_FG),
     ]
 
 
@@ -301,24 +371,93 @@ TOURNAMENT_FACES = {
         'face_bg':          _NFAA_BLUE_BG,
         'zones':            _nfaa_5spot_zones(),
     },
-    # Vegas 40cm 3-spot — Apollo treats this as one 40cm face with
-    # rings 6-10 active. Per-spot enforcement is visual only.
+    # Vegas 40cm 3-spot — per spot is 20 cm with rings 10..6 visible
+    # plus an inner-X. Each spot derives from the WA 40 cm face; ring
+    # widths are 20 mm so X=10, 10=20, 9=40, 8=60, 7=80, 6=100 mm.
+    # Anything outside the 6 ring on the spot is a miss.
     'vegas_3spot': {
         'name':             'Vegas 40cm (per spot)',
         'physical_size_mm': 200.0,
-        'x_ring_mm':        5.0,
+        'x_ring_mm':        10.0,
         'face_bg':          '#ffffff',
-        'zones':            _wa_zones_6(100.0, 5.0),
+        'zones':            _wa_zones_vegas(100.0, 10.0),
     },
-    # NFAA Field 65cm — 5/4/3 with X inside 5
+    # NFAA Field / Hunter — 4 face sizes used at different distances
+    # on the 28-target course. Same scoring rings on Field (white
+    # center) and Hunter (black face) variants; Apollo encodes the
+    # scoring geometry once and lets the round pick which face label
+    # to apply.
     'nfaa_field_65': {
         'name':             'NFAA Field 65cm',
         'physical_size_mm': 650.0,
         'x_ring_mm':        65.0,
         'face_bg':          '#ffffff',
-        'zones':            _nfaa_field_zones(325.0),
+        'zones':            _nfaa_field_zones(650.0),
     },
-    # NASP 80cm (10-ring) — same layout as WA 80cm
+    'nfaa_field_50': {
+        'name':             'NFAA Field 50cm',
+        'physical_size_mm': 500.0,
+        'x_ring_mm':        50.0,
+        'face_bg':          '#ffffff',
+        'zones':            _nfaa_field_zones(500.0),
+    },
+    'nfaa_field_35': {
+        'name':             'NFAA Field 35cm',
+        'physical_size_mm': 350.0,
+        'x_ring_mm':        35.0,
+        'face_bg':          '#ffffff',
+        'zones':            _nfaa_field_zones(350.0),
+    },
+    'nfaa_field_20': {
+        'name':             'NFAA Field 20cm',
+        'physical_size_mm': 200.0,
+        'x_ring_mm':        20.0,
+        'face_bg':          '#ffffff',
+        'zones':            _nfaa_field_zones(200.0),
+    },
+    # WA Field 6-zone faces (rings 6..1 with inner-X for compound).
+    # Used on the 24-target WA Field course at varying distances.
+    'wa_field_80': {
+        'name':             'WA Field 80cm',
+        'physical_size_mm': 800.0,
+        'x_ring_mm':        800.0 / 12.0,
+        'face_bg':          '#fff44f',
+        'zones':            _wa_field_zones(800.0),
+    },
+    'wa_field_60': {
+        'name':             'WA Field 60cm',
+        'physical_size_mm': 600.0,
+        'x_ring_mm':        600.0 / 12.0,
+        'face_bg':          '#fff44f',
+        'zones':            _wa_field_zones(600.0),
+    },
+    'wa_field_40': {
+        'name':             'WA Field 40cm',
+        'physical_size_mm': 400.0,
+        'x_ring_mm':        400.0 / 12.0,
+        'face_bg':          '#fff44f',
+        'zones':            _wa_field_zones(400.0),
+    },
+    'wa_field_20': {
+        'name':             'WA Field 20cm',
+        'physical_size_mm': 200.0,
+        'x_ring_mm':        200.0 / 12.0,
+        'face_bg':          '#fff44f',
+        'zones':            _wa_field_zones(200.0),
+    },
+    # WA Field 20cm compound variant — only inner-6 (X) ring scores 6;
+    # outer 6 ring demoted to 5. Per WA Book 4 § Field for compound
+    # bowmen on the smallest face.
+    'wa_field_20_compound': {
+        'name':             'WA Field 20cm (compound)',
+        'physical_size_mm': 200.0,
+        'x_ring_mm':        200.0 / 12.0,
+        'face_bg':          '#fff44f',
+        'zones':            _wa_field_zones_compound(200.0),
+    },
+    # NASP 80cm (10-ring) — face retained for backward compatibility
+    # with seeded rows; NASP rounds are no longer offered in the
+    # selector (out of scope per project decision).
     'nasp_80': {
         'name':             'NASP 80cm',
         'physical_size_mm': 800.0,
@@ -328,11 +467,84 @@ TOURNAMENT_FACES = {
     },
 }
 
+# Course-round schedules — list of (face_key, distance_value, distance_unit)
+# tuples that get expanded into per-target course entries.
+#
+# WA Field marked-round schedule (Book 4): 24 targets, 3 arrows each.
+# Six targets at each of 4 face sizes; distances picked from the
+# published marked-distance bands per face.
+_WA_FIELD_24_SCHEDULE = [
+    # Face,       distance (m)
+    ('wa_field_80', 60), ('wa_field_80', 55), ('wa_field_80', 50),
+    ('wa_field_80', 45), ('wa_field_80', 40), ('wa_field_80', 35),
+    ('wa_field_60', 45), ('wa_field_60', 40), ('wa_field_60', 35),
+    ('wa_field_60', 30), ('wa_field_60', 25), ('wa_field_60', 20),
+    ('wa_field_40', 30), ('wa_field_40', 25), ('wa_field_40', 20),
+    ('wa_field_40', 18), ('wa_field_40', 15), ('wa_field_40', 12),
+    ('wa_field_20', 15), ('wa_field_20', 12), ('wa_field_20', 10),
+    ('wa_field_20',  8), ('wa_field_20',  6), ('wa_field_20',  5),
+]
+
+# NFAA Field-round adult schedule (28 targets, 4 arrows each). Per
+# NFAA C&BL Article VI. Distances in yards, converted to metres
+# at expansion time so the recorded shot rows match the existing
+# numeric-metre convention.
+_NFAA_FIELD_28_SCHEDULE_YD = [
+    ('nfaa_field_65', 80), ('nfaa_field_65', 70), ('nfaa_field_65', 60),
+    ('nfaa_field_50', 55), ('nfaa_field_50', 50), ('nfaa_field_50', 45),
+    ('nfaa_field_50', 40), ('nfaa_field_35', 40), ('nfaa_field_35', 35),
+    ('nfaa_field_35', 30), ('nfaa_field_35', 25), ('nfaa_field_20', 20),
+    ('nfaa_field_20', 15), ('nfaa_field_20', 11),  # unit 1 = 14 targets
+    ('nfaa_field_65', 80), ('nfaa_field_65', 70), ('nfaa_field_65', 60),
+    ('nfaa_field_50', 55), ('nfaa_field_50', 50), ('nfaa_field_50', 45),
+    ('nfaa_field_50', 40), ('nfaa_field_35', 40), ('nfaa_field_35', 35),
+    ('nfaa_field_35', 30), ('nfaa_field_35', 25), ('nfaa_field_20', 20),
+    ('nfaa_field_20', 15), ('nfaa_field_20', 11),  # unit 2 = 14 targets
+]
+
+# NFAA Hunter-round adult schedule (28 targets, 4 arrows each).
+# Hunter distances run closer than Field per NFAA C&BL Article VI;
+# Apollo reuses the Field face geometry (scoring rings are identical).
+_NFAA_HUNTER_28_SCHEDULE_YD = [
+    ('nfaa_field_65', 70), ('nfaa_field_65', 65), ('nfaa_field_65', 61),
+    ('nfaa_field_50', 58), ('nfaa_field_50', 53), ('nfaa_field_50', 48),
+    ('nfaa_field_50', 44), ('nfaa_field_35', 36), ('nfaa_field_35', 32),
+    ('nfaa_field_35', 28), ('nfaa_field_35', 23), ('nfaa_field_20', 19),
+    ('nfaa_field_20', 14), ('nfaa_field_20', 11),
+    ('nfaa_field_65', 70), ('nfaa_field_65', 65), ('nfaa_field_65', 61),
+    ('nfaa_field_50', 58), ('nfaa_field_50', 53), ('nfaa_field_50', 48),
+    ('nfaa_field_50', 44), ('nfaa_field_35', 36), ('nfaa_field_35', 32),
+    ('nfaa_field_35', 28), ('nfaa_field_35', 23), ('nfaa_field_20', 19),
+    ('nfaa_field_20', 14), ('nfaa_field_20', 11),
+]
+
+
+def _course_from_schedule_m(schedule, arrows_per_target):
+    """Schedule already in metres → list of course-entry dicts."""
+    return [
+        {'face_key': face, 'distance_m': float(dist), 'arrows': arrows_per_target}
+        for (face, dist) in schedule
+    ]
+
+
+def _course_from_schedule_yd(schedule, arrows_per_target):
+    """Schedule in yards → list of course-entry dicts in metres
+    (rounded to 0.01 m for display sanity)."""
+    return [
+        {'face_key': face, 'distance_m': round(float(dist) * 0.9144, 2),
+         'arrows': arrows_per_target}
+        for (face, dist) in schedule
+    ]
+
+
 # TOURNAMENT_ROUNDS describes the structured rounds Apollo supports. Each
 # round references a face_key from TOURNAMENT_FACES. Multi-distance rounds
-# (1440, NFAA 900, NASP) use the `segments` list to define a sequence of
+# (1440, NFAA 900) use the `segments` list to define a sequence of
 # (distance_m, ends, face_key) chunks; single-segment rounds set segments
 # to None and use the top-level distance_m / ends / face_key.
+# Course rounds (WA Field 24, NFAA Field/Hunter 28) use the `course`
+# field — a list of {face_key, distance_m, arrows} entries, one per
+# target, expanded into single-end segments by _round_segments().
 TOURNAMENT_ROUNDS = {
     'wa_720_recurve': {
         'org':              'World Archery',
@@ -415,7 +627,21 @@ TOURNAMENT_ROUNDS = {
         'max_score':        150,
         'end_time_s':       120,
         'equipment_class':  'recurve',
-        'description':      '5 sets of 3 arrows at 70m. Apollo records arrow scores; set-point logic is shown but not used to declare a match winner (Apollo is single-archer).',
+        'description':      '5 ends of 3 arrows at 70m, cumulative scoring. Highest total wins (used in compound match play; also handy as a recurve drill).',
+        'segments':         None,
+    },
+    'wa_match_recurve_set': {
+        'org':              'World Archery',
+        'name':             'WA Match Play — Recurve (set system)',
+        'face_key':         'wa_122',
+        'distance_m':       70,
+        'arrows_per_end':   3,
+        'ends':             5,
+        'total_arrows':     15,
+        'max_score':        150,
+        'end_time_s':       120,
+        'equipment_class':  'recurve',
+        'description':      'Olympic recurve match: 5 sets of 3 arrows at 70m. Per set the higher total earns 2 set points (1 each on a tie). First to 6 set points wins; tie 5-5 → single-arrow shoot-off. Apollo logs your set totals so you can compare to an opponent’s scorecard.',
         'segments':         None,
     },
     'wa_match_compound': {
@@ -431,6 +657,97 @@ TOURNAMENT_ROUNDS = {
         'equipment_class':  'compound',
         'description':      '5 ends of 3 arrows at 50m. Highest cumulative wins.',
         'segments':         None,
+    },
+    'wa_1440_recurve_m': {
+        'org':              'World Archery',
+        'name':             'WA 1440 (Recurve, Men)',
+        'face_key':         'wa_122',
+        'distance_m':       90,
+        'arrows_per_end':   6,
+        'ends':             6,
+        'total_arrows':     144,
+        'max_score':        1440,
+        'end_time_s':       240,
+        'equipment_class':  'recurve',
+        'description':      '36 arrows at each of 90/70m on the 122cm face, then 50/30m on the 80cm face. 144 arrows total.',
+        'segments': [
+            {'distance_m': 90, 'ends': 6,  'face_key': 'wa_122', 'arrows_per_end': 6},
+            {'distance_m': 70, 'ends': 6,  'face_key': 'wa_122', 'arrows_per_end': 6},
+            {'distance_m': 50, 'ends': 12, 'face_key': 'wa_80',  'arrows_per_end': 3},
+            {'distance_m': 30, 'ends': 12, 'face_key': 'wa_80',  'arrows_per_end': 3},
+        ],
+    },
+    'wa_1440_recurve_w': {
+        'org':              'World Archery',
+        'name':             'WA 1440 (Recurve, Women)',
+        'face_key':         'wa_122',
+        'distance_m':       70,
+        'arrows_per_end':   6,
+        'ends':             6,
+        'total_arrows':     144,
+        'max_score':        1440,
+        'end_time_s':       240,
+        'equipment_class':  'recurve',
+        'description':      '36 arrows at each of 70/60m on the 122cm face, then 50/30m on the 80cm face. 144 arrows total.',
+        'segments': [
+            {'distance_m': 70, 'ends': 6,  'face_key': 'wa_122', 'arrows_per_end': 6},
+            {'distance_m': 60, 'ends': 6,  'face_key': 'wa_122', 'arrows_per_end': 6},
+            {'distance_m': 50, 'ends': 12, 'face_key': 'wa_80',  'arrows_per_end': 3},
+            {'distance_m': 30, 'ends': 12, 'face_key': 'wa_80',  'arrows_per_end': 3},
+        ],
+    },
+    'wa_1440_compound_m': {
+        'org':              'World Archery',
+        'name':             'WA 1440 (Compound, Men)',
+        'face_key':         'wa_122',
+        'distance_m':       70,
+        'arrows_per_end':   6,
+        'ends':             6,
+        'total_arrows':     144,
+        'max_score':        1440,
+        'end_time_s':       240,
+        'equipment_class':  'compound',
+        'description':      'Compound 1440: 70/60m on 122cm, then 50/30m on the 80cm 6-ring face. 144 arrows total.',
+        'segments': [
+            {'distance_m': 70, 'ends': 6,  'face_key': 'wa_122',      'arrows_per_end': 6},
+            {'distance_m': 60, 'ends': 6,  'face_key': 'wa_122',      'arrows_per_end': 6},
+            {'distance_m': 50, 'ends': 12, 'face_key': 'wa_80_6ring', 'arrows_per_end': 3},
+            {'distance_m': 30, 'ends': 12, 'face_key': 'wa_80_6ring', 'arrows_per_end': 3},
+        ],
+    },
+    'wa_1440_compound_w': {
+        'org':              'World Archery',
+        'name':             'WA 1440 (Compound, Women)',
+        'face_key':         'wa_122',
+        'distance_m':       60,
+        'arrows_per_end':   6,
+        'ends':             6,
+        'total_arrows':     144,
+        'max_score':        1440,
+        'end_time_s':       240,
+        'equipment_class':  'compound',
+        'description':      'Compound 1440 women: 60/50m on 122cm, then 40/30m on the 80cm 6-ring face. 144 arrows total.',
+        'segments': [
+            {'distance_m': 60, 'ends': 6,  'face_key': 'wa_122',      'arrows_per_end': 6},
+            {'distance_m': 50, 'ends': 6,  'face_key': 'wa_122',      'arrows_per_end': 6},
+            {'distance_m': 40, 'ends': 12, 'face_key': 'wa_80_6ring', 'arrows_per_end': 3},
+            {'distance_m': 30, 'ends': 12, 'face_key': 'wa_80_6ring', 'arrows_per_end': 3},
+        ],
+    },
+    'wa_field_24': {
+        'org':              'World Archery',
+        'name':             'WA Field (24 targets, marked)',
+        'face_key':         'wa_field_80',
+        'distance_m':       60,
+        'arrows_per_end':   3,
+        'ends':             24,
+        'total_arrows':     72,
+        'max_score':        432,
+        'end_time_s':       0,    # course pace; not enforced
+        'equipment_class':  'any',
+        'description':      '24-target field course, 3 arrows per target on 80/60/40/20 cm WA Field faces. Max 432.',
+        'segments':         None,
+        'course':           _course_from_schedule_m(_WA_FIELD_24_SCHEDULE, 3),
     },
     'nfaa_indoor_blue': {
         'org':              'NFAA',
@@ -492,22 +809,137 @@ TOURNAMENT_ROUNDS = {
             {'distance_m': 36.58, 'ends': 5, 'face_key': 'wa_122'},  # 40 yd
         ],
     },
-    'nasp_round': {
-        'org':              'NASP / USA Archery',
-        'name':             'NASP Round',
-        'face_key':         'nasp_80',
-        'distance_m':       10,
-        'arrows_per_end':   5,
-        'ends':             3,      # per segment
-        'total_arrows':     30,
-        'max_score':        300,
+    'nfaa_field_28': {
+        'org':              'NFAA',
+        'name':             'NFAA Field Round (28 targets)',
+        'face_key':         'nfaa_field_65',
+        'distance_m':       round(80 * 0.9144, 2),
+        'arrows_per_end':   4,
+        'ends':             28,
+        'total_arrows':     112,
+        'max_score':        560,
+        'end_time_s':       0,
+        'equipment_class':  'any',
+        'description':      '28-target field course, 4 arrows per target on 65/50/35/20cm NFAA field faces. Max 560.',
+        'segments':         None,
+        'course':           _course_from_schedule_yd(_NFAA_FIELD_28_SCHEDULE_YD, 4),
+    },
+    'nfaa_hunter_28': {
+        'org':              'NFAA',
+        'name':             'NFAA Hunter Round (28 targets)',
+        'face_key':         'nfaa_field_65',
+        'distance_m':       round(70 * 0.9144, 2),
+        'arrows_per_end':   4,
+        'ends':             28,
+        'total_arrows':     112,
+        'max_score':        560,
+        'end_time_s':       0,
+        'equipment_class':  'any',
+        'description':      '28-target hunter course, 4 arrows per target on 65/50/35/20cm faces. Closer distances than Field. Max 560.',
+        'segments':         None,
+        'course':           _course_from_schedule_yd(_NFAA_HUNTER_28_SCHEDULE_YD, 4),
+    },
+    # ─── USA Archery (USAA) rounds ─────────────────────────────────────
+    # USAA adopts WA rules for its sanctioned events; each round below
+    # mirrors the corresponding WA round structurally but carries the
+    # USAA-branded name so it lands in the USA Archery selector group.
+    'usaa_indoor_nationals': {
+        'org':              'USA Archery',
+        'name':             'USAA Indoor Nationals',
+        'face_key':         'wa_40',
+        'distance_m':       18,
+        'arrows_per_end':   3,
+        'ends':             20,
+        'total_arrows':     60,
+        'max_score':        600,
+        'end_time_s':       120,
+        'equipment_class':  'recurve',
+        'description':      'USAA Indoor Nationals — 60 arrows at 18m on the 40cm face. Same format as WA Indoor 18m (recurve).',
+        'segments':         None,
+    },
+    'usaa_outdoor_nationals_recurve': {
+        'org':              'USA Archery',
+        'name':             'USAA Outdoor Nationals (Recurve)',
+        'face_key':         'wa_122',
+        'distance_m':       70,
+        'arrows_per_end':   6,
+        'ends':             12,
+        'total_arrows':     72,
+        'max_score':        720,
+        'end_time_s':       240,
+        'equipment_class':  'recurve',
+        'description':      'USAA Outdoor Nationals — WA 720 round, recurve. 72 arrows at 70m on the 122cm face.',
+        'segments':         None,
+    },
+    'usaa_outdoor_nationals_compound': {
+        'org':              'USA Archery',
+        'name':             'USAA Outdoor Nationals (Compound)',
+        'face_key':         'wa_80_6ring',
+        'distance_m':       50,
+        'arrows_per_end':   6,
+        'ends':             12,
+        'total_arrows':     72,
+        'max_score':        720,
+        'end_time_s':       240,
+        'equipment_class':  'compound',
+        'description':      'USAA Outdoor Nationals — WA 720 round, compound. 72 arrows at 50m on the 80cm 6-ring face.',
+        'segments':         None,
+    },
+    'usaa_collegiate_indoor': {
+        'org':              'USA Archery',
+        'name':             'USAA Collegiate Indoor',
+        'face_key':         'wa_40',
+        'distance_m':       18,
+        'arrows_per_end':   3,
+        'ends':             20,
+        'total_arrows':     60,
+        'max_score':        600,
+        'end_time_s':       120,
+        'equipment_class':  'recurve',
+        'description':      'USAA Collegiate Indoor — same format as WA Indoor 18m. 60 arrows at 18m on the 40cm face.',
+        'segments':         None,
+    },
+    'usaa_collegiate_outdoor_recurve': {
+        'org':              'USA Archery',
+        'name':             'USAA Collegiate Outdoor (Recurve)',
+        'face_key':         'wa_122',
+        'distance_m':       70,
+        'arrows_per_end':   6,
+        'ends':             12,
+        'total_arrows':     72,
+        'max_score':        720,
+        'end_time_s':       240,
+        'equipment_class':  'recurve',
+        'description':      'USAA Collegiate Outdoor (Recurve) — WA 720 at 70m on 122cm.',
+        'segments':         None,
+    },
+    'usaa_collegiate_outdoor_compound': {
+        'org':              'USA Archery',
+        'name':             'USAA Collegiate Outdoor (Compound)',
+        'face_key':         'wa_80_6ring',
+        'distance_m':       50,
+        'arrows_per_end':   6,
+        'ends':             12,
+        'total_arrows':     72,
+        'max_score':        720,
+        'end_time_s':       240,
+        'equipment_class':  'compound',
+        'description':      'USAA Collegiate Outdoor (Compound) — WA 720 at 50m on 80cm 6-ring.',
+        'segments':         None,
+    },
+    'usaa_joad_indoor': {
+        'org':              'USA Archery',
+        'name':             'USAA JOAD Indoor',
+        'face_key':         'wa_40',
+        'distance_m':       18,
+        'arrows_per_end':   3,
+        'ends':             20,
+        'total_arrows':     60,
+        'max_score':        600,
         'end_time_s':       120,
         'equipment_class':  'any',
-        'description':      '15 arrows at 10m + 15 arrows at 15m on the 80cm NASP face.',
-        'segments': [
-            {'distance_m': 10, 'ends': 3, 'face_key': 'nasp_80'},
-            {'distance_m': 15, 'ends': 3, 'face_key': 'nasp_80'},
-        ],
+        'description':      'JOAD Indoor — same format as WA Indoor 18m. Age-class pin/star awards are scored off the total; Apollo does not enforce age class.',
+        'segments':         None,
     },
 }
 
@@ -558,6 +990,145 @@ def _practice_from_tags(tags):
         if part.strip().lower() == 'practice':
             return True
     return False
+
+
+def _round_segments(round_def):
+    """Normalize a round definition into a list of segments.
+
+    Every round resolves to a list of segments, each carrying:
+      face_key, distance_m, arrows_per_end, ends.
+
+    - Single-segment rounds (segments=None, course=None) → one segment
+      with the round's top-level face/distance/ends/arrows_per_end.
+    - Multi-segment rounds (segments=[…]) → use the list as-is, falling
+      back to the round-level arrows_per_end when a segment omits it.
+    - Course rounds (course=[…]) → expand each course entry into a
+      one-end segment, with arrows_per_end = the target's arrow count.
+
+    Used by the route to resolve the active segment's face and by the
+    progress calculator to chunk shots into ends correctly across
+    rounds whose end size varies between segments (e.g. WA 1440).
+    """
+    course = round_def.get('course')
+    if course:
+        return [
+            {
+                'face_key':       t['face_key'],
+                'distance_m':     t['distance_m'],
+                'arrows_per_end': int(t['arrows']),
+                'ends':           1,
+            }
+            for t in course
+        ]
+    segs = round_def.get('segments')
+    if segs:
+        default_ape = int(round_def.get('arrows_per_end', 0) or 0)
+        out = []
+        for s in segs:
+            out.append({
+                'face_key':       s.get('face_key', round_def['face_key']),
+                'distance_m':     s['distance_m'],
+                'arrows_per_end': int(s.get('arrows_per_end', default_ape)),
+                'ends':           int(s['ends']),
+            })
+        return out
+    return [
+        {
+            'face_key':       round_def['face_key'],
+            'distance_m':     round_def['distance_m'],
+            'arrows_per_end': int(round_def['arrows_per_end']),
+            'ends':           int(round_def['ends']),
+        }
+    ]
+
+
+def _segment_for_shot(segments, shot_index):
+    """Return (segment_idx, segment_def, arrow_offset_into_segment) for
+    the segment containing the given zero-based shot index.
+
+    Returns (len(segments)-1, last_segment, count_into_last) once the
+    round is fully shot (so progress display still works on the final
+    segment after the round completes).
+    """
+    cumulative = 0
+    for idx, seg in enumerate(segments):
+        seg_arrows = int(seg['arrows_per_end']) * int(seg['ends'])
+        if shot_index < cumulative + seg_arrows:
+            return idx, seg, shot_index - cumulative
+        cumulative += seg_arrows
+    last_idx = len(segments) - 1
+    last = segments[last_idx]
+    return last_idx, last, int(last['arrows_per_end']) * int(last['ends'])
+
+
+def _face_ring_labels(face_key):
+    """Return the ordered list of user-facing ring labels for the
+    non-X zones of a face, matching the order of zones[1:] (innermost-
+    out, excluding the inner X ring).
+
+    The label is the *physical* ring number printed on the face, which
+    matches the zone's point_value for most rounds. Compound 18 m and
+    compound WA-Field-20 cm need explicit lists because their first
+    visible ring is the demoted outer-10 (or outer-6), labeled "10"
+    (or "6") on the scorecard but assigned a lower point value in the
+    zone list.
+    """
+    overrides = {
+        'wa_40_compound':       [10, 9, 8, 7, 6, 5, 4, 3, 2, 1],
+        'wa_field_20_compound': [6, 5, 4, 3, 2, 1],
+    }
+    if face_key in overrides:
+        return overrides[face_key]
+    face = TOURNAMENT_FACES.get(face_key, {})
+    zones = face.get('zones') or ()
+    return [pv for (pv, _r, _c) in list(zones)[1:]]
+
+
+def _coords_for_ring_label(face_key, label):
+    """Return (x_str, y_str) — coordinates that the existing target
+    classifier will resolve into the ring identified by `label`.
+
+    label is one of:
+      "X"  — innermost zone (the inner-X ring)
+      "M"  — miss (uses MISS_SENTINEL on both axes)
+      "1", "2", … "10" — physical ring number; falls back to MISS
+                          if the label isn't valid on this face.
+
+    The chosen coordinate is the midpoint between the outer edge of
+    the next-inner zone and the outer edge of the requested zone, so
+    the line-cutter slack on the existing classifier doesn't push the
+    arrow into a neighboring zone.
+    """
+    if label == "M":
+        return (MISS_SENTINEL, MISS_SENTINEL)
+    face = TOURNAMENT_FACES.get(face_key)
+    if face is None:
+        return (MISS_SENTINEL, MISS_SENTINEL)
+    zones = list(face.get('zones') or ())
+    if not zones:
+        return (MISS_SENTINEL, MISS_SENTINEL)
+    if label == "X":
+        return ("0", "0")
+    labels = _face_ring_labels(face_key)
+    try:
+        idx = labels.index(int(label))
+    except (ValueError, TypeError):
+        return (MISS_SENTINEL, MISS_SENTINEL)
+    zone_idx = idx + 1  # zones[0] is the X ring
+    inner_r = float(zones[zone_idx - 1][1])  # outer edge of next inner zone
+    this_r  = float(zones[zone_idx][1])
+    midpoint = (inner_r + this_r) / 2.0
+    return (str(midpoint), "0")
+
+
+def _round_total_arrows(round_def):
+    """Sum total arrows across all segments. Authoritative count for
+    completion checks and progress display; supersedes the round def's
+    stored `total_arrows` (which is kept for the selector card)."""
+    return sum(
+        int(s['arrows_per_end']) * int(s['ends'])
+        for s in _round_segments(round_def)
+    )
 
 
 def _migrate_legacy_tournament_prefix(user_id):
@@ -733,19 +1304,34 @@ def _compute_tournament_progress(session_id, user_id, round_def):
 
     Reads every shot for the session in time order, scores it via the
     target's seeded zones (same code path as analytics), groups by
-    arrows_per_end into "ends", and reports cumulative totals plus the
+    arrows_per_end into "ends" (honoring per-segment end size for
+    multi-segment rounds), and reports cumulative totals plus the
     inner-10 / X count.
     """
+    segments = _round_segments(round_def)
+    planned_total = _round_total_arrows(round_def)
+    # Max-per-arrow is taken over every face used in the round, so a
+    # multi-segment round whose long-distance face caps at 10 but
+    # short-distance face caps at 6 reports the right "10 count" per
+    # face — which we currently flatten into one counter; future work
+    # could split it per-segment.
+    max_per_arrow = 0
+    for seg in segments:
+        face = TOURNAMENT_FACES.get(seg['face_key'], {})
+        zones = face.get('zones') or ()
+        for pv, _r, _c in zones:
+            if pv > max_per_arrow:
+                max_per_arrow = pv
+
     out = {
         'arrows_shot':      0,
-        'arrows_planned':   int(round_def['total_arrows']),
+        'arrows_planned':   planned_total,
         'total_score':      0,
         'x_count':          0,
         'ten_count':        0,
         'ends':             [],
         'is_complete':      False,
-        'max_per_arrow':    max(pv for (pv, _, _) in
-                                TOURNAMENT_FACES[round_def['face_key']]['zones']),
+        'max_per_arrow':    max_per_arrow,
     }
     try:
         with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
@@ -759,29 +1345,34 @@ def _compute_tournament_progress(session_id, user_id, round_def):
         return out
 
     # Cache zones per target_id (a multi-segment round may switch
-    # face_key across segments but in practice every shot lands on the
-    # same target_id in the current implementation).
+    # face_key across segments; each segment's target_id is distinct
+    # so the cache resolves to the right ring list per shot).
     zones_cache = {}
     def _zones(tid):
         if tid not in zones_cache:
             zones_cache[tid] = _fetch_target_zones(tid, user_id) if tid else []
         return zones_cache[tid]
 
-    face_key       = round_def['face_key']
-    face           = TOURNAMENT_FACES.get(face_key, {})
-    x_ring_radius  = float(face.get('x_ring_mm') or 0.0)
-    arrows_per_end = int(round_def['arrows_per_end'])
-
     running = 0
     end_arrows = []
     out['arrows_shot'] = len(shots)
-    for r in shots:
+    for shot_idx, r in enumerate(shots):
+        # Resolve the segment that this shot belongs to, so we use the
+        # right end size for chunking and the right face's X-ring radius
+        # for the X counter.
+        seg_idx, seg, _into = _segment_for_shot(segments, shot_idx)
+        seg_face = TOURNAMENT_FACES.get(seg['face_key'], {})
+        x_ring_radius = float(seg_face.get('x_ring_mm') or 0.0)
+        seg_arrows_per_end = int(seg['arrows_per_end'])
+
         xraw = str(r['x_coord']).strip() if r['x_coord'] is not None else ''
         yraw = str(r['y_coord']).strip() if r['y_coord'] is not None else ''
         shaft = _row_get(r, 'arrow_shaft_diameter')
         points = _score_one_shot(xraw, yraw, _zones(r['target_id']), shaft)
         out['total_score'] += points
-        if points == out['max_per_arrow']:
+        seg_max = max((pv for pv, _r, _c in (seg_face.get('zones') or ())),
+                      default=0)
+        if seg_max and points == seg_max:
             out['ten_count'] += 1
         # X count: inside the X ring (using line-cutter slack).
         if (xraw != MISS_SENTINEL and yraw != MISS_SENTINEL
@@ -797,11 +1388,12 @@ def _compute_tournament_progress(session_id, user_id, round_def):
         running += points
         end_arrows.append({'points': points, 'x': xraw, 'y': yraw,
                            'miss': (xraw == MISS_SENTINEL and yraw == MISS_SENTINEL)})
-        if len(end_arrows) == arrows_per_end:
+        if len(end_arrows) == seg_arrows_per_end:
             out['ends'].append({
                 'arrows':       list(end_arrows),
                 'end_total':    sum(a['points'] for a in end_arrows),
                 'running':      running,
+                'segment_idx':  seg_idx,
             })
             end_arrows = []
     # Trailing partial end — show it so the user sees what they've shot.
@@ -4276,14 +4868,26 @@ def recall_arrow():
     # Tournament-only: a recalled shot that previously crossed a segment
     # boundary should roll the segment index back too, so the next shot's
     # distance matches what it had when the recalled shot was fired.
+    # Derive the correct segment from the new shot count after the recall.
     round_key = session.get('tournament_round_key')
     round_def = TOURNAMENT_ROUNDS.get(round_key) if round_key else None
-    if round_def and round_def.get('segments'):
-        seg_idx = int(session.get('tournament_segment_idx', 0) or 0)
-        if seg_idx > 0:
-            prior_ends = sum(int(s['ends']) for s in round_def['segments'][:seg_idx])
-            if quivers_completed < prior_ends:
-                session['tournament_segment_idx'] = seg_idx - 1
+    if round_def is not None:
+        try:
+            with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
+                _row = cur.execute(
+                    "SELECT COUNT(*) FROM apollo "
+                    "WHERE session_id = %s AND user_id = %s",
+                    (session.get('session_id') or 0, current_user_id())
+                ).fetchone()
+                shots_after_recall = int(_row[0]) if _row and _row[0] is not None else 0
+        except SQLAlchemyError:
+            shots_after_recall = 0
+        segments = _round_segments(round_def)
+        total = _round_total_arrows(round_def)
+        if total > 0:
+            pointer = min(shots_after_recall, total - 1)
+            new_idx, _seg, _ = _segment_for_shot(segments, pointer)
+            session['tournament_segment_idx'] = new_idx
 
     return jsonify(ok=True)
 
@@ -4330,14 +4934,9 @@ def tournament():
     if not active_round_key and session.get('session_id') is not None:
         latest_tags = _last_session_tags(user_id, session['session_id'])
         active_round_key = _round_key_from_tags(latest_tags)
-        # Recover practice flag the same way — if the cookie was wiped
-        # mid-round, the last shot row still carries the `practice` tag.
-        if active_round_key and _practice_from_tags(latest_tags):
-            session['tournament_practice'] = True
     if active_round_key and active_round_key not in TOURNAMENT_ROUNDS:
         # Stale key from an older deploy — clear and bounce to selector.
         session.pop('tournament_round_key', None)
-        session.pop('tournament_practice', None)
         active_round_key = None
     if active_round_key:
         session['tournament_round_key'] = active_round_key
@@ -4346,6 +4945,8 @@ def tournament():
         # Round selector page. Group by org for the UI.
         by_org = {}
         for key, rd in TOURNAMENT_ROUNDS.items():
+            is_course = bool(rd.get('course'))
+            is_multi  = bool(rd.get('segments'))
             by_org.setdefault(rd['org'], []).append({
                 'key':              key,
                 'name':             rd['name'],
@@ -4356,6 +4957,8 @@ def tournament():
                 'total_arrows':     rd['total_arrows'],
                 'max_score':        rd['max_score'],
                 'equipment_class':  rd['equipment_class'],
+                'is_course':        is_course,
+                'is_multi_segment': is_multi,
             })
         return render_template(
             'tournament.html',
@@ -4375,7 +4978,31 @@ def tournament():
         session.pop('tournament_round_key', None)
         return redirect(url_for('tournament'))
 
-    face_key = round_def['face_key']
+    # Resolve the *active* segment — for single-segment rounds this is
+    # always segment 0 with the round's top-level face/distance/end
+    # size; for multi-segment and course rounds the segment that
+    # contains the next-arrow-to-shoot drives the active face, distance,
+    # and end size.
+    segments = _round_segments(round_def)
+    round_total_arrows = _round_total_arrows(round_def)
+    try:
+        with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
+            _row = cur.execute(
+                "SELECT COUNT(*) FROM apollo "
+                "WHERE session_id = %s AND user_id = %s",
+                (session.get('session_id') or 0, user_id)
+            ).fetchone()
+            shots_so_far_route = int(_row[0]) if _row and _row[0] is not None else 0
+    except SQLAlchemyError:
+        shots_so_far_route = 0
+    # Clamp to the planned count so the "completed" state lands on the
+    # last segment instead of pointing one past the end.
+    shot_pointer = min(shots_so_far_route, round_total_arrows - 1) if round_total_arrows > 0 else 0
+    active_seg_idx, active_seg, _arrows_into_seg = _segment_for_shot(
+        segments, shot_pointer)
+    session['tournament_segment_idx'] = active_seg_idx
+
+    face_key = active_seg['face_key']
     face_def = TOURNAMENT_FACES[face_key]
     target_id = _tournament_face_target_id(user_id, face_key)
     if target_id is None:
@@ -4388,7 +5015,7 @@ def tournament():
                 f"underlying database error."), 500
     session['target_id'] = target_id
 
-    arrows_per_end = int(round_def['arrows_per_end'])
+    arrows_per_end = int(active_seg['arrows_per_end'])
 
     # Lazy session_id mint (same retry-with-backoff trick as /sesh) when
     # the user is starting a fresh round. Stamps the round tag onto the
@@ -4430,8 +5057,11 @@ def tournament():
         session['record_mode'] = 0
 
     session_id = session['session_id']
-    is_practice = bool(session.get('tournament_practice'))
-    tournament_tag = _tournament_tag_for_round(round_key, practice=is_practice)
+    # All tournament rounds in Apollo are practice by definition — real
+    # competitions don't use a phone-based score logger. The historical
+    # `practice` tag is retained on past sessions, but new shots no
+    # longer get tagged with it.
+    tournament_tag = _tournament_tag_for_round(round_key)
 
     # ── POST: record a shot ─────────────────────────────────────────────
     if request.method == 'POST':
@@ -4453,15 +5083,10 @@ def tournament():
             record_mode = 0
         session['record_mode'] = record_mode
 
-        # Distance comes from the round (or the current segment). The
-        # user can't override it — locking it keeps the recorded shot
-        # data consistent with the published round structure.
-        distance_m = round_def['distance_m']
-        if round_def.get('segments'):
-            seg_idx = int(session.get('tournament_segment_idx', 0))
-            segs = round_def['segments']
-            if 0 <= seg_idx < len(segs):
-                distance_m = segs[seg_idx]['distance_m']
+        # Distance comes from the active segment. The user can't
+        # override it — locking it keeps the recorded shot data
+        # consistent with the published round structure.
+        distance_m = active_seg['distance_m']
         distance = f"{distance_m}"
 
         # Refuse further shots once the round is complete. The template
@@ -4474,7 +5099,7 @@ def tournament():
                 (session_id, user_id)
             ).fetchone()
             shots_so_far = int(shot_row[0]) if shot_row and shot_row[0] is not None else 0
-        if shots_so_far >= int(round_def['total_arrows']):
+        if shots_so_far >= round_total_arrows:
             return redirect(url_for('tournament'))
         if x == '' or y == '':
             return redirect(url_for('tournament'))
@@ -4556,17 +5181,18 @@ def tournament():
         arrows_remaining -= 1
         if arrows_remaining <= 0:
             quivers_completed += 1
-            arrows_remaining = arrows_per_end
-            # Advance segment index when we cross a segment boundary.
-            if round_def.get('segments'):
-                seg_idx = int(session.get('tournament_segment_idx', 0))
-                segs = round_def['segments']
-                # Ends shot so far across the *current* segment.
-                ends_into_segment = quivers_completed
-                for prior in range(seg_idx):
-                    ends_into_segment -= int(segs[prior]['ends'])
-                if seg_idx < len(segs) and ends_into_segment >= int(segs[seg_idx]['ends']):
-                    session['tournament_segment_idx'] = seg_idx + 1
+            # Refill arrows_remaining to the *next* segment's end size,
+            # which differs from the current one on rounds where the
+            # end size changes mid-round (e.g. WA 1440 drops from 6 to
+            # 3 at the 50m boundary, NFAA Field cycles through targets).
+            next_shot_idx = shots_so_far + 1
+            if next_shot_idx < round_total_arrows:
+                next_seg_idx, next_seg, _ = _segment_for_shot(segments, next_shot_idx)
+                arrows_remaining = int(next_seg['arrows_per_end'])
+                if next_seg_idx != active_seg_idx:
+                    session['tournament_segment_idx'] = next_seg_idx
+            else:
+                arrows_remaining = arrows_per_end
         session['arrows_remaining'] = arrows_remaining
         session['quivers_completed'] = quivers_completed
 
@@ -4585,15 +5211,10 @@ def tournament():
 
     progress = _compute_tournament_progress(session_id, user_id, round_def)
 
-    # If a multi-segment round has advanced segments, surface the
-    # current distance to the template.
-    current_distance_m = round_def['distance_m']
-    current_segment_idx = 0
-    if round_def.get('segments'):
-        current_segment_idx = int(session.get('tournament_segment_idx', 0))
-        segs = round_def['segments']
-        if 0 <= current_segment_idx < len(segs):
-            current_distance_m = segs[current_segment_idx]['distance_m']
+    # Surface the active segment's distance / index to the template
+    # (already resolved above from the shot count).
+    current_distance_m = active_seg['distance_m']
+    current_segment_idx = active_seg_idx
 
     target_config = target_to_config(get_target(target_id, user_id))
     if target_config is not None:
@@ -4610,6 +5231,14 @@ def tournament():
     past_shots = get_past_shots(session_id, arrows_per_end,
                                 arrows_remaining_display, user_id)
 
+    is_course_round = bool(round_def.get('course'))
+    is_practice = False  # see note above tournament_tag — kept for template compat
+    # Maximum arrows-per-end across the round — drives the scorecard
+    # column count. For single-segment rounds this equals the round's
+    # arrows_per_end; for mixed rounds (1440, Field) it's the largest
+    # end-size used in any segment.
+    max_arrows_per_end = max(int(s['arrows_per_end']) for s in segments)
+
     return render_template(
         'tournament.html',
         view='shoot',
@@ -4624,11 +5253,14 @@ def tournament():
         arrow_types=arrow_types,
         bow_models=bow_models,
         arrows_per_end=arrows_per_end,
+        max_arrows_per_end=max_arrows_per_end,
         arrows_remaining=arrows_remaining_display,
         quivers_completed=session.get('quivers_completed', 0),
         progress=progress,
         current_distance_m=current_distance_m,
         current_segment_idx=current_segment_idx,
+        is_course_round=is_course_round,
+        segment_count=len(segments),
         is_practice=is_practice,
         # End index used by the shot-clock to detect when a new end has
         # started — JS resets the countdown when this number changes.
@@ -4678,15 +5310,725 @@ def tournament_start():
             session.pop(k, None)
 
     _seed_tournament_faces(user_id)
-    # Practice flag is a per-round opt-in: the round still runs with the
-    # same arrows/ends/scoring, but every shot is tagged `practice` so the
-    # session is excluded from real competition history.
-    practice = request.form.get('practice') in ('1', 'on', 'true', 'yes')
     session['tournament_round_key'] = round_key
     session['tournament_segment_idx'] = 0
-    session['tournament_practice'] = practice
     session['target_id'] = _tournament_face_target_id(user_id, round_def['face_key'])
     return redirect(url_for('tournament'))
+
+
+@app.route('/tournament/score_sheet/setup', methods=['POST'])
+@login_required
+def tournament_score_sheet_setup():
+    """Render the score-sheet form for a chosen round.
+
+    Score-sheet mode is for logging a real-world competition after the
+    fact. The user (or scorekeeper) adds 1+ participants, then types
+    each arrow's ring value into a per-end / per-participant grid.
+    Unlike live mode, no canvas placement is required.
+    """
+    user_id = current_user_id()
+    round_key = (request.form.get('round_key') or '').strip()
+    round_def = _tournament_round_def(round_key)
+    if round_def is None:
+        return "Unknown tournament round", 400
+    _seed_tournament_faces(user_id)
+
+    # Pre-fill the first participant row with the device owner's
+    # username + email so a solo logger doesn't have to retype.
+    owner_name = ''
+    owner_email = ''
+    try:
+        with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
+            row = cur.execute(
+                "SELECT username, email FROM users WHERE id = %s",
+                (user_id,)
+            ).fetchone()
+            if row is not None:
+                owner_name  = row['username'] if 'username' in row else row[0]
+                owner_email = row['email']    if 'email'    in row else row[1]
+    except SQLAlchemyError:
+        pass
+
+    segments = _round_segments(round_def)
+    # Per-end metadata for the template — labels, valid ring labels,
+    # and end count per segment. The template uses this to render one
+    # mini-scorecard per segment (since end size and face can change
+    # mid-round, e.g. WA 1440 / Field rounds).
+    sheet_segments = []
+    points_by_segment = {}  # seg_idx → { label: point_value }
+    end_counter = 0
+    for seg_idx, seg in enumerate(segments):
+        face_key = seg['face_key']
+        face = TOURNAMENT_FACES.get(face_key, {})
+        labels = _face_ring_labels(face_key)
+        # Ring labels for the dropdown — X first, then physical ring
+        # numbers in descending order (10/9/8/.../1), then M.
+        choices = ['X'] + [str(l) for l in labels] + ['M']
+        seg_ends = []
+        for _ in range(int(seg['ends'])):
+            end_counter += 1
+            seg_ends.append({
+                'end_number':     end_counter,
+                'arrows_per_end': int(seg['arrows_per_end']),
+            })
+        sheet_segments.append({
+            'segment_idx':    seg_idx,
+            'face_key':       face_key,
+            'face_name':      face.get('name', face_key),
+            'distance_m':     float(seg['distance_m']),
+            'arrows_per_end': int(seg['arrows_per_end']),
+            'choices':        choices,
+            'ends':           seg_ends,
+        })
+        # Build the label → point-value lookup. zones[0] is the X ring;
+        # zones[1:] map to the labels list 1:1 (same order, innermost-
+        # out). Use string keys so the JS lookup matches input.value.
+        zones = list(face.get('zones') or ())
+        seg_points = {'X': int(zones[0][0]) if zones else 0, 'M': 0}
+        for i, label in enumerate(labels):
+            if 1 + i < len(zones):
+                seg_points[str(label)] = int(zones[1 + i][0])
+        points_by_segment[seg_idx] = seg_points
+
+    return render_template(
+        'tournament.html',
+        view='score_sheet',
+        round_key=round_key,
+        round_def=round_def,
+        sheet_segments=sheet_segments,
+        points_by_segment_json=json.dumps(points_by_segment),
+        total_arrows=_round_total_arrows(round_def),
+        owner_name=owner_name,
+        owner_email=owner_email,
+        today_iso=_app_now().strftime('%Y-%m-%d'),
+    )
+
+
+def _match_id_for(user_id, round_key):
+    """Mint a short, opaque match id. Each score-sheet submission
+    becomes one "match" — a group of participant sessions tagged with
+    `match:<id>` so post-hoc result pages can find them again."""
+    raw = f"{user_id}:{round_key}:{_app_now().isoformat()}:{secrets.token_hex(4)}"
+    return hashlib.sha256(raw.encode()).hexdigest()[:16]
+
+
+def _parse_participants_from_form(form):
+    """Pull the `participant_<i>_name` and `participant_<i>_email`
+    fields out of the score-sheet form, in order. Skips rows whose
+    name field is empty. Returns a list of dicts."""
+    out = []
+    # Cap at 16 to fence off a malformed bulk POST.
+    for i in range(16):
+        name  = (form.get(f'participant_{i}_name')  or '').strip()
+        email = (form.get(f'participant_{i}_email') or '').strip()
+        if not name:
+            continue
+        out.append({'idx': i, 'name': name, 'email': email})
+    return out
+
+
+@app.route('/tournament/score_sheet', methods=['POST'])
+@login_required
+def tournament_score_sheet_submit():
+    """Process a completed score-sheet form.
+
+    For each participant, allocate a fresh session_id under the
+    device-owner's user_id, write synthetic apollo shot rows whose
+    coordinates resolve to the ring the user entered, and tag every
+    row with `tournament:<round_key>, match:<id>, participant:<name>`.
+    Redirects to the match results page.
+    """
+    user_id = current_user_id()
+    round_key = (request.form.get('round_key') or '').strip()
+    round_def = _tournament_round_def(round_key)
+    if round_def is None:
+        return "Unknown tournament round", 400
+
+    participants = _parse_participants_from_form(request.form)
+    if not participants:
+        return "Add at least one participant before submitting.", 400
+
+    # Competition-level metadata — entered once, applied to every
+    # participant's session and printed on every scorecard.
+    comp_name     = (request.form.get('competition_name')     or '').strip()
+    comp_date     = (request.form.get('competition_date')     or '').strip()
+    comp_location = (request.form.get('competition_location') or '').strip()
+
+    segments = _round_segments(round_def)
+    match_id = _match_id_for(user_id, round_key)
+
+    # Resolve target_ids once per face_key — the same target rows are
+    # shared across participants since they're all on the device
+    # owner's user_id.
+    target_ids = {}
+    for seg in segments:
+        fk = seg['face_key']
+        if fk not in target_ids:
+            target_ids[fk] = _tournament_face_target_id(user_id, fk)
+
+    inserted_session_ids = []
+    try:
+        with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
+            for p in participants:
+                # Mint a fresh session_id for this participant. Retry
+                # on integrity errors the same way /sesh + /tournament
+                # already do.
+                session_id = None
+                for _attempt in range(12):
+                    res = cur.execute(
+                        "SELECT MAX(session_id) FROM apollo WHERE user_id = %s",
+                        (user_id,)
+                    ).fetchone()
+                    max_apollo = res[0] if res and res[0] is not None else 0
+                    res = cur.execute(
+                        "SELECT MAX(session_id) FROM session_times WHERE user_id = %s",
+                        (user_id,)
+                    ).fetchone()
+                    max_st = res[0] if res and res[0] is not None else 0
+                    candidate = max(int(max_apollo or 0), int(max_st or 0)) + 1
+                    try:
+                        cur.execute(
+                            "INSERT INTO session_times "
+                            "(user_id, session_id, session_begin_time) "
+                            "VALUES (%s, %s, %s)",
+                            (user_id, candidate, _app_now())
+                        )
+                        con.commit()
+                        session_id = candidate
+                        break
+                    except DBIntegrityError:
+                        time.sleep(0.005 + secrets.randbelow(20) / 1000.0)
+                        continue
+                if session_id is None:
+                    return "Could not allocate session id — please try again", 500
+
+                tag = (f'tournament:{round_key}, '
+                       f'match:{match_id}, '
+                       f'participant:{p["name"]}')
+                if p['email']:
+                    tag += f', email:{p["email"]}'
+                # Competition-level meta — stored on every shot row so
+                # the results page and report generators can recover it
+                # without a new table. URL-encode the values so commas in
+                # event names don't collide with the tag separator.
+                from urllib.parse import quote
+                if comp_name:
+                    tag += f', competition_name:{quote(comp_name, safe="")}'
+                if comp_date:
+                    tag += f', competition_date:{quote(comp_date, safe="")}'
+                if comp_location:
+                    tag += f', competition_location:{quote(comp_location, safe="")}'
+
+                # Per-participant notes go into session_notes (per-row).
+                # Same URL-encoding for symmetry.
+                per_p_notes = (request.form.get(
+                    f'participant_{p["idx"]}_notes') or '').strip()
+
+                # Walk the segment plan; for each end's worth of arrows
+                # read the user-entered ring label from the form and
+                # write a synthetic apollo row whose coords score it.
+                end_number = 0
+                ts = _app_now()
+                for seg_idx, seg in enumerate(segments):
+                    face_key = seg['face_key']
+                    target_id = target_ids.get(face_key)
+                    for _ in range(int(seg['ends'])):
+                        end_number += 1
+                        for arrow_n in range(1, int(seg['arrows_per_end']) + 1):
+                            field_name = (f"participant_{p['idx']}_end_"
+                                          f"{end_number}_arrow_{arrow_n}")
+                            raw = (request.form.get(field_name) or '').strip().upper()
+                            if raw == '':
+                                # Empty cell → record as miss (forgiving:
+                                # the user can leave gaps for arrows they
+                                # didn't shoot or weren't reported).
+                                raw = 'M'
+                            x, y = _coords_for_ring_label(face_key, raw)
+                            cur.execute("""
+                                INSERT INTO apollo
+                                (user_id, session_id, timestamp, bow, arrow_type,
+                                 quiver_size, arrows_remaining, distance,
+                                 session_notes, x_coord, y_coord, is_precise,
+                                 record_mode, target_id, session_tags)
+                                VALUES (%s,%s,%s,%s,%s,
+                                        %s,%s,%s,
+                                        %s,%s,%s,%s,
+                                        %s,%s,%s)""",
+                                (user_id, session_id, ts, '', '',
+                                 int(seg['arrows_per_end']),
+                                 int(seg['arrows_per_end']) - arrow_n,
+                                 str(seg['distance_m']),
+                                 per_p_notes, x, y, 0,
+                                 0, target_id, tag)
+                            )
+                con.commit()
+                inserted_session_ids.append(session_id)
+    except SQLAlchemyError as e:
+        print(f"❌ Score-sheet submit error: {e}")
+        return "Error saving scorecard — please try again", 500
+
+    return redirect(url_for('tournament_match_results', match_id=match_id))
+
+
+def _match_participants(user_id, match_id):
+    """Return participants of a tournament match, with their session_id,
+    name, email, round_key, and competition meta (name/date/location).
+    Reads from the apollo table — every participant's shots carry
+    `match:<id>` in `session_tags`. Per-row `session_notes` carries the
+    participant's notes (same value on every row of that participant's
+    session)."""
+    from urllib.parse import unquote
+    out = []
+    seen = set()
+    try:
+        with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
+            rows = cur.execute(
+                "SELECT DISTINCT session_id, session_tags, session_notes "
+                "FROM apollo WHERE user_id = %s AND session_tags LIKE %s",
+                (user_id, f'%match:{match_id}%')
+            ).fetchall() or []
+    except SQLAlchemyError:
+        return out
+    for r in rows:
+        sid = int(r['session_id']) if 'session_id' in r else int(r[0])
+        if sid in seen:
+            continue
+        seen.add(sid)
+        tags = r['session_tags'] if 'session_tags' in r else r[1]
+        notes = r['session_notes'] if 'session_notes' in r else (r[2] if len(r) > 2 else '')
+        round_key = _round_key_from_tags(tags) or ''
+        name = ''
+        email = ''
+        comp_name = ''
+        comp_date = ''
+        comp_location = ''
+        for part in (tags or '').split(','):
+            p = part.strip()
+            if p.startswith('participant:'):
+                name = p.split(':', 1)[1].strip()
+            elif p.startswith('email:'):
+                email = p.split(':', 1)[1].strip()
+            elif p.startswith('competition_name:'):
+                comp_name = unquote(p.split(':', 1)[1].strip())
+            elif p.startswith('competition_date:'):
+                comp_date = unquote(p.split(':', 1)[1].strip())
+            elif p.startswith('competition_location:'):
+                comp_location = unquote(p.split(':', 1)[1].strip())
+        out.append({
+            'session_id':            sid,
+            'name':                  name,
+            'email':                 email,
+            'round_key':             round_key,
+            'notes':                 notes or '',
+            'competition_name':      comp_name,
+            'competition_date':      comp_date,
+            'competition_location':  comp_location,
+        })
+    return out
+
+
+def _participant_scorecard(user_id, session_id, round_def):
+    """Return the canonical scorecard for one participant:
+    {'ends': [{'arrows':[label,...], 'end_total':n, 'running':n, 'segment_idx':i}],
+     'total_score': n, 'x_count': n, 'arrows_shot': n}.
+
+    Uses _compute_tournament_progress under the hood (already segment-
+    aware) and decorates each arrow with the ring label the user
+    originally entered, reverse-mapped from the stored coordinates."""
+    progress = _compute_tournament_progress(session_id, user_id, round_def)
+    segments = _round_segments(round_def)
+    # Reverse-map points → ring label. This is approximate for compound
+    # faces where two zones share a point value; we display the score
+    # plus an 'X' badge for inner-X shots.
+    ends_out = []
+    for end in progress.get('ends', []):
+        out_arrows = []
+        for a in end['arrows']:
+            if a.get('miss'):
+                out_arrows.append('M')
+            else:
+                # Detect X by checking coords distance against the X-ring
+                # of this end's segment face.
+                seg_idx = end.get('segment_idx', 0)
+                seg_face = segments[seg_idx]['face_key'] if 0 <= seg_idx < len(segments) else None
+                face = TOURNAMENT_FACES.get(seg_face, {}) if seg_face else {}
+                x_ring = float(face.get('x_ring_mm') or 0.0)
+                is_x = False
+                try:
+                    x = float(a['x']); y = float(a['y'])
+                    if x_ring > 0 and math.sqrt(x*x + y*y) <= x_ring:
+                        is_x = True
+                except (TypeError, ValueError):
+                    pass
+                out_arrows.append('X' if is_x else str(a['points']))
+        ends_out.append({
+            'arrows':      out_arrows,
+            'end_total':   end['end_total'],
+            'running':     end['running'],
+            'segment_idx': end.get('segment_idx', 0),
+            'partial':     end.get('partial', False),
+        })
+    return {
+        'total_score': progress['total_score'],
+        'x_count':     progress['x_count'],
+        'arrows_shot': progress['arrows_shot'],
+        'planned':     progress['arrows_planned'],
+        'ends':        ends_out,
+    }
+
+
+def _scorecard_csv(round_def, participant, scorecard):
+    """Return CSV bytes for one participant's scorecard."""
+    import csv as _csv
+    import io
+    buf = io.StringIO()
+    w = _csv.writer(buf)
+    if participant.get('competition_name'):
+        w.writerow([f"Competition: {participant['competition_name']}"])
+    w.writerow([f"Round: {round_def['name']}"])
+    if participant.get('competition_date'):
+        w.writerow([f"Date: {participant['competition_date']}"])
+    if participant.get('competition_location'):
+        w.writerow([f"Location: {participant['competition_location']}"])
+    w.writerow([f"Competitor: {participant['name']}"])
+    if participant.get('email'):
+        w.writerow([f"Email: {participant['email']}"])
+    w.writerow([f"Logged: {_app_now().strftime('%Y-%m-%d %H:%M')}"])
+    w.writerow([])
+    max_ape = max(int(s['arrows_per_end']) for s in _round_segments(round_def))
+    w.writerow(['End'] + [f'A{i+1}' for i in range(max_ape)] + ['End total', 'Running'])
+    for idx, end in enumerate(scorecard['ends'], start=1):
+        row = [idx] + list(end['arrows'])
+        # Pad to max_ape
+        while len(row) - 1 < max_ape:
+            row.append('')
+        row += [end['end_total'], end['running']]
+        w.writerow(row)
+    w.writerow([])
+    w.writerow(['Total score', scorecard['total_score'], f"/ {round_def['max_score']}"])
+    w.writerow(['X count', scorecard['x_count']])
+    w.writerow(['Arrows shot', f"{scorecard['arrows_shot']} / {scorecard['planned']}"])
+    if participant.get('notes'):
+        w.writerow([])
+        w.writerow(['Notes', participant['notes']])
+    return buf.getvalue().encode('utf-8')
+
+
+def _scorecard_xlsx(round_def, participant, scorecard):
+    """Return XLSX bytes for one participant's scorecard."""
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, Alignment
+    import io
+    wb = Workbook()
+    ws = wb.active
+    ws.title = 'Scorecard'
+    # Title block — competition info, round, competitor.
+    row_n = 1
+    if participant.get('competition_name'):
+        ws.cell(row=row_n, column=1, value=participant['competition_name']).font = Font(bold=True, size=14)
+        row_n += 1
+    ws.cell(row=row_n, column=1, value=f"Round: {round_def['name']}").font = Font(bold=True, size=12)
+    row_n += 1
+    if participant.get('competition_date'):
+        ws.cell(row=row_n, column=1, value=f"Date: {participant['competition_date']}")
+        row_n += 1
+    if participant.get('competition_location'):
+        ws.cell(row=row_n, column=1, value=f"Location: {participant['competition_location']}")
+        row_n += 1
+    ws.cell(row=row_n, column=1, value=f"Competitor: {participant['name']}").font = Font(bold=True)
+    row_n += 1
+    if participant.get('email'):
+        ws.cell(row=row_n, column=1, value=f"Email: {participant['email']}")
+        row_n += 1
+    ws.cell(row=row_n, column=1, value=f"Logged: {_app_now().strftime('%Y-%m-%d %H:%M')}")
+    row_n += 1
+
+    max_ape = max(int(s['arrows_per_end']) for s in _round_segments(round_def))
+    header_row = row_n + 1
+    ws.cell(row=header_row, column=1, value='End').font = Font(bold=True)
+    for i in range(max_ape):
+        c = ws.cell(row=header_row, column=2 + i, value=f'A{i+1}')
+        c.font = Font(bold=True); c.alignment = Alignment(horizontal='center')
+    ws.cell(row=header_row, column=2 + max_ape, value='End total').font = Font(bold=True)
+    ws.cell(row=header_row, column=3 + max_ape, value='Running').font = Font(bold=True)
+    for idx, end in enumerate(scorecard['ends'], start=1):
+        r = header_row + idx
+        ws.cell(row=r, column=1, value=idx)
+        for ai, val in enumerate(end['arrows']):
+            ws.cell(row=r, column=2 + ai, value=val).alignment = Alignment(horizontal='center')
+        ws.cell(row=r, column=2 + max_ape, value=end['end_total'])
+        ws.cell(row=r, column=3 + max_ape, value=end['running'])
+    summary_r = header_row + len(scorecard['ends']) + 2
+    ws.cell(row=summary_r, column=1, value='Total score').font = Font(bold=True)
+    ws.cell(row=summary_r, column=2, value=scorecard['total_score'])
+    ws.cell(row=summary_r, column=3, value=f"/ {round_def['max_score']}")
+    ws.cell(row=summary_r + 1, column=1, value='X count').font = Font(bold=True)
+    ws.cell(row=summary_r + 1, column=2, value=scorecard['x_count'])
+    ws.cell(row=summary_r + 2, column=1, value='Arrows shot').font = Font(bold=True)
+    ws.cell(row=summary_r + 2, column=2, value=f"{scorecard['arrows_shot']} / {scorecard['planned']}")
+    if participant.get('notes'):
+        ws.cell(row=summary_r + 4, column=1, value='Notes').font = Font(bold=True)
+        ws.cell(row=summary_r + 4, column=2, value=participant['notes']).alignment = Alignment(wrap_text=True)
+        ws.merge_cells(start_row=summary_r + 4, start_column=2,
+                       end_row=summary_r + 4, end_column=2 + max_ape)
+    ws.column_dimensions['A'].width = 16
+    for col in range(2, 4 + max_ape):
+        ws.column_dimensions[chr(ord('A') + col - 1)].width = 9
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+def _scorecard_pdf(round_def, participant, scorecard):
+    """Return PDF bytes for one participant's scorecard. Uses
+    matplotlib (already a dep) — renders the scorecard as a table
+    figure and saves to PDF in memory."""
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    from matplotlib.backends.backend_pdf import PdfPages
+    import io
+
+    max_ape = max(int(s['arrows_per_end']) for s in _round_segments(round_def))
+    header = ['End'] + [f'A{i+1}' for i in range(max_ape)] + ['End', 'Run']
+    rows = []
+    for idx, end in enumerate(scorecard['ends'], start=1):
+        row = [str(idx)] + list(end['arrows'])
+        while len(row) - 1 < max_ape:
+            row.append('')
+        row += [str(end['end_total']), str(end['running'])]
+        rows.append(row)
+
+    # Size the figure so wide rounds (WA 1440 with 24 ends + 6 arrows)
+    # remain readable. Cap height; matplotlib will auto-shrink fonts.
+    fig_h = max(7.0, min(14.0, 0.25 * (len(rows) + 8)))
+    fig, ax = plt.subplots(figsize=(8.5, fig_h))
+    ax.set_axis_off()
+    # Try Quantico to match the rest of the site; fall back to sans-serif
+    # if the font isn't installed on the host. matplotlib silently picks
+    # a substitute when the named family isn't found.
+    font_family = ['Quantico', 'sans-serif']
+
+    # Header block — competition info, round, competitor.
+    header_lines = []
+    if participant.get('competition_name'):
+        header_lines.append(participant['competition_name'])
+    header_lines.append(f"Round: {round_def['name']}")
+    meta_bits = []
+    if participant.get('competition_date'):
+        meta_bits.append(f"Date: {participant['competition_date']}")
+    if participant.get('competition_location'):
+        meta_bits.append(f"Location: {participant['competition_location']}")
+    if meta_bits:
+        header_lines.append(' · '.join(meta_bits))
+    header_lines.append(f"Competitor: {participant['name']}")
+    if participant.get('email'):
+        header_lines.append(f"Email: {participant['email']}")
+    header_lines.append(f"Logged: {_app_now().strftime('%Y-%m-%d %H:%M')}")
+    fig.suptitle('\n'.join(header_lines), fontsize=11, ha='left', x=0.05,
+                 y=0.98, fontfamily=font_family)
+
+    table = ax.table(cellText=rows, colLabels=header, loc='center',
+                     cellLoc='center')
+    table.auto_set_font_size(False)
+    table.set_fontsize(8)
+    table.scale(1.05, 1.3)  # a bit more horizontal + vertical breathing room
+    for cell in table.get_celld().values():
+        cell.set_text_props(fontfamily=font_family)
+        # Wider horizontal padding inside each cell
+        cell.PAD = 0.06
+
+    # Summary line
+    summary = (f"Total: {scorecard['total_score']} / {round_def['max_score']}    "
+               f"X: {scorecard['x_count']}    "
+               f"Arrows: {scorecard['arrows_shot']} / {scorecard['planned']}")
+    ax.text(0.5, -0.02, summary, transform=ax.transAxes, ha='center',
+            fontsize=11, fontweight='bold', fontfamily=font_family)
+    # Notes below the summary
+    if participant.get('notes'):
+        ax.text(0.05, -0.08, f"Notes: {participant['notes']}",
+                transform=ax.transAxes, ha='left', va='top', fontsize=9,
+                wrap=True, fontfamily=font_family)
+
+    buf = io.BytesIO()
+    with PdfPages(buf) as pdf:
+        pdf.savefig(fig, bbox_inches='tight')
+    plt.close(fig)
+    return buf.getvalue()
+
+
+@app.route('/tournament/match/<match_id>', methods=['GET'])
+@login_required
+def tournament_match_results(match_id):
+    """Render the results page for a finished score-sheet match.
+
+    Shows each participant's scorecard summary, with per-participant
+    Download buttons (PDF / CSV / Excel) and a one-click "Email
+    everyone their report" action."""
+    user_id = current_user_id()
+    participants = _match_participants(user_id, match_id)
+    if not participants:
+        return "Match not found.", 404
+    # Round identity is on the first participant's tag.
+    round_key = participants[0]['round_key']
+    round_def = _tournament_round_def(round_key)
+    if round_def is None:
+        return "Unknown round.", 400
+
+    results = []
+    for p in participants:
+        scorecard = _participant_scorecard(user_id, p['session_id'], round_def)
+        results.append({**p, 'scorecard': scorecard})
+
+    # Sort highest score first (ranking)
+    results.sort(key=lambda r: (r['scorecard']['total_score'],
+                                r['scorecard']['x_count']),
+                 reverse=True)
+
+    email_enabled = bool(os.environ.get('RESEND_API_KEY', '').strip()) and (resend is not None)
+    return render_template(
+        'tournament.html',
+        view='results',
+        match_id=match_id,
+        round_def=round_def,
+        results=results,
+        email_enabled=email_enabled,
+    )
+
+
+@app.route('/tournament/match/<match_id>/download/<int:session_id>/<fmt>',
+           methods=['GET'])
+@login_required
+def tournament_match_download(match_id, session_id, fmt):
+    """Stream one participant's scorecard as PDF / CSV / XLSX."""
+    user_id = current_user_id()
+    participants = _match_participants(user_id, match_id)
+    p = next((q for q in participants if q['session_id'] == session_id), None)
+    if p is None:
+        return "Participant not found.", 404
+    round_def = _tournament_round_def(p['round_key'])
+    if round_def is None:
+        return "Round not found.", 400
+    scorecard = _participant_scorecard(user_id, session_id, round_def)
+    safe_name = ''.join(c for c in p['name']
+                        if c.isalnum() or c in ('-', '_')) or f's{session_id}'
+    base = f"apollo-{p['round_key']}-{safe_name}"
+    if fmt == 'csv':
+        data = _scorecard_csv(round_def, p, scorecard)
+        return (data, 200, {
+            'Content-Type':        'text/csv; charset=utf-8',
+            'Content-Disposition': f'attachment; filename="{base}.csv"',
+        })
+    if fmt == 'xlsx':
+        data = _scorecard_xlsx(round_def, p, scorecard)
+        return (data, 200, {
+            'Content-Type':
+              'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            'Content-Disposition': f'attachment; filename="{base}.xlsx"',
+        })
+    if fmt == 'pdf':
+        data = _scorecard_pdf(round_def, p, scorecard)
+        return (data, 200, {
+            'Content-Type':        'application/pdf',
+            'Content-Disposition': f'attachment; filename="{base}.pdf"',
+        })
+    return "Unknown format.", 400
+
+
+@app.route('/tournament/match/<match_id>/email', methods=['POST'])
+@login_required
+def tournament_match_email(match_id):
+    """Email each participant their own PDF + CSV + Excel attachments.
+
+    Skips participants without an email address; reports the per-
+    recipient result back to the device owner."""
+    user_id = current_user_id()
+    participants = _match_participants(user_id, match_id)
+    if not participants:
+        return jsonify(ok=False, error='match not found'), 404
+    round_def = _tournament_round_def(participants[0]['round_key'])
+    if round_def is None:
+        return jsonify(ok=False, error='round not found'), 400
+
+    sent = []
+    skipped = []
+    for p in participants:
+        if not p.get('email'):
+            skipped.append({'name': p['name'], 'reason': 'no email on file'})
+            continue
+        scorecard = _participant_scorecard(user_id, p['session_id'], round_def)
+        attachments = [
+            {'filename': 'scorecard.pdf',  'content': _scorecard_pdf(round_def, p, scorecard)},
+            {'filename': 'scorecard.csv',  'content': _scorecard_csv(round_def, p, scorecard)},
+            {'filename': 'scorecard.xlsx', 'content': _scorecard_xlsx(round_def, p, scorecard)},
+        ]
+        body_lines = [f"Your Apollo tournament results — {round_def['name']}", '']
+        if p.get('competition_name'):
+            body_lines.append(f"Competition: {p['competition_name']}")
+        if p.get('competition_date'):
+            body_lines.append(f"Date: {p['competition_date']}")
+        if p.get('competition_location'):
+            body_lines.append(f"Location: {p['competition_location']}")
+        body_lines += [
+            f"Competitor: {p['name']}",
+            '',
+            f"Total score: {scorecard['total_score']} / {round_def['max_score']}",
+            f"X count: {scorecard['x_count']}",
+            f"Arrows shot: {scorecard['arrows_shot']} / {scorecard['planned']}",
+        ]
+        if p.get('notes'):
+            body_lines += ['', f"Notes: {p['notes']}"]
+        body_lines += ['', 'Full per-end breakdown is attached as PDF / CSV / Excel.']
+        body = '\n'.join(body_lines)
+        ok = _send_email_with_attachments(
+            to_addr=p['email'],
+            subject=f"Apollo results — {round_def['name']}",
+            body=body,
+            attachments=attachments,
+        )
+        if ok:
+            sent.append(p['email'])
+        else:
+            skipped.append({'name': p['name'], 'reason': 'send failed'})
+    return jsonify(ok=True, sent=sent, skipped=skipped)
+
+
+def _send_email_with_attachments(to_addr, subject, body, attachments):
+    """Like `_send_email`, but accepts a list of {filename, content}
+    dicts to attach. Falls back to writing the body + an attachment
+    summary to stdout when Resend isn't configured."""
+    import base64
+    api_key = os.environ.get('RESEND_API_KEY', '').strip()
+    if not api_key or resend is None:
+        reason = "RESEND_API_KEY not set" if resend is not None else "resend package not installed"
+        print(f"✉️  [dev] Would send email with attachments ({reason}):")
+        print(f"    To:      {to_addr}")
+        print(f"    Subject: {subject}")
+        for line in body.splitlines():
+            print(f"    | {line}")
+        for a in attachments:
+            print(f"    + attachment: {a['filename']} ({len(a['content'])} bytes)")
+        return True
+    sender = os.environ.get('RESEND_FROM', '').strip() or 'onboarding@resend.dev'
+    resend.api_key = api_key
+    try:
+        resend.Emails.send({
+            "from":    sender,
+            "to":      to_addr,
+            "subject": subject,
+            "text":    body,
+            "attachments": [
+                {
+                    "filename": a['filename'],
+                    "content":  base64.b64encode(a['content']).decode('ascii'),
+                }
+                for a in attachments
+            ],
+        })
+        return True
+    except Exception as e:
+        print(f"⚠️  Failed to send email to {to_addr} via Resend: {e}")
+        return False
 
 
 @app.route("/previous_sessions", methods=['GET'])

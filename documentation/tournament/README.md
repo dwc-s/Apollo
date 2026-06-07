@@ -2,11 +2,15 @@
 
 This directory documents how Apollo implements **tournament mode** — a
 structured-session variant of `/sesh` that mirrors the formats, scoring,
-and target faces of the three major archery organizations:
+and target faces of three archery organizations:
 
 - **World Archery (WA)** — international federation, Olympic round, FITA.
 - **NFAA** — National Field Archery Association (USA).
 - **USAA** — USA Archery, the WA member federation in the United States.
+
+(NASP was supported in earlier versions; current builds drop it from
+the selector. The `nasp_80` face row is retained for backward
+compatibility with previously seeded targets.)
 
 The goal is not to be a digital referee — Apollo is a *personal logging*
 tool. The goal is to let a user dial in a round (e.g. "WA 720 Recurve"),
@@ -39,4 +43,3 @@ Sources used (canonical rulebook URLs — verify before relying):
 - World Archery Rulebook (Books 1–5): https://www.worldarchery.sport/rulebook
 - NFAA Constitution & By-Laws / rules: https://www.nfaausa.com/rules
 - USA Archery rules & sanctioned events: https://www.usarchery.org/rules
-- NASP (National Archery in the Schools Program): https://naspschools.org/
