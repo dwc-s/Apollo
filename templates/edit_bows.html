@@ -94,13 +94,13 @@
                    style="background:#f5f5f5;color:#666;cursor:not-allowed;">
 
             <span class="form-label">Bow draw weight (lbs)</span>
-            <input type="text" name="bow_draw_weight" value="{{ bow_data[i][0]['bow_draw_weight'] }}">
+            <input type="text" name="bow_draw_weight" value="{{ bow_data[i][0]['bow_draw_weight'] }}" inputmode="decimal">
 
             <span class="form-label amo-label">Bow length (AMO, inches)</span>
-            <input type="text" name="bow_amo" value="{{ bow_data[i][0]['amo'] }}">
+            <input type="text" name="bow_amo" value="{{ bow_data[i][0]['amo'] }}" inputmode="decimal">
 
             <span class="form-label">Nock height (mm)</span>
-            <input type="text" name="nock_height" value="{{ bow_data[i][0]['nock_height'] or '' }}">
+            <input type="text" name="nock_height" value="{{ bow_data[i][0]['nock_height'] or '' }}" inputmode="decimal">
 
         <div class="submit-row">
         <input type="submit" value="Delete bow" name="delete" class="button" formnovalidate>

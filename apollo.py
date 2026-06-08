@@ -6484,7 +6484,7 @@ def edit_session(session_id):
                      session_id, user_id)
                 )
                 con.commit()
-                flash(f"Session {session_id} updated.")
+                flash("Session updated.")
                 return redirect(url_for('previous_sessions'))
 
             # GET — gather dropdown options.
@@ -11703,6 +11703,343 @@ def _report_calendar_heatmap(user_id):
     }
 
 
+def _report_quiver_spread(user_id, date_from=None, date_to=None,
+                          tag_filter=None, categories=None,
+                          bow_filter=None, arrow_filter=None):
+    """Per-quiver chart of the biggest and smallest pairwise arrow distance.
+
+    For each completed quiver matching the active filters, compute the
+    max and min Euclidean distance between any two hit arrows in the
+    quiver, normalized by the target face width so mixed face sizes
+    are comparable on one chart. A spread of 1.0 means the pair sat
+    at opposite edges of the target; 0.0 means they landed in the
+    same hole. Plot the two series on a shared chronological x-axis —
+    the band between them is the within-quiver consistency.
+
+    Quivers with fewer than 2 hits (all misses, or only one arrow on
+    the face) are skipped — pairwise distance is undefined there. So
+    are quivers whose target has no recorded ``physical_size_mm``;
+    we'd have nothing to normalize by.
+
+    Filter semantics for this report are all *additive narrowing* on top
+    of the default "every quiver ever":
+      * ``date_from`` / ``date_to``: YYYY-MM-DD; either side may be
+        omitted for an open bound. A dated filter drops quivers whose
+        session has no recorded begin time.
+      * ``categories``: subset of session-type keys to include —
+        ``regular`` (no auto-tags) or ``tournament_practice`` (any
+        ``tournament:*`` or ``practice`` auto-tag, since live-shot
+        tournament rounds are all practice in Apollo's model).
+        Empty / ``None`` = include both.
+      * ``bow_filter`` / ``arrow_filter``: allow-list of bow models or
+        arrow names (case-insensitive). Empty / ``None`` = include all
+        equipment. Matched against the bow / arrow recorded on the
+        first shot of the quiver.
+      * ``tag_filter``: allow-list of ``session_tags``. Empty /
+        ``None`` = include every tag (matches the user's "default to
+        all shots" requirement — note this is *different* from
+        head-to-head's semantics, where an empty list means "match
+        nothing").
+    """
+    range_from = None
+    range_to = None
+    if date_from:
+        try:
+            range_from = datetime.strptime(date_from, '%Y-%m-%d')
+        except ValueError:
+            range_from = None
+    if date_to:
+        try:
+            range_to = datetime.strptime(date_to, '%Y-%m-%d') \
+                + timedelta(days=1) - timedelta(microseconds=1)
+        except ValueError:
+            range_to = None
+
+    def _norm_set(values):
+        """None or empty list → no filter; otherwise a lowercased set."""
+        if not values:
+            return None
+        norm = {str(v).strip().lower() for v in values if str(v).strip()}
+        return norm or None
+
+    wanted_tags = _norm_set(tag_filter)
+    wanted_bows = _norm_set(bow_filter)
+    wanted_arrows = _norm_set(arrow_filter)
+
+    # All live-target tournament rounds are practice — actual
+    # competition data only enters Apollo via the scoresheet flow,
+    # which doesn't produce per-shot rows in the apollo table. So the
+    # quiver-spread world only has two flavors of session.
+    ALL_TYPES = {'regular', 'tournament_practice'}
+    if categories:
+        wanted_types = {c for c in categories if c in ALL_TYPES}
+        if not wanted_types:
+            wanted_types = set(ALL_TYPES)
+    else:
+        wanted_types = set(ALL_TYPES)
+
+    with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
+        rows = cur.execute(
+            "SELECT a.session_id, a.id, a.quiver_size, "
+            "       a.x_coord, a.y_coord, a.session_tags, "
+            "       a.bow, a.arrow_type, "
+            "       st.session_begin_time, "
+            "       t.physical_size_mm AS face_mm "
+            "FROM apollo a "
+            "LEFT JOIN session_times st "
+            "  ON st.session_id = a.session_id AND st.user_id = a.user_id "
+            "LEFT JOIN targets t "
+            "  ON t.id = a.target_id AND t.user_id = a.user_id "
+            "WHERE a.user_id = %s "
+            "ORDER BY a.session_id ASC, a.id ASC",
+            (user_id,)
+        ).fetchall()
+
+    # Slice into completed quivers — same rule as _iter_quivers (group by
+    # the first shot's declared quiver_size, close the group when it
+    # hits that size). Filters are applied per quiver at close-time.
+    quivers = []
+    current_session = None
+    quiver_idx = 0
+    buf = []
+    buf_size = 0
+    buf_begin = None
+    buf_tags = None
+    for r in rows:
+        sid = r['session_id']
+        if sid != current_session:
+            current_session = sid
+            quiver_idx = 0
+            buf = []
+            buf_size = 0
+        try:
+            row_qs = int(r['quiver_size']) if r['quiver_size'] else 0
+        except (TypeError, ValueError):
+            row_qs = 0
+        if row_qs <= 0:
+            buf = []
+            buf_size = 0
+            continue
+        if not buf:
+            buf_size = row_qs
+            raw_begin = r['session_begin_time']
+            # SQLite returns the DateTime column as a naïve string under
+            # some adapter configs; coerce it once here so every
+            # downstream comparison/sort gets a real datetime (or None).
+            if isinstance(raw_begin, str):
+                buf_begin = None
+                for fmt in ('%Y-%m-%d %H:%M:%S.%f',
+                            '%Y-%m-%d %H:%M:%S',
+                            '%Y-%m-%dT%H:%M:%S.%f',
+                            '%Y-%m-%dT%H:%M:%S'):
+                    try:
+                        buf_begin = datetime.strptime(raw_begin, fmt)
+                        break
+                    except ValueError:
+                        continue
+            else:
+                buf_begin = raw_begin
+            tag_str = r['session_tags'] or ''
+            buf_tags = {t.strip().lower()
+                        for t in tag_str.split(',') if t.strip()}
+            # Equipment is recorded per-shot; use the first shot's bow
+            # and arrow_type as the quiver's representative kit. (Most
+            # users don't swap mid-quiver; for the rare ones who do
+            # the first shot is the right tiebreaker for the filter.)
+            buf_bow = (r['bow'] or '').strip().lower()
+            buf_arrow = (r['arrow_type'] or '').strip().lower()
+            # Target face size in mm — used to normalize the pairwise
+            # distance so mixed face sizes are comparable. Quivers
+            # whose target has no recorded size are dropped at close
+            # time; a normalized distance is meaningless without it.
+            try:
+                buf_face_mm = float(r['face_mm']) if r['face_mm'] else 0.0
+            except (TypeError, ValueError):
+                buf_face_mm = 0.0
+        buf.append(r)
+        if len(buf) >= buf_size:
+            quiver_idx += 1
+            keep = True
+            # Date filter: a quiver without a usable begin_dt can't be
+            # ordered chronologically, so drop it when the user has
+            # actively scoped to a date range. Without a filter it's
+            # still useful — keep it and let it sort to the end.
+            if (range_from or range_to) and not buf_begin:
+                keep = False
+            if keep and range_from and buf_begin and buf_begin < range_from:
+                keep = False
+            if keep and range_to and buf_begin and buf_begin > range_to:
+                keep = False
+            # Two session-type buckets — anything carrying a
+            # tournament:* or practice auto-tag is treated as
+            # tournament practice (the only kind of tournament data
+            # that lands here as live shots).
+            if keep:
+                has_auto = any(
+                    t == 'practice' or t.startswith('tournament:')
+                    for t in buf_tags
+                )
+                stype = 'tournament_practice' if has_auto else 'regular'
+                if stype not in wanted_types:
+                    keep = False
+            if keep and wanted_bows is not None and buf_bow not in wanted_bows:
+                keep = False
+            if (keep and wanted_arrows is not None
+                    and buf_arrow not in wanted_arrows):
+                keep = False
+            if keep and wanted_tags is not None and not (buf_tags & wanted_tags):
+                keep = False
+            # Without a target face size we can't normalize. Mixing
+            # raw mm and normalized values on one chart would be
+            # misleading, so drop these quivers entirely.
+            if keep and buf_face_mm <= 0:
+                keep = False
+            if keep:
+                hits = []
+                for s in buf:
+                    xraw = (str(s['x_coord']).strip()
+                            if s['x_coord'] is not None else '')
+                    yraw = (str(s['y_coord']).strip()
+                            if s['y_coord'] is not None else '')
+                    # A miss is stored as the sentinel on both axes —
+                    # not a real coordinate, so it can't contribute to
+                    # a pairwise spread.
+                    if xraw == MISS_SENTINEL and yraw == MISS_SENTINEL:
+                        continue
+                    try:
+                        hits.append((float(xraw), float(yraw)))
+                    except ValueError:
+                        continue
+                if len(hits) >= 2:
+                    quivers.append({
+                        'begin_dt': buf_begin,
+                        'sid': sid,
+                        'qidx': quiver_idx,
+                        'hits': hits,
+                        'face_mm': buf_face_mm,
+                    })
+            buf = []
+            buf_size = 0
+
+    if not quivers:
+        return {
+            'key': 'quiver_spread',
+            'title': 'Biggest vs smallest spread per quiver',
+            'empty': True,
+            'empty_reason': ('No completed quivers with ≥2 hits match '
+                             'these filters.'),
+        }
+
+    # Chronological x-axis; undated quivers sort to the end so they
+    # don't break the time ordering for everything else.
+    quivers.sort(key=lambda q: (q['begin_dt'] or datetime.max, q['qidx']))
+
+    # Spread is reported normalized by the full target face width so
+    # quivers shot on different face sizes are directly comparable.
+    # A value of 1.0 means the pair sat at opposite edges of the
+    # target; 0.0 means the pair landed in the same hole.
+    biggest = []
+    smallest = []
+    rows_out = []
+    for i, q in enumerate(quivers, start=1):
+        hits = q['hits']
+        face_mm = q['face_mm']  # guaranteed > 0 by the keep gate above
+        dmax = 0.0
+        dmin = None
+        for a_i in range(len(hits)):
+            for b_i in range(a_i + 1, len(hits)):
+                dx = hits[a_i][0] - hits[b_i][0]
+                dy = hits[a_i][1] - hits[b_i][1]
+                d = math.hypot(dx, dy) / face_mm
+                if d > dmax:
+                    dmax = d
+                if dmin is None or d < dmin:
+                    dmin = d
+        if dmin is None:
+            dmin = 0.0
+        biggest.append(dmax)
+        smallest.append(dmin)
+        date_str = (q['begin_dt'].strftime('%Y-%m-%d')
+                    if q['begin_dt'] else '—')
+        rows_out.append([
+            i, date_str, q['qidx'], len(hits),
+            round(face_mm, 0),
+            round(dmax, 3), round(dmin, 3),
+        ])
+
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+
+    xs = list(range(1, len(quivers) + 1))
+    fig, ax = plt.subplots(figsize=(9, 4.5))
+    ax.fill_between(xs, smallest, biggest, color='#a3b6d2', alpha=0.25,
+                    label='Within-quiver gap')
+    ax.plot(xs, biggest, color='#c0392b', marker='o',
+            linewidth=1.6, markersize=4,
+            label='Biggest spread (max pair)')
+    ax.plot(xs, smallest, color='#1a7a3a', marker='s',
+            linewidth=1.6, markersize=4,
+            label='Smallest spread (min pair)')
+    ax.set_xlabel('Session date (sequential quivers in date range)')
+    ax.set_ylabel('Arrow-pair distance ÷ target face width\n(1.0 = opposite edges of target)')
+    ax.set_title('Biggest vs smallest spread per quiver')
+    ax.grid(True, axis='y', linestyle='--', alpha=0.4)
+    ax.legend(loc='upper left', fontsize=9)
+    # X-axis: each quiver is one evenly-spaced point, but the tick
+    # *labels* show the session date so the user can read off when
+    # each quiver happened. On long histories we thin the ticks so
+    # labels don't overrun each other.
+    date_labels = [
+        q['begin_dt'].strftime('%Y-%m-%d') if q['begin_dt'] else '—'
+        for q in quivers
+    ]
+    if len(xs) <= 14:
+        tick_positions = xs
+    else:
+        # Aim for ~12 evenly-spaced ticks across the series.
+        step = max(1, len(xs) // 12)
+        tick_positions = list(range(1, len(xs) + 1, step))
+        # Always include the last quiver so the right end of the chart
+        # has a real anchor label.
+        if tick_positions[-1] != len(xs):
+            tick_positions.append(len(xs))
+    tick_labels = [date_labels[p - 1] for p in tick_positions]
+    ax.set_xticks(tick_positions)
+    ax.set_xticklabels(tick_labels, rotation=35, ha='right')
+    fig.subplots_adjust(bottom=0.22)
+    png_b64 = _render_matplotlib_png(fig)
+
+    intro = Markup(
+        '<p class="report-intro">'
+        '<strong>What this answers:</strong> for each completed quiver, '
+        'how spread out were the arrows across the <em>whole target</em>? '
+        'The red trace is the worst pair (biggest gap between any two '
+        'arrows in the quiver); the green trace is the tightest pair. '
+        'The shaded band between them is the within-quiver spread '
+        'gap — a thinner band means a more consistent group. '
+        'Distances are normalized by the target face width, so '
+        '<strong>1.0</strong> = arrows at opposite edges of the target '
+        'and <strong>0.0</strong> = arrows in the same hole. Mixed face '
+        'sizes are directly comparable on this scale. Quivers shot at '
+        'a target without a recorded physical size are skipped.'
+        '</p>'
+    )
+
+    return {
+        'key': 'quiver_spread',
+        'title': 'Biggest vs smallest spread per quiver',
+        'intro_html': intro,
+        'png_b64': png_b64,
+        'columns': [
+            '#', 'Session date', 'Quiver in session', 'Hits',
+            'Face width (mm)',
+            'Biggest spread (norm)', 'Smallest spread (norm)',
+        ],
+        'rows': rows_out,
+    }
+
+
 REPORTS = {
     'arrows_vs_time': {
         'label': 'Arrows shot vs time',
@@ -11795,6 +12132,27 @@ REPORTS = {
         # user can scope the comparison instead of generating C(n,2) panels
         # for every tag they've ever used. See ``_tag_inventory``.
         'tag_picker': True,
+    },
+    'quiver_spread': {
+        'label': 'Biggest vs smallest spread per quiver',
+        'description': 'For each completed quiver, plot the biggest and '
+                       'smallest pairwise distance between arrows on the '
+                       'target face. Top trace is the worst pair in each '
+                       'quiver; bottom trace is the tightest pair. '
+                       'Defaults to every quiver ever shot — narrow with '
+                       'the session-type pills, equipment picker, date '
+                       'range, or tag picker.',
+        'fn': _report_quiver_spread,
+        'accepts_date_range': True,
+        'tag_picker': True,
+        'equipment_picker': True,
+        # Session-type buckets, derived from auto-tags. Defaults to all
+        # checked so the unfiltered run includes everything.
+        'category_label': 'Include session types:',
+        'categories': [
+            {'key': 'regular',             'label': 'Regular sessions'},
+            {'key': 'tournament_practice', 'label': 'Tournament practice'},
+        ],
     },
     'within_session_drift': {
         'label': 'Within-session drift',
@@ -12296,6 +12654,10 @@ def analyze():
     # Populated only on POST so the template can distinguish "submitted
     # nothing" (explicit empty) from "first GET" (use defaults).
     tag_selections = {}
+    # Per-report bow / arrow selections for reports with equipment_picker.
+    # Empty list ≡ no filter applied (include every bow / arrow).
+    bow_selections = {}
+    arrow_selections = {}
     if request.method == 'POST':
         selected = [k for k in request.form.getlist('reports') if k in REPORTS]
         for k, spec in REPORTS.items():
@@ -12315,6 +12677,9 @@ def analyze():
                 categories[k] = chosen
             if spec.get('tag_picker'):
                 tag_selections[k] = request.form.getlist(f'{k}_tags')
+            if spec.get('equipment_picker'):
+                bow_selections[k] = request.form.getlist(f'{k}_bows')
+                arrow_selections[k] = request.form.getlist(f'{k}_arrows')
         if not selected:
             error = 'Pick at least one report to generate.'
         else:
@@ -12335,6 +12700,14 @@ def analyze():
                         # default fill-in here; the template handles the
                         # first-GET case by pre-checking the top-N).
                         kwargs['tag_filter'] = tag_selections.get(key, [])
+                    if spec.get('equipment_picker'):
+                        # Empty submitted lists are forwarded as-is — the
+                        # report fn's contract is "empty = no filter,
+                        # include every bow / arrow," which matches the
+                        # "default to all shots ever" behavior the user
+                        # asked for on the quiver_spread report.
+                        kwargs['bow_filter'] = bow_selections.get(key, [])
+                        kwargs['arrow_filter'] = arrow_selections.get(key, [])
                     out = spec['fn'](user_id, **kwargs)
                     if out is None:
                         results.append({
@@ -12377,7 +12750,9 @@ def analyze():
             'description': v['description'],
             'accepts_date_range': v.get('accepts_date_range', False),
             'categories': v.get('categories', []),
+            'category_label': v.get('category_label', 'Compare:'),
             'tag_picker': v.get('tag_picker', False),
+            'equipment_picker': v.get('equipment_picker', False),
         }
         for k, v in REPORTS.items()
     ]
@@ -12391,6 +12766,15 @@ def analyze():
     # so the picker doesn't open with tournament:* pre-selected).
     default_top_tags = [t['name'] for t in tag_inventory
                         if not t['is_auto']][:5]
+    # Equipment inventory: distinct bow models + arrow names the user has
+    # logged. Reuses the predict helpers — they already return the
+    # user's full set, sorted alphabetically.
+    if any(v.get('equipment_picker') for v in REPORTS.values()):
+        bow_inventory = _predict_user_bows(current_user_id())
+        arrow_inventory = _predict_user_arrows(current_user_id())
+    else:
+        bow_inventory = []
+        arrow_inventory = []
     return render_template('analyze.html',
                            catalog=catalog,
                            selected=selected,
@@ -12399,6 +12783,10 @@ def analyze():
                            tag_selections=tag_selections,
                            tag_inventory=tag_inventory,
                            default_top_tags=default_top_tags,
+                           bow_selections=bow_selections,
+                           arrow_selections=arrow_selections,
+                           bow_inventory=bow_inventory,
+                           arrow_inventory=arrow_inventory,
                            numeric_options={},
                            results=results,
                            error=error)
@@ -12547,6 +12935,10 @@ def analyze_export():
             # Always forward the submitted tag list so the export matches
             # the rendered report; an empty list explicitly means "no tags".
             kwargs['tag_filter'] = request.args.getlist('tags')
+        if spec.get('equipment_picker'):
+            # Same shape as tags — empty list ≡ no filter ≡ include all.
+            kwargs['bow_filter'] = request.args.getlist('bows')
+            kwargs['arrow_filter'] = request.args.getlist('arrows')
         out = spec['fn'](current_user_id(), **kwargs)
     except ImportError:
         return "matplotlib is not installed on the server.", 500

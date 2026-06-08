@@ -82,7 +82,7 @@
     {% endif %}
 </nav>
 
-<h4 class="quantico">Session #{{ session_id }} / <a href="/end_session" data-no-warn="1">End session</a></h4>
+<h4 class="quantico">Session / <a href="/end_session" data-no-warn="1">End session</a></h4>
 
 <!-- ── Quiver-size prompt modal ──────────────────────────────────────────── -->
 <div class="modal-backdrop" id="quiver-modal" role="dialog" aria-modal="true" aria-labelledby="quiver-modal-title">
@@ -276,6 +276,39 @@ const form    = document.getElementById('shot-form');
 
 const UNITS_KEY      = 'apollo_units';
 const isPreciseInput = document.getElementById('is_precise');
+
+// ── Persist distance + quiver size across sessions ───────────────────────
+// New sessions begin with the server passing empty/zero defaults; we
+// hydrate them from localStorage so users don't have to retype the same
+// values every session. Saves on every input so the next session picks up
+// whatever the user last had locally.
+const DISTANCE_KEY    = 'apollo_last_distance';
+const QUIVER_SIZE_KEY = 'apollo_last_quiver_size';
+(function hydratePersistedFields() {
+    const distEl = document.getElementById('distance');
+    if (distEl && !distEl.value) {
+        const saved = localStorage.getItem(DISTANCE_KEY);
+        if (saved) distEl.value = saved;
+    }
+    if (distEl) {
+        distEl.addEventListener('input', () => {
+            if (distEl.value) localStorage.setItem(DISTANCE_KEY, distEl.value);
+        });
+    }
+    const qsEl = document.getElementById('quiver_size');
+    // quiver_size may be readonly while a quiver is mid-flight — only
+    // hydrate when it's writable and currently empty/0.
+    if (qsEl && !qsEl.readOnly) {
+        const cur = (qsEl.value || '').trim();
+        if (!cur || cur === '0') {
+            const saved = localStorage.getItem(QUIVER_SIZE_KEY);
+            if (saved) qsEl.value = saved;
+        }
+        qsEl.addEventListener('input', () => {
+            if (qsEl.value) localStorage.setItem(QUIVER_SIZE_KEY, qsEl.value);
+        });
+    }
+})();
 
 // ── mm → display-unit conversion ─────────────────────────────────────────
 function mmToUnit(mmX, mmY) {
@@ -1019,6 +1052,8 @@ document.addEventListener('keydown', evt => {
         const v = parseInt(modalInput.value, 10);
         if (!v || v <= 0) { modalInput.focus(); modalInput.select(); return; }
         quiverInput.value = String(v);
+        // Mirror the field's own input-listener: persist for the next session.
+        try { localStorage.setItem(QUIVER_SIZE_KEY, String(v)); } catch (e) {}
         closeModal();
         form.submit();
     });

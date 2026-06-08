@@ -74,7 +74,7 @@
 <script>
 window.setTimeout(function () { window.location.href = '/'; }, 7000);
 </script>
-<h1 class="title">Session #{{ stats["session_id"] }} ended</h1>
+<h1 class="title">Session ended</h1>
 <div class="sessions-table">
     <table>
         <thead>
@@ -113,7 +113,7 @@ window.setTimeout(function () { window.location.href = '/'; }, 7000);
 
 {% else %}
 <!-- ── Confirmation / end-session form (GET) ────────────────────────────── -->
-<h1 class="title">End Session #{{ session_id }}</h1>
+<h1 class="title">End Session</h1>
 
 <div class="form-panel" style="max-width:420px;margin:2rem auto;">
     {% if error %}

@@ -85,7 +85,7 @@
             <input type="text" name="arrow" value="{{ arrow_data[i][0]['arrow'] }}" required>
 
             <span class="form-label length-label">Length</span>
-            <input type="text" name="length" value="{{ arrow_data[i][0]['length'] }}">
+            <input type="text" name="length" value="{{ arrow_data[i][0]['length'] }}" inputmode="decimal">
 
             <span class="form-label">Spine</span>
             {# Spine is an intrinsic property of the shaft — locked once
@@ -97,22 +97,22 @@
                    style="background:#f5f5f5;color:#666;cursor:not-allowed;">
 
             <span class="form-label">Shaft weight (grams)</span>
-            <input type="text" name="shaft_weight" value="{{ arrow_data[i][0]['shaft_weight'] }}">
+            <input type="text" name="shaft_weight" value="{{ arrow_data[i][0]['shaft_weight'] }}" inputmode="decimal">
 
             <span class="form-label">Shaft diameter (mm)</span>
-            <input type="text" name="shaft_diameter" value="{{ arrow_data[i][0]['shaft_diameter'] }}">
+            <input type="text" name="shaft_diameter" value="{{ arrow_data[i][0]['shaft_diameter'] }}" inputmode="decimal">
 
             <span class="form-label">Shaft material</span>
             <input type="text" name="shaft_material" value="{{ arrow_data[i][0]['shaft_material'] }}">
 
             <span class="form-label">Nock weight (grams)</span>
-            <input type="text" name="nock_weight" value="{{ arrow_data[i][0]['nock_weight'] }}">
+            <input type="text" name="nock_weight" value="{{ arrow_data[i][0]['nock_weight'] }}" inputmode="decimal">
 
             <span class="form-label">Tip</span>
             <input type="text" name="tip" value="{{ arrow_data[i][0]['tip'] }}">
 
             <span class="form-label">Tip weight (grams)</span>
-            <input type="text" name="tip_weight" value="{{ arrow_data[i][0]['tip_weight'] }}">
+            <input type="text" name="tip_weight" value="{{ arrow_data[i][0]['tip_weight'] }}" inputmode="decimal">
             <div class="submit-row">
                 <input type="submit" value="Delete Arrow" name="delete" formnovalidate>
                 <input type="submit" value="Submit Edit">

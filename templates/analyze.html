@@ -250,6 +250,29 @@
         .tag-picker.show-auto .tag-pill[data-is-auto="1"] {
             display: inline-flex;
         }
+        /* Equipment picker — same visual family as the tag picker, but
+           two pill-grids side-by-side (bows, arrows) with a small hint. */
+        .equipment-picker {
+            margin-top: 10px;
+            padding-top: 10px;
+            border-top: 1px dashed #95abcf;
+            font-family: "Quantico", sans-serif;
+            color: #1a3a5c;
+        }
+        .equipment-picker[hidden] { display: none; }
+        .equipment-picker .category-row-label {
+            display: block;
+            margin-bottom: 6px;
+        }
+        .equipment-picker .tag-pill-grid {
+            max-height: 140px;
+            margin-bottom: 6px;
+        }
+        .equipment-picker-hint {
+            font-size: 0.75rem;
+            color: #2c4a6b;
+            margin-top: 4px;
+        }
         .tag-pill.tag-pill-filtered { display: none !important; }
         .tag-picker-empty {
             font-style: italic;
@@ -698,8 +721,9 @@
                don't bubble up and toggle the report. Default to "all
                checked" on first render so the report is useful by default. #}
             {% set chosen_cats = categories.get(item.key) or item.categories | map(attribute='key') | list %}
+            {% set cat_keys = item.categories | map(attribute='key') | list %}
             <div class="category-row" {% if not is_checked %}hidden{% endif %}>
-                <span class="category-row-label">Compare:</span>
+                <span class="category-row-label">{{ item.category_label or 'Compare:' }}</span>
                 {% for cat in item.categories %}
                 <label class="category-pill">
                     <input type="checkbox"
@@ -710,19 +734,33 @@
                 </label>
                 {% endfor %}
             </div>
+            {% else %}
+            {# Keep cat_keys defined even when the report has no categories
+               so the downstream tag-picker gate doesn't blow up. #}
+            {% set cat_keys = [] %}
+            {% set chosen_cats = [] %}
             {% endif %}
             {% if item.tag_picker %}
-            {# Tag picker — revealed when Tags is in the chosen categories.
-               First-GET state uses the precomputed `default_top_tags`
-               (top 5 user-typed tags by shot count). After POST we honor
-               whatever the user actually submitted, including an explicit
-               empty list. #}
+            {# Tag picker — revealed when Tags is in the chosen categories
+               (head-to-head pattern) or, for reports without a 'tag'
+               category, whenever the report itself is checked
+               (quiver_spread uses the picker as one of several
+               independent filters). First-GET state uses the precomputed
+               `default_top_tags` (top 5 user-typed tags by shot count).
+               After POST we honor whatever the user actually submitted,
+               including an explicit empty list. #}
             {% if item.key in tag_selections %}
                 {% set chosen_tags = tag_selections[item.key] %}
-            {% else %}
+            {% elif 'tag' in cat_keys %}
                 {% set chosen_tags = default_top_tags %}
+            {% else %}
+                {# No 'tag' category → picker isn't acting as a head-to-head
+                   subject selector. Default to nothing checked so the
+                   report runs against every quiver unless the user
+                   narrows it. #}
+                {% set chosen_tags = [] %}
             {% endif %}
-            <div class="tag-picker" {% if 'tag' not in chosen_cats %}hidden{% endif %}>
+            <div class="tag-picker" {% if 'tag' in cat_keys and 'tag' not in chosen_cats %}hidden{% elif not is_checked %}hidden{% endif %}>
                 <div class="tag-picker-controls">
                     <input type="text" class="tag-search"
                            placeholder="Filter tags…"
@@ -754,6 +792,50 @@
                         No tags logged yet — tag a session to enable this picker.
                     </span>
                     {% endfor %}
+                </div>
+            </div>
+            {% endif %}
+            {% if item.equipment_picker %}
+            {# Equipment picker — independent bow + arrow filters. Empty
+               selection = no filter (include every bow / arrow). After
+               POST the user's last selection is honored verbatim. #}
+            {% set chosen_bows = bow_selections.get(item.key, []) %}
+            {% set chosen_arrows = arrow_selections.get(item.key, []) %}
+            <div class="equipment-picker" {% if not is_checked %}hidden{% endif %}>
+                <span class="category-row-label">Bows:</span>
+                <div class="tag-pill-grid">
+                    {% for b in bow_inventory %}
+                    <label class="tag-pill" data-tag-name="{{ b | lower }}">
+                        <input type="checkbox"
+                               name="{{ item.key }}_bows"
+                               value="{{ b }}"
+                               {% if b in chosen_bows %}checked{% endif %}>
+                        {{ b }}
+                    </label>
+                    {% else %}
+                    <span class="tag-picker-empty">
+                        No bows logged yet.
+                    </span>
+                    {% endfor %}
+                </div>
+                <span class="category-row-label" style="margin-top:10px;">Arrows:</span>
+                <div class="tag-pill-grid">
+                    {% for a in arrow_inventory %}
+                    <label class="tag-pill" data-tag-name="{{ a | lower }}">
+                        <input type="checkbox"
+                               name="{{ item.key }}_arrows"
+                               value="{{ a }}"
+                               {% if a in chosen_arrows %}checked{% endif %}>
+                        {{ a }}
+                    </label>
+                    {% else %}
+                    <span class="tag-picker-empty">
+                        No arrows logged yet.
+                    </span>
+                    {% endfor %}
+                </div>
+                <div class="equipment-picker-hint">
+                    Leave both empty to include every bow / arrow.
                 </div>
             </div>
             {% endif %}
@@ -863,6 +945,8 @@
             {% set dr = date_ranges.get(r.key) or {} %}
             {% set cats = categories.get(r.key) or [] %}
             {% set tags = tag_selections.get(r.key) %}
+            {% set bows = bow_selections.get(r.key) %}
+            {% set arrows = arrow_selections.get(r.key) %}
             {% set nums = numeric_options.get(r.key) or {} %}
             {# Only one numeric option exists today (rolling_window). When
                adding more, prefer precomputing the URL in the view than
@@ -873,6 +957,8 @@
                                      date_to=dr.get('date_to')   or none,
                                      categories=cats or none,
                                      tags=tags or none,
+                                     bows=bows or none,
+                                     arrows=arrows or none,
                                      rolling_window=nums.get('rolling_window') or none) }}">
                     ⬇ Download CSV
                 </a>
@@ -881,6 +967,8 @@
                                      date_to=dr.get('date_to')   or none,
                                      categories=cats or none,
                                      tags=tags or none,
+                                     bows=bows or none,
+                                     arrows=arrows or none,
                                      rolling_window=nums.get('rolling_window') or none) }}">
                     ⬇ Download Excel
                 </a>
@@ -890,6 +978,8 @@
             {% set dr = date_ranges.get(r.key) or {} %}
             {% set cats = categories.get(r.key) or [] %}
             {% set tags = tag_selections.get(r.key) %}
+            {% set bows = bow_selections.get(r.key) %}
+            {% set arrows = arrow_selections.get(r.key) %}
             {% set nums = numeric_options.get(r.key) or {} %}
             {# Only one numeric option exists today (rolling_window). When
                adding more, prefer precomputing the URL in the view than
@@ -900,6 +990,8 @@
                                      date_to=dr.get('date_to')   or none,
                                      categories=cats or none,
                                      tags=tags or none,
+                                     bows=bows or none,
+                                     arrows=arrows or none,
                                      rolling_window=nums.get('rolling_window') or none) }}">
                     ⬇ Download CSV
                 </a>
@@ -908,6 +1000,8 @@
                                      date_to=dr.get('date_to')   or none,
                                      categories=cats or none,
                                      tags=tags or none,
+                                     bows=bows or none,
+                                     arrows=arrows or none,
                                      rolling_window=nums.get('rolling_window') or none) }}">
                     ⬇ Download Excel
                 </a>
@@ -1054,6 +1148,16 @@ document.querySelectorAll('.report-option-block').forEach(block => {
         const sync = () => { sub.hidden = !main.checked; };
         main.addEventListener('change', sync);
         sync();
+    }
+
+    // Equipment picker — same reveal pattern as the category row.
+    // Independent of the category pills (no 'equipment' category to
+    // gate on; the picker is always available when the report is on).
+    const eqPicker = block.querySelector('.equipment-picker');
+    if (main && eqPicker) {
+        const syncEq = () => { eqPicker.hidden = !main.checked; };
+        main.addEventListener('change', syncEq);
+        syncEq();
     }
 
     // Tag picker: visible only when the report is ticked AND the Tags

@@ -165,15 +165,24 @@
             margin-top: 8px;
         }
         .round-card form { margin-top: 10px; }
+        /* Match the left-sidebar units-toggle button — same muted purple
+           fill, white text, no border. Vertical padding kept generous so
+           the buttons are easy to tap on phones. */
         .round-card button {
-            background: #1a3a5c;
+            background-color: #757a9c;
             color: #fff;
             border: none;
-            padding: 6px 14px;
-            border-radius: 8px;
+            padding: 12px 14px;
+            border-radius: 6px;
             font-family: "Quantico", sans-serif;
             font-weight: 700;
+            font-size: 0.85rem;
             cursor: pointer;
+            transition: background-color 0.2s;
+            margin: 4px 0;
+        }
+        .round-card button:hover {
+            background-color: #4d5375;
         }
         .org-header {
             font-family: "Quantico", sans-serif;
@@ -282,11 +291,11 @@
             <input type="hidden" name="round_key" value="{{ r.key }}">
             <button type="submit" formaction="/tournament/start"
                     title="Tap the target after every arrow on this device. Best for solo practice or a friendly shoot where one person tracks the group.">
-                Shoot live on target
+                Practice
             </button>
             <button type="submit" formaction="/tournament/score_sheet/setup"
                     title="Skip the canvas — type each arrow's ring number from a paper scorecard. Use this to log a real competition (yours or your team's) after the fact.">
-                Enter scores from paper
+                Enter scoresheet from actual tournament
             </button>
         </form>
     </div>

@@ -136,7 +136,7 @@
     {% endif %}
 </nav>
 
-<h1 class="title">Edit Session #{{ session_id }}</h1>
+<h1 class="title">Edit Session</h1>
 
 <form class="edit-panel" method="POST" action="{{ url_for('edit_session', session_id=session_id) }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -172,7 +172,7 @@
     </label>
 
     <label>Distance
-        <input type="text" name="distance" value="{{ current.distance }}">
+        <input type="text" name="distance" value="{{ current.distance }}" inputmode="decimal">
     </label>
 
     <label>Effective draw weight (lbs, optional)
