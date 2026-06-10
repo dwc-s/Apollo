@@ -30,6 +30,7 @@
     </style>
     <script>
         window.APOLLO         = {{ target_config | tojson }};
+        window.FACE_RENDER    = window.APOLLO ? (window.APOLLO.face_render || null) : null;
         window.PAST_SHOTS     = {{ past_shots | tojson }};
         window.ARROW_SHAFT_MM = {{ arrow_shaft_diameters | tojson }};
     </script>
@@ -320,6 +321,101 @@ function mmToUnit(mmX, mmY) {
     return [cmX, cmY, 'cm'];
 }
 
+// ── Ring overlay rendering ───────────────────────────────────────────────
+// Tournament faces share a single placeholder image — the canonical
+// rings come from window.FACE_RENDER and are painted as SVG circles on
+// top of the image so the user always sees the right face layout. Non-
+// tournament targets carry their rings inside the image and have a null
+// FACE_RENDER, so this is a no-op for them.
+function drawRings() {
+    const old = document.getElementById('rings-layer');
+    if (old) old.remove();
+    const fr = window.FACE_RENDER;
+    const rings = (fr && fr.rings) || [];
+    if (!rings.length) return;
+    const w = img.clientWidth, h = img.clientHeight;
+    if (!w || !h) return;
+    const mmW = window.APOLLO.target_width_mm;
+    const mmH = window.APOLLO.target_height_mm;
+    const px = mm => mm * (w / mmW);
+    const layer = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+    layer.id = 'rings-layer';
+    if (fr.face_bg) {
+        const bg = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+        bg.setAttribute('x', 0);
+        bg.setAttribute('y', 0);
+        bg.setAttribute('width', w);
+        bg.setAttribute('height', h);
+        bg.setAttribute('fill', fr.face_bg);
+        layer.appendChild(bg);
+    }
+    // Multi-spot faces (NFAA 5-spot) — render an identical spot at each
+    // listed center. Single-spot faces fall through with a single
+    // center at the face origin.
+    const centers = (fr.multi_spot && Array.isArray(fr.multi_spot.centers_mm))
+        ? fr.multi_spot.centers_mm
+        : [[0, 0]];
+    // Map mm-from-face-center to canvas pixels. SVG y grows downward;
+    // physical y grows upward (per APOLLO convention), so negate y.
+    const toPx = (mmX, mmY) => [
+        w / 2 + mmX * (w / mmW),
+        h / 2 - mmY * (h / mmH),
+    ];
+    centers.forEach(c => {
+        const [cx, cy] = toPx(c[0], c[1]);
+        rings.forEach(ring => {
+            const el = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+            el.setAttribute('cx', cx);
+            el.setAttribute('cy', cy);
+            el.setAttribute('r', px(ring.radius_mm));
+            el.setAttribute('fill', ring.color);
+            el.setAttribute('stroke', _contrastingMarkColor(ring.color));
+            el.setAttribute('stroke-width', '0.8');
+            layer.appendChild(el);
+        });
+        if (fr.center_mark) {
+            const xMm = parseFloat(fr.x_ring_mm) || 0;
+            const arm = px(Math.max(2.0, xMm * 0.55));
+            const stroke = Math.max(1.2, px(Math.max(1.0, xMm * 0.08)));
+            const innerColor = (rings[rings.length - 1] && rings[rings.length - 1].color) || '#ffffff';
+            const markColor = _contrastingMarkColor(innerColor);
+            const mk = (x1, y1, x2, y2) => {
+                const l = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+                l.setAttribute('x1', x1); l.setAttribute('y1', y1);
+                l.setAttribute('x2', x2); l.setAttribute('y2', y2);
+                l.setAttribute('stroke', markColor);
+                l.setAttribute('stroke-width', stroke);
+                l.setAttribute('stroke-linecap', 'round');
+                layer.appendChild(l);
+            };
+            if (fr.center_mark === 'cross') {
+                mk(cx - arm, cy, cx + arm, cy);
+                mk(cx, cy - arm, cx, cy + arm);
+            } else if (fr.center_mark === 'x') {
+                const d = arm * 0.7071;  // 45° projection
+                mk(cx - d, cy - d, cx + d, cy + d);
+                mk(cx - d, cy + d, cx + d, cy - d);
+            }
+        }
+    });
+    svg.prepend(layer);
+}
+
+function _contrastingMarkColor(hex) {
+    // Cheap luminance check on a #rrggbb fill — dark inner zones get a
+    // light mark, light zones get a dark mark. Falls back to dark on
+    // unrecognized input.
+    if (typeof hex !== 'string') return '#1a3a5c';
+    const m = hex.replace('#', '');
+    if (m.length !== 6) return '#1a3a5c';
+    const r = parseInt(m.slice(0, 2), 16);
+    const g = parseInt(m.slice(2, 4), 16);
+    const b = parseInt(m.slice(4, 6), 16);
+    if ([r, g, b].some(v => isNaN(v))) return '#1a3a5c';
+    const lum = 0.299 * r + 0.587 * g + 0.114 * b;
+    return lum > 140 ? '#1a3a5c' : '#ffffff';
+}
+
 // ── Crosshair guide ──────────────────────────────────────────────────────
 function drawCrosshair() {
     const existing = document.getElementById('crosshair');
@@ -340,14 +436,15 @@ function drawCrosshair() {
     svg.prepend(g);
 }
 
-img.addEventListener('load', drawCrosshair);
-if (img.complete) drawCrosshair();
+img.addEventListener('load', () => { drawRings(); drawCrosshair(); });
+if (img.complete) { drawRings(); drawCrosshair(); }
 
 // Re-render overlays whenever the image's rendered size changes (viewport
 // resize, layout reflow). Without this, the crosshair, past-shot markers,
 // and the active shot marker drift away from their true mm positions as
 // the canvas scales.
 function redrawOverlays() {
+    drawRings();
     drawCrosshair();
     drawPastShots();
     updatePrecisionCursorRadius();
@@ -435,24 +532,45 @@ window.addEventListener('load', () => {
 // lands outside the outermost zone with line-cutter slack applied. With
 // no zones configured we can't classify, so every click is treated as on
 // target (server fall-back is the same).
-const ZONE_RADII   = Array.isArray(window.APOLLO.zone_radii_mm)
-                        ? window.APOLLO.zone_radii_mm.map(parseFloat).filter(n => !isNaN(n))
-                        : [];
-const DEFAULT_SHAFT = parseFloat(window.APOLLO.default_shaft_diameter_mm) || 6.0;
+// Resolve zone radii / default shaft from window.APOLLO at call time —
+// the live target-swap rewrites window.APOLLO and a const snapshot would
+// keep the old face's values until the next page load.
+function currentZoneRadii() {
+    const r = window.APOLLO && window.APOLLO.zone_radii_mm;
+    return Array.isArray(r)
+        ? r.map(parseFloat).filter(n => !isNaN(n))
+        : [];
+}
+function currentDefaultShaftMm() {
+    return parseFloat(window.APOLLO && window.APOLLO.default_shaft_diameter_mm) || 6.0;
+}
 
 function currentShaftDiameterMm() {
     const arrowSel = document.getElementById('arrow_type');
     const name = arrowSel ? arrowSel.value : '';
     const map = window.ARROW_SHAFT_MM || {};
     const d = parseFloat(map[name]);
-    return (d && d > 0) ? d : DEFAULT_SHAFT;
+    return (d && d > 0) ? d : currentDefaultShaftMm();
 }
 
 function isOffTarget(x, y) {
-    if (!ZONE_RADII.length) return false;
+    const radii = currentZoneRadii();
+    if (!radii.length) return false;
     const shaftR = currentShaftDiameterMm() / 2;
-    const dist = Math.max(0, Math.hypot(x, y) - shaftR);
-    const outer = ZONE_RADII[ZONE_RADII.length - 1];
+    // Multi-spot faces (e.g. NFAA 5-spot): the shot lands on the
+    // closest spot, so an "off-target" check needs to measure distance
+    // to the nearest spot center, not the canvas center.
+    const fr = window.FACE_RENDER;
+    const centers = (fr && fr.multi_spot && Array.isArray(fr.multi_spot.centers_mm))
+        ? fr.multi_spot.centers_mm
+        : [[0, 0]];
+    let best = Infinity;
+    for (const c of centers) {
+        const d = Math.hypot(x - c[0], y - c[1]);
+        if (d < best) best = d;
+    }
+    const dist = Math.max(0, best - shaftR);
+    const outer = radii[radii.length - 1];
     return dist > outer;
 }
 
@@ -1076,6 +1194,59 @@ document.addEventListener('keydown', evt => {
         }
         nativeSubmit();
     };
+})();
+
+// ── Target picker: live canvas swap ──────────────────────────────────────
+// Selecting a different target should immediately swap the canvas image
+// and the physical dimensions in window.APOLLO so click→mm math uses the
+// right scale. Without this, clicks register against the previous target's
+// dimensions until the form is posted, which lands shots in the wrong
+// place (and visually shows the wrong face).
+(function liveTargetSwap() {
+    const sel = document.getElementById('target_id');
+    if (!sel || sel.disabled) return;  // locked mid-session
+    const stageInner = document.getElementById('stage-inner');
+    sel.addEventListener('change', async () => {
+        const newId = sel.value;
+        if (!newId) return;
+        try {
+            const res = await fetch('/api/target_config/' + encodeURIComponent(newId), {
+                headers: {'Accept': 'application/json'},
+            });
+            if (!res.ok) return;
+            const payload = await res.json();
+            if (!payload.ok || !payload.config) return;
+            const cfg = payload.config;
+            // Update the globals the shot math + ring overlay read from.
+            window.APOLLO = cfg;
+            window.FACE_RENDER = cfg.face_render || null;
+            // The CSS aspect-ratio is fixed at template render — override
+            // it inline so the new face's proportions are honored.
+            if (stageInner) {
+                stageInner.style.aspectRatio = cfg.img_width + ' / ' + cfg.img_height;
+            }
+            // Clear any pending click marker — it belongs to the old
+            // target's mm coordinates.
+            clearMarker && clearMarker();
+            xInput.value = '';
+            yInput.value = '';
+            readout.innerHTML = '<span style="color:#636a80">— click target —</span>';
+            // Swap the image when it actually changes; the load handler
+            // re-renders all overlays. Two tournament faces share the
+            // same placeholder URL — assigning the same src wouldn't
+            // re-fire 'load', so we force the redraw explicitly when
+            // the URL is unchanged.
+            const sameImage = (img.src === new URL(cfg.target_image_url, location.href).href);
+            if (sameImage) {
+                redrawOverlays();
+            } else {
+                img.src = cfg.target_image_url;
+            }
+        } catch (_) {
+            // Network blip — leave canvas as-is; next shot save will
+            // surface any real problem via the form post.
+        }
+    });
 })();
 
 </script>

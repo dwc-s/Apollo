@@ -129,6 +129,19 @@ BULLSEYE_RADIUS = 10   # in mm — not yet wired up (boundary logic TBD)
 # "Incorrect string value" on utf8 columns. Keeps the seeder portable
 # across SQLite and any MySQL configuration.
 TOURNAMENT_TARGET_NAME_PREFIX = '[Tournament] '
+
+
+def _display_target_name(name):
+    """Strip the internal `[Tournament] ` prefix for user-facing display.
+
+    The prefix stays in the DB so the seeder can find and refresh these
+    rows, but users see the bare face name (e.g. "WA 122cm 10-zone").
+    """
+    if name and isinstance(name, str) and name.startswith(TOURNAMENT_TARGET_NAME_PREFIX):
+        return name[len(TOURNAMENT_TARGET_NAME_PREFIX):]
+    return name
+
+
 TOURNAMENT_PLACEHOLDER_IMAGE  = 'targets/nasp_40cm.jpg'
 TOURNAMENT_PLACEHOLDER_PX     = 1197  # px edge of TOURNAMENT_PLACEHOLDER_IMAGE
 # Legacy prefix used by the very first tournament-mode release. The
@@ -248,47 +261,65 @@ _NFAA_RING_FG = '#ffffff'
 
 
 def _nfaa_indoor_blue_zones():
-    # 40cm face. X ring: 4cm diameter (20mm radius). 5 ring: 8cm
-    # diameter (40mm radius). Subsequent rings widen by 40mm radius
-    # each: 4=80, 3=120, 2=160, 1=200.
+    """40 cm NFAA Indoor Single-Spot face (§ I.D.2.a).
+
+    Spec: dull blue face with a white 8 cm center spot containing a
+    4 cm X-ring. Four equally-wide blue rings outside the spot score
+    4, 3, 2, 1 in descending order — (200 - 40) / 4 = 40 mm per ring,
+    so radii run 20, 40, 80, 120, 160, 200 mm innermost-out.
+
+    All blue scoring rings paint the same navy as ``face_bg``; the JS
+    overlay renders contrasting per-ring strokes so the boundaries
+    visible on the real face card show up here too.
+    """
     return [
-        (5, 20.0,  _NFAA_RING_FG),   # X ring
-        (5, 40.0,  _NFAA_RING_FG),   # inner 5
-        (4, 80.0,  _NFAA_RING_FG),
-        (3, 120.0, _NFAA_RING_FG),
-        (2, 160.0, _NFAA_RING_FG),
-        (1, 200.0, _NFAA_RING_FG),
+        (5, 20.0,  _NFAA_RING_FG),     # X — white center disc (4 cm dia)
+        (5, 40.0,  _NFAA_RING_FG),     # 5 — white spot (8 cm dia)
+        (4, 80.0,  _NFAA_BLUE_BG),     # 4 — blue ring (4 cm wide)
+        (3, 120.0, _NFAA_BLUE_BG),     # 3 — blue ring
+        (2, 160.0, _NFAA_BLUE_BG),     # 2 — blue ring
+        (1, 200.0, _NFAA_BLUE_BG),     # 1 — outer blue ring
     ]
 
 
 def _nfaa_5spot_zones():
-    """NFAA 5-spot — Apollo flattens the 5-face layout into one logical
-    face with two zones (X / 5). The per-spot constraint is enforced
-    visually only; users can click anywhere they actually hit."""
-    # Per-spot 5 ring is 8cm diameter (40mm radius); X is 4cm diameter
-    # (20mm radius). Outside the 5 = miss.
+    """NFAA 5-spot — Apollo treats each 16 cm spot as a logical face.
+
+    Per § I.D.2.b: scoring is identical to the Single-Spot face except
+    the outer 3 rings are absent — only the central white spot (5/X)
+    and a single 4-ring around it remain. Per spot:
+      X = 20 mm radius, 5 = 40 mm radius, 4 = 80 mm radius.
+    The 4-ring fills out to the 16 cm spot perimeter, same navy as
+    the face background.
+    """
     return [
-        (5, 20.0, _NFAA_RING_FG),
-        (5, 40.0, _NFAA_RING_FG),
+        (5, 20.0, _NFAA_RING_FG),      # X — white center (4 cm dia)
+        (5, 40.0, _NFAA_RING_FG),      # 5 — white spot (8 cm dia)
+        (4, 80.0, _NFAA_BLUE_BG),      # 4 — single blue ring per spot
     ]
 
 
 def _nfaa_field_zones(face_diameter_mm):
-    """NFAA Field / Hunter face — 3 scoring rings (5/4/3) with an inner
-    X tiebreak ring. Sized by face diameter; standard NFAA face sizes
-    are 65 / 50 / 35 / 20 cm.
+    """NFAA Field face — three scoring zones (5/4/3) plus inner X.
 
-    Ring outer radii as fraction of face diameter (so the 3-ring outer
-    edge coincides with the face edge at 0.50):
-      X = 0.10, 5 = 0.20, 4 = 0.334, 3 = 0.50.
-    For the 65 cm face this yields X=65, 5=130, 4≈217, 3=325 mm — the
-    published NFAA Field face dimensions.
+    Per § I.A.1.b: published outer face diameters are 65, 50, 35 and
+    20 cm. Standard ring diameters (per NFAA Constitution table):
+        X = 10% × face dia
+        5 = 20% × face dia
+        4 = 33.4% × face dia
+        3 = 100% × face dia (= the face edge)
+    Radii are therefore 5/10/16.7/50% of the face diameter. For 65 cm
+    that yields X=32.5 mm, 5=65 mm, 4≈108.5 mm, 3=325 mm.
+
+    Visually black-and-white only: outer 3-zone is black, the 4-zone
+    annulus is white, and the inner 5/X is a black spot with a white
+    X marker on top.
     """
     return [
-        (5, face_diameter_mm * 0.10,   _NFAA_RING_FG),
-        (5, face_diameter_mm * 0.20,   _NFAA_RING_FG),
-        (4, face_diameter_mm * 0.334,  _NFAA_RING_FG),
-        (3, face_diameter_mm * 0.50,   _NFAA_RING_FG),
+        (5, face_diameter_mm * 0.05,   '#1a1a1a'),       # X — black inner spot
+        (5, face_diameter_mm * 0.10,   '#1a1a1a'),       # 5 — black around X
+        (4, face_diameter_mm * 0.167,  _NFAA_RING_FG),   # 4 — white middle
+        (3, face_diameter_mm * 0.50,   '#1a1a1a'),       # 3 — outer black
     ]
 
 
@@ -300,6 +331,7 @@ TOURNAMENT_FACES = {
         'x_ring_mm':        30.5,
         'face_bg':          '#ffffff',
         'zones':            _wa_zones_10(610.0, 30.5),
+        'center_mark':      'cross',
     },
     # WA outdoor — 80cm 6-ring (compound 50m)
     'wa_80_6ring': {
@@ -308,6 +340,7 @@ TOURNAMENT_FACES = {
         'x_ring_mm':        20.0,
         'face_bg':          '#ffffff',
         'zones':            _wa_zones_6(400.0, 20.0),
+        'center_mark':      'cross',
     },
     # WA short-distance — 80cm 10-zone (50m / 30m on the 1440)
     'wa_80': {
@@ -316,6 +349,7 @@ TOURNAMENT_FACES = {
         'x_ring_mm':        20.0,
         'face_bg':          '#ffffff',
         'zones':            _wa_zones_10(400.0, 20.0),
+        'center_mark':      'cross',
     },
     # WA Indoor 25m — 60cm 10-zone
     'wa_60': {
@@ -324,6 +358,7 @@ TOURNAMENT_FACES = {
         'x_ring_mm':        15.0,
         'face_bg':          '#ffffff',
         'zones':            _wa_zones_10(300.0, 15.0),
+        'center_mark':      'cross',
     },
     # WA Indoor 18m — 40cm 10-zone
     'wa_40': {
@@ -332,6 +367,7 @@ TOURNAMENT_FACES = {
         'x_ring_mm':        10.0,
         'face_bg':          '#ffffff',
         'zones':            _wa_zones_10(200.0, 10.0),
+        'center_mark':      'cross',
     },
     # WA Indoor 18m compound — same face but 10 ring scores 9 (only X = 10).
     # Encoded by demoting the "10" zone to 9; X still 10.
@@ -353,23 +389,49 @@ TOURNAMENT_FACES = {
             (2,  180.0, '#ffffff'),
             (1,  200.0, '#ffffff'),
         ],
+        'center_mark':      'cross',
     },
     # NFAA Indoor Blue (single-spot) — 40cm
     'nfaa_indoor_blue': {
         'name':             'NFAA Indoor Blue',
         'physical_size_mm': 400.0,
         'x_ring_mm':        20.0,
-        'face_bg':          _NFAA_BLUE_BG,
+        # The face card is white; the round blue scoring face is
+        # inscribed in it (so the corners of the canvas stay white,
+        # matching the printed face card).
+        'face_bg':          '#ffffff',
         'zones':            _nfaa_indoor_blue_zones(),
+        'center_mark':      'x',
     },
-    # NFAA 5-spot — single representative spot (Apollo doesn't enforce
-    # per-spot placement; the rule is documented for the user).
+    # NFAA 5-spot — full 40 cm face card with five 16 cm spots in
+    # quincunx layout per § I.D.2.b. Each spot's center is given in mm
+    # relative to the face center; clicks score against the nearest
+    # spot. Per-spot zones (X / 5 / 4) live on each spot.
     'nfaa_5spot': {
-        'name':             'NFAA 5-spot (per spot)',
-        'physical_size_mm': 200.0,
-        'x_ring_mm':        20.0,
-        'face_bg':          _NFAA_BLUE_BG,
+        'name':             'NFAA 5-spot',
+        'physical_size_mm': 400.0,           # full face card (40 cm)
+        'x_ring_mm':        20.0,            # 4 cm X-ring dia per spot
+        'face_bg':          '#ffffff',       # face card is white
+        # The "zones" key is still required by the classifier; it
+        # carries the per-spot ring radii. The multi_spot.centers list
+        # below tells the classifier to score against the nearest spot
+        # rather than treating the canvas as a single concentric face.
         'zones':            _nfaa_5spot_zones(),
+        'multi_spot':       {
+            # Quincunx — center spot at face center, four corner spots
+            # offset by ±120 mm on each axis. With a spot radius of
+            # 80 mm and a face radius of 200 mm, that puts each corner
+            # spot tangent to two face-card edges (120 + 80 = 200) and
+            # leaves a ~10 mm clearance from the center spot's outer
+            # ring (sqrt(2)·120 - 160 ≈ 9.7 mm), matching the printed
+            # NFAA 5-spot face card.
+            'centers_mm':   [
+                (0.0, 0.0),
+                (-120.0,  120.0), (120.0,  120.0),
+                (-120.0, -120.0), (120.0, -120.0),
+            ],
+        },
+        'center_mark':      'x',
     },
     # Vegas 40cm 3-spot — per spot is 20 cm with rings 10..6 visible
     # plus an inner-X. Each spot derives from the WA 40 cm face; ring
@@ -381,39 +443,45 @@ TOURNAMENT_FACES = {
         'x_ring_mm':        10.0,
         'face_bg':          '#ffffff',
         'zones':            _wa_zones_vegas(100.0, 10.0),
+        'center_mark':      'x',
     },
     # NFAA Field / Hunter — 4 face sizes used at different distances
     # on the 28-target course. Same scoring rings on Field (white
     # center) and Hunter (black face) variants; Apollo encodes the
     # scoring geometry once and lets the round pick which face label
     # to apply.
+    # X-ring diameter is 10% of face diameter → radius is 5% of face dia.
     'nfaa_field_65': {
         'name':             'NFAA Field 65cm',
         'physical_size_mm': 650.0,
-        'x_ring_mm':        65.0,
+        'x_ring_mm':        650.0 * 0.05,
         'face_bg':          '#ffffff',
         'zones':            _nfaa_field_zones(650.0),
+        'center_mark':      'x',
     },
     'nfaa_field_50': {
         'name':             'NFAA Field 50cm',
         'physical_size_mm': 500.0,
-        'x_ring_mm':        50.0,
+        'x_ring_mm':        500.0 * 0.05,
         'face_bg':          '#ffffff',
         'zones':            _nfaa_field_zones(500.0),
+        'center_mark':      'x',
     },
     'nfaa_field_35': {
         'name':             'NFAA Field 35cm',
         'physical_size_mm': 350.0,
-        'x_ring_mm':        35.0,
+        'x_ring_mm':        350.0 * 0.05,
         'face_bg':          '#ffffff',
         'zones':            _nfaa_field_zones(350.0),
+        'center_mark':      'x',
     },
     'nfaa_field_20': {
         'name':             'NFAA Field 20cm',
         'physical_size_mm': 200.0,
-        'x_ring_mm':        20.0,
+        'x_ring_mm':        200.0 * 0.05,
         'face_bg':          '#ffffff',
         'zones':            _nfaa_field_zones(200.0),
+        'center_mark':      'x',
     },
     # WA Field 6-zone faces (rings 6..1 with inner-X for compound).
     # Used on the 24-target WA Field course at varying distances.
@@ -423,6 +491,7 @@ TOURNAMENT_FACES = {
         'x_ring_mm':        800.0 / 12.0,
         'face_bg':          '#fff44f',
         'zones':            _wa_field_zones(800.0),
+        'center_mark':      'cross',
     },
     'wa_field_60': {
         'name':             'WA Field 60cm',
@@ -430,6 +499,7 @@ TOURNAMENT_FACES = {
         'x_ring_mm':        600.0 / 12.0,
         'face_bg':          '#fff44f',
         'zones':            _wa_field_zones(600.0),
+        'center_mark':      'cross',
     },
     'wa_field_40': {
         'name':             'WA Field 40cm',
@@ -437,6 +507,7 @@ TOURNAMENT_FACES = {
         'x_ring_mm':        400.0 / 12.0,
         'face_bg':          '#fff44f',
         'zones':            _wa_field_zones(400.0),
+        'center_mark':      'cross',
     },
     'wa_field_20': {
         'name':             'WA Field 20cm',
@@ -444,6 +515,7 @@ TOURNAMENT_FACES = {
         'x_ring_mm':        200.0 / 12.0,
         'face_bg':          '#fff44f',
         'zones':            _wa_field_zones(200.0),
+        'center_mark':      'cross',
     },
     # WA Field 20cm compound variant — only inner-6 (X) ring scores 6;
     # outer 6 ring demoted to 5. Per WA Book 4 § Field for compound
@@ -454,6 +526,7 @@ TOURNAMENT_FACES = {
         'x_ring_mm':        200.0 / 12.0,
         'face_bg':          '#fff44f',
         'zones':            _wa_field_zones_compound(200.0),
+        'center_mark':      'cross',
     },
     # NASP 80cm (10-ring) — face retained for backward compatibility
     # with seeded rows; NASP rounds are no longer offered in the
@@ -1131,6 +1204,74 @@ def _round_total_arrows(round_def):
     )
 
 
+# Tournament face display-name aliases — old names that have been
+# renamed in the spec. Each entry maps the old display name (without
+# the `[Tournament] ` prefix) to the current name. The seeder uses this
+# to rename any pre-existing rows so the reverse lookup
+# (_tournament_face_key_for_target_name) keeps finding them.
+_TOURNAMENT_FACE_NAME_ALIASES = {
+    'NFAA 5-spot (per spot)': 'NFAA 5-spot',
+}
+
+
+def _migrate_renamed_tournament_faces(user_id):
+    """Update existing tournament face rows whose display name has
+    been changed by a later Apollo build.
+
+    If the user has only the old name, rename it. If they have both
+    (because the new name was seeded as a separate row after the
+    rename), deactivate the old one — the new row carries the up-to-
+    date scoring zones and ring spec, and we don't want the dropdown
+    listing both.
+    """
+    if user_id is None or not _TOURNAMENT_FACE_NAME_ALIASES:
+        return
+    try:
+        with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
+            for old_bare, new_bare in _TOURNAMENT_FACE_NAME_ALIASES.items():
+                old_name = TOURNAMENT_TARGET_NAME_PREFIX + old_bare
+                new_name = TOURNAMENT_TARGET_NAME_PREFIX + new_bare
+                old_row = cur.execute(
+                    "SELECT id FROM targets WHERE user_id = %s AND name = %s LIMIT 1",
+                    (user_id, old_name)
+                ).fetchone()
+                if old_row is None:
+                    continue
+                new_row = cur.execute(
+                    "SELECT id FROM targets WHERE user_id = %s AND name = %s LIMIT 1",
+                    (user_id, new_name)
+                ).fetchone()
+                if new_row is None:
+                    # Only the old row exists — rename in place. The
+                    # main seed will refresh its zones from the current
+                    # spec, so the renamed row picks up the new layout
+                    # without dropping any historical shot data attached
+                    # to it.
+                    try:
+                        cur.execute(
+                            "UPDATE targets SET name = %s WHERE id = %s AND user_id = %s",
+                            (new_name, int(old_row[0]), user_id)
+                        )
+                    except SQLAlchemyError:
+                        continue
+                else:
+                    # Both exist — keep the new row (its zones already
+                    # match the current spec) and hide the legacy row
+                    # from the dropdown. Don't delete it: historical
+                    # shots may still reference its target_id.
+                    try:
+                        cur.execute(
+                            "UPDATE targets SET is_active = 0, is_default = 0 "
+                            "WHERE id = %s AND user_id = %s",
+                            (int(old_row[0]), user_id)
+                        )
+                    except SQLAlchemyError:
+                        continue
+            con.commit()
+    except SQLAlchemyError:
+        pass
+
+
 def _migrate_legacy_tournament_prefix(user_id):
     """Best-effort rename of any 🏆-prefixed tournament face rows from
     the very first Apollo build to the current ASCII prefix.
@@ -1199,6 +1340,18 @@ def _seed_tournament_faces(user_id):
     out = {}
     try:
         with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
+            # Backfill: tournament faces seeded under the prior policy
+            # have is_default=0; bring them in line with the new "all
+            # tournament faces are defaults" rule before re-seeding.
+            # Restricted to rows whose bare name matches a *current*
+            # face so the rename migration below can deactivate stale
+            # rows without this backfill re-activating them.
+            cur.execute(
+                "UPDATE targets SET is_default = 1, is_active = 1 "
+                "WHERE user_id = %s AND name LIKE %s "
+                "AND (is_default = 0 OR is_active = 0)",
+                (user_id, TOURNAMENT_TARGET_NAME_PREFIX + '%')
+            )
             for face_key, face in TOURNAMENT_FACES.items():
                 name = TOURNAMENT_TARGET_NAME_PREFIX + face['name']
                 row = cur.execute(
@@ -1210,7 +1363,7 @@ def _seed_tournament_faces(user_id):
                         "INSERT INTO targets "
                         "(user_id, name, image_filename, physical_size_mm, "
                         "image_size_px, is_active, is_default) "
-                        "VALUES (%s, %s, %s, %s, %s, 1, 0)",
+                        "VALUES (%s, %s, %s, %s, %s, 1, 1)",
                         (user_id, name, TOURNAMENT_PLACEHOLDER_IMAGE,
                          float(face['physical_size_mm']),
                          TOURNAMENT_PLACEHOLDER_PX)
@@ -1254,6 +1407,12 @@ def _seed_tournament_faces(user_id):
         print(f"⚠️ Tournament face seeding failed for user {user_id}: {e}")
         traceback.print_exc()
         return {}
+    # Rename / deactivate any rows that still carry a previous Apollo
+    # build's display name (e.g. "NFAA 5-spot (per spot)" → "NFAA
+    # 5-spot"). Runs AFTER the main seed/backfill so the deactivation
+    # of duplicate stale rows isn't immediately undone by the backfill's
+    # "set is_active=1 for all tournament rows" sweep above.
+    _migrate_renamed_tournament_faces(user_id)
     return out
 
 
@@ -1295,6 +1454,14 @@ def _tournament_face_render_payload(face_key):
             for (pv, r, c) in reversed(face['zones'])
         ],
         'x_ring_mm':        face['x_ring_mm'],
+        # 'x' or 'cross' (or None) — the small center mark painted on
+        # top of the innermost ring so users can see the exact center
+        # without relying on the X-ring boundary alone.
+        'center_mark':      face.get('center_mark'),
+        # When present, the face renders as multiple identical spots
+        # (e.g. NFAA 5-spot). centers_mm are spot centers relative to
+        # the face center; rings/center_mark are drawn at each spot.
+        'multi_spot':       face.get('multi_spot'),
     }
 
 
@@ -1364,23 +1531,40 @@ def _compute_tournament_progress(session_id, user_id, round_def):
         seg_face = TOURNAMENT_FACES.get(seg['face_key'], {})
         x_ring_radius = float(seg_face.get('x_ring_mm') or 0.0)
         seg_arrows_per_end = int(seg['arrows_per_end'])
+        # Multi-spot faces (NFAA 5-spot): a shot is scored against the
+        # nearest spot center. Pull the per-face spec straight from
+        # TOURNAMENT_FACES — this is the in-memory canonical, so the
+        # data is always current even if the row's seeded copy lags.
+        seg_centers = None
+        seg_multi = seg_face.get('multi_spot') or None
+        if seg_multi and seg_multi.get('centers_mm'):
+            seg_centers = list(seg_multi['centers_mm'])
 
         xraw = str(r['x_coord']).strip() if r['x_coord'] is not None else ''
         yraw = str(r['y_coord']).strip() if r['y_coord'] is not None else ''
         shaft = _row_get(r, 'arrow_shaft_diameter')
-        points = _score_one_shot(xraw, yraw, _zones(r['target_id']), shaft)
+        points = _score_one_shot(xraw, yraw, _zones(r['target_id']), shaft,
+                                 spot_centers_mm=seg_centers)
         out['total_score'] += points
         seg_max = max((pv for pv, _r, _c in (seg_face.get('zones') or ())),
                       default=0)
         if seg_max and points == seg_max:
             out['ten_count'] += 1
-        # X count: inside the X ring (using line-cutter slack).
+        # X count: inside the X ring (using line-cutter slack). For
+        # multi-spot faces, measure to the nearest spot center.
         if (xraw != MISS_SENTINEL and yraw != MISS_SENTINEL
                 and x_ring_radius > 0):
             try:
                 x = float(xraw); y = float(yraw)
                 shaft_r = _parse_shaft_diameter_mm(shaft) / 2.0
-                eff = max(0.0, math.sqrt(x*x + y*y) - shaft_r)
+                if seg_centers:
+                    d_to_nearest = min(
+                        math.sqrt((x - sx) ** 2 + (y - sy) ** 2)
+                        for (sx, sy) in seg_centers
+                    )
+                    eff = max(0.0, d_to_nearest - shaft_r)
+                else:
+                    eff = max(0.0, math.sqrt(x*x + y*y) - shaft_r)
                 if eff <= x_ring_radius:
                     out['x_count'] += 1
             except (TypeError, ValueError):
@@ -2827,26 +3011,52 @@ def _seed_user_default_target(user_id):
         print(f"⚠️ Failed to seed default target for user {user_id}: {e}")
 
 
+def _tournament_face_key_for_target_name(name):
+    """Reverse-lookup: target row name → tournament face_key.
+
+    Tournament faces are stored as rows whose name is the prefix plus the
+    face's display name. Returning the face_key lets callers attach the
+    canonical ring payload (colors, radii) for client-side overlay.
+    Returns None when the row isn't a tournament face.
+    """
+    if not name or not isinstance(name, str):
+        return None
+    if not name.startswith(TOURNAMENT_TARGET_NAME_PREFIX):
+        return None
+    bare = name[len(TOURNAMENT_TARGET_NAME_PREFIX):]
+    for key, face in TOURNAMENT_FACES.items():
+        if face.get('name') == bare:
+            return key
+    return None
+
+
 def target_to_config(row):
     """Shape a target DB row into the dict templates/JS expect.
 
     image_filename is stored as a path relative to static/ — legacy seed
     is "target.jpg", new uploads are "targets/<unique>.jpg" — so it can
-    be handed straight to url_for('static', filename=…).
+    be handed straight to url_for('static', filename=…). For tournament
+    faces, ``face_render`` carries the colored ring spec so the canvas
+    overlay shows the correct face regardless of the placeholder image
+    underneath.
     """
     if row is None:
         return None
+    face_key = _tournament_face_key_for_target_name(row['name'])
+    face_render = (_tournament_face_render_payload(face_key)
+                   if face_key else None)
     # Targets are square — width and height are both physical_size_mm /
     # image_size_px. The duplicated keys keep templates simple (and let us
     # add non-square targets later without changing the template surface).
     return {
         'target_id':        row['rowid'],
-        'name':             row['name'],
+        'name':             _display_target_name(row['name']),
         'target_image':     row['image_filename'],
         'img_width':        row['image_size_px'],
         'img_height':       row['image_size_px'],
         'target_width_mm':  row['physical_size_mm'],
         'target_height_mm': row['physical_size_mm'],
+        'face_render':      face_render,
     }
 
 def get_db_connection():
@@ -2903,33 +3113,60 @@ def _arrow_shaft_diameters_for_user(user_id):
 def get_past_shots(session_id, quiver_size, arrows_remaining, user_id):
     """Return shots from the current in-progress quiver for display on the target.
 
-    Strategy: after each shot is saved, arrows_remaining is decremented.
-    So shots fired in this quiver = quiver_size - arrows_remaining.
-    We grab that many rows from the tail of this session's shot log.
+    Strategy: read the tail of the session's shot log and use the last
+    row's *stored* quiver_size and arrows_remaining (pre-decrement) to
+    work out how many shots belong to the current quiver. The position
+    of that last shot within its own quiver is
+    ``quiver_size - arrows_remaining + 1`` — those are the rows we
+    want to redraw. If the last shot had ``arrows_remaining == 1`` it
+    completed a quiver and the canvas should clear for the next one.
+
+    Reading the count from the DB row (rather than the cookie's
+    arrows_remaining) keeps the redraw correct after a recall: deleting
+    a row changes which row is "last" and therefore which quiver is
+    "current", regardless of how the cookie's counter has been rewound.
+    The ``quiver_size`` and ``arrows_remaining`` arguments are accepted
+    for callsite-compat and are only consulted when the session has no
+    shot rows yet.
 
     Misses (sentinel coords *or* hits that fell outside the target's
     outermost zone) are filtered out — they're recorded in the DB but
     shouldn't be rendered as markers on the target image; the visual
     treatment matches the "Missed target" button.
-
-    When a quiver has just completed, arrows_remaining has been reset to
-    quiver_size, so shots_fired == 0 and the function returns [] — the
-    target image clears for the start of the next quiver.
     """
-    try:
-        shots_fired = int(quiver_size or 0) - int(arrows_remaining or 0)
-    except (ValueError, TypeError):
-        return []
-    if shots_fired <= 0:
+    del quiver_size, arrows_remaining  # superseded by DB-derived counts
+    if session_id is None or user_id is None:
         return []
     try:
         with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
+            last = cur.execute(
+                "SELECT quiver_size, arrows_remaining FROM apollo "
+                "WHERE session_id = %s AND user_id = %s "
+                "ORDER BY id DESC LIMIT 1",
+                (session_id, user_id)
+            ).fetchone()
+            if not last:
+                return []
+            try:
+                last_qs = int(last['quiver_size']
+                              if 'quiver_size' in last else last[0])
+                last_ar = int(last['arrows_remaining']
+                              if 'arrows_remaining' in last else last[1])
+            except (TypeError, ValueError):
+                return []
+            if last_qs <= 0 or last_ar <= 1:
+                # ar == 1 on the last row means that shot just completed
+                # a quiver, so the canvas should be blank for the next.
+                return []
+            shots_in_quiver = last_qs - last_ar + 1
+            if shots_in_quiver <= 0:
+                return []
             rows = cur.execute(
                 """SELECT x_coord, y_coord, target_id, arrow_shaft_diameter FROM apollo
                    WHERE session_id = %s AND user_id = %s
                    ORDER BY id DESC
                    LIMIT %s""",
-                (session_id, user_id, shots_fired)
+                (session_id, user_id, shots_in_quiver)
             ).fetchall()
         rows = list(reversed(rows))    # ORDER BY DESC + reverse = chronological
         # The session locks the target after the first shot, so a single
@@ -2938,6 +3175,8 @@ def get_past_shots(session_id, quiver_size, arrows_remaining, user_id):
         # sentinel-only filter, since we can't classify off-target.
         target_id = rows[0]['target_id'] if rows else None
         zones = _fetch_target_zones(target_id, user_id) if target_id is not None else []
+        spot_centers = (_target_multi_spot_centers(target_id, user_id)
+                        if target_id is not None else None)
         out = []
         for row in rows:
             xraw = str(row['x_coord']).strip() if row['x_coord'] is not None else ''
@@ -2945,7 +3184,8 @@ def get_past_shots(session_id, quiver_size, arrows_remaining, user_id):
             if xraw == MISS_SENTINEL and yraw == MISS_SENTINEL:
                 continue
             if zones and _classify_shot(xraw, yraw, zones,
-                                        row['arrow_shaft_diameter']) is None:
+                                        row['arrow_shaft_diameter'],
+                                        spot_centers_mm=spot_centers) is None:
                 continue
             out.append({"x": float(row["x_coord"]), "y": float(row["y_coord"])})
         return out
@@ -3663,6 +3903,7 @@ def register():
     # creating a confusing duplicate).
     _claim_orphan_data(new_user_id)
     _seed_user_default_target(new_user_id)
+    _seed_tournament_faces(new_user_id)
 
     # Log the new user in immediately — modern UX expectation, and skips
     # the awkward "now go to the login page" handoff.
@@ -3752,6 +3993,9 @@ def login():
 
     _rotate_session(int(user_row['id']))
     _record_successful_login(int(user_row['id']))
+    # Backfill tournament faces for pre-existing users: the seeder is
+    # idempotent — no-op if the rows already exist with the right flags.
+    _seed_tournament_faces(int(user_row['id']))
     return redirect(next_url or url_for('index'))
 
 
@@ -4549,7 +4793,7 @@ def sesh():
             "WHERE is_active = 1 AND user_id = %s ORDER BY name",
             (user_id,)
         ).fetchall()
-        targets_list = [{'rowid': r['rowid'], 'name': r['name']} for r in target_rows]
+        targets_list = [{'rowid': r['rowid'], 'name': _display_target_name(r['name'])} for r in target_rows]
 
     # Has this session already saved any shots? If so, the target is locked
     # in — switching mid-session would invalidate the replay's single-image
@@ -4877,6 +5121,28 @@ def sesh():
                            selected_target_id=session.get('target_id'),
                            target_locked=target_locked,
                            target_config=target_config)
+
+
+@app.route('/api/target_config/<int:target_id>', methods=['GET'])
+@login_required
+def api_target_config(target_id):
+    """Return the target config JSON for a given target_id.
+
+    Used by /sesh's target dropdown to hot-swap the canvas image and
+    physical dimensions when the user picks a different target without
+    posting the form. Scoped to the current user — a request for a
+    target id that doesn't belong to the caller returns 404 rather than
+    leaking another user's target metadata.
+    """
+    user_id = current_user_id()
+    cfg = target_to_config(get_target(target_id, user_id))
+    if cfg is None:
+        return jsonify(ok=False), 404
+    cfg['zone_radii_mm'] = _zone_radii_for_target(target_id, user_id)
+    cfg['default_shaft_diameter_mm'] = DEFAULT_SHAFT_DIAMETER_MM
+    cfg['target_image_url'] = url_for('static',
+                                      filename=cfg['target_image'])
+    return jsonify(ok=True, config=cfg)
 
 
 @app.route('/recall_arrow', methods=['POST'])
@@ -6503,7 +6769,7 @@ def edit_session(session_id):
                 "WHERE is_active = 1 AND user_id = %s ORDER BY name",
                 (user_id,)
             ).fetchall()
-            targets_list = [{'rowid': r['rowid'], 'name': r['name']} for r in target_rows]
+            targets_list = [{'rowid': r['rowid'], 'name': _display_target_name(r['name'])} for r in target_rows]
     except SQLAlchemyError as e:
         print(f"❌ Edit-session error: {e}")
         flash("Could not load session for editing — please try again.")
@@ -7543,7 +7809,8 @@ def _parse_shaft_diameter_mm(raw):
     return d
 
 
-def _classify_shot(xraw, yraw, zones, shaft_diameter_mm=None):
+def _classify_shot(xraw, yraw, zones, shaft_diameter_mm=None,
+                   spot_centers_mm=None):
     """Return the zone index a shot lands in, or ``None`` for a miss.
 
     Innermost zone is index 0. A return of ``None`` covers both the
@@ -7553,6 +7820,11 @@ def _classify_shot(xraw, yraw, zones, shaft_diameter_mm=None):
     effective distance from center is ``hypot(x, y) - shaft_radius``.
 
     ``zones`` must be sorted innermost-out.
+
+    ``spot_centers_mm`` — when given, the face has multiple identical
+    spots (e.g. NFAA 5-spot). The shot is scored against the nearest
+    spot center; effective distance is measured from that spot, so a
+    click anywhere on the face lands on the closest scoring spot.
     """
     if xraw == MISS_SENTINEL and yraw == MISS_SENTINEL:
         return None
@@ -7562,7 +7834,18 @@ def _classify_shot(xraw, yraw, zones, shaft_diameter_mm=None):
     except (TypeError, ValueError):
         return None
     shaft_radius = _parse_shaft_diameter_mm(shaft_diameter_mm) / 2.0
-    dist = math.sqrt(x * x + y * y) - shaft_radius
+    if spot_centers_mm:
+        # Distance from each spot center; smallest wins. The classifier
+        # then runs against that spot's local zones (same `zones` for
+        # every spot on these faces — they're identical by definition).
+        best = None
+        for (sx, sy) in spot_centers_mm:
+            d = math.sqrt((x - sx) ** 2 + (y - sy) ** 2)
+            if best is None or d < best:
+                best = d
+        dist = (best or 0.0) - shaft_radius
+    else:
+        dist = math.sqrt(x * x + y * y) - shaft_radius
     if dist < 0:
         dist = 0.0
     for i, z in enumerate(zones):
@@ -7578,15 +7861,49 @@ def _classify_shot(xraw, yraw, zones, shaft_diameter_mm=None):
     return None
 
 
-def _score_one_shot(xraw, yraw, zones, shaft_diameter_mm=None):
+def _score_one_shot(xraw, yraw, zones, shaft_diameter_mm=None,
+                    spot_centers_mm=None):
     """Points for a single shot. Misses and out-of-zone hits score 0."""
-    idx = _classify_shot(xraw, yraw, zones, shaft_diameter_mm)
+    idx = _classify_shot(xraw, yraw, zones, shaft_diameter_mm,
+                         spot_centers_mm=spot_centers_mm)
     if idx is None:
         return 0
     try:
         return int(zones[idx]['point_value'] or 0)
     except (TypeError, ValueError):
         return 0
+
+
+def _target_multi_spot_centers(target_id, user_id):
+    """Return spot centers (mm) for a multi-spot tournament face, else None.
+
+    Looks up the target row's name, reverse-maps it to a tournament
+    face_key, and pulls the centers from TOURNAMENT_FACES. Used by
+    scoring/filter paths so a click anywhere on a multi-spot face
+    (e.g. NFAA 5-spot) scores against the nearest spot.
+    """
+    if target_id is None or user_id is None:
+        return None
+    try:
+        with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
+            row = cur.execute(
+                "SELECT name FROM targets WHERE id = %s AND user_id = %s LIMIT 1",
+                (target_id, user_id)
+            ).fetchone()
+    except SQLAlchemyError:
+        return None
+    if not row:
+        return None
+    name = row['name'] if 'name' in row else row[0]
+    key = _tournament_face_key_for_target_name(name)
+    if not key:
+        return None
+    face = TOURNAMENT_FACES.get(key)
+    if not face:
+        return None
+    ms = face.get('multi_spot') or {}
+    centers = ms.get('centers_mm')
+    return list(centers) if centers else None
 
 
 def _shot_effective_draw_weight(shot_row):
@@ -8670,11 +8987,11 @@ def _report_all_shots_per_target(user_id, date_from=None, date_to=None):
             # measured about the *centroid*, so they describe precision
             # independent of how far the centroid drifted from the bull.
             ax.add_patch(Circle((mean_x, mean_y), stats['mr'],
-                                fill=False, edgecolor='#00e0ff',
+                                fill=False, edgecolor='#a1d8ed',
                                 linewidth=1.6, linestyle='-', zorder=4,
                                 label='MR'))
             ax.add_patch(Circle((mean_x, mean_y), stats['r95'],
-                                fill=False, edgecolor='#9ad0ff',
+                                fill=False, edgecolor='#95abcf',
                                 linewidth=1.4, linestyle='--', zorder=4,
                                 label='R95'))
             # Faint 1σ covariance ellipse — exposes stringing (vertical or
@@ -8711,8 +9028,8 @@ def _report_all_shots_per_target(user_id, date_from=None, date_to=None):
                     width=max(half * 0.004, 0.4),
                     head_width=max(half * 0.018, 2.5),
                     head_length=max(half * 0.025, 3.5),
-                    color='#ff3366', alpha=0.85, zorder=5))
-            ax.plot(mean_x, mean_y, marker='x', color='#ff3366',
+                    color='#c79b5a', alpha=0.85, zorder=5))
+            ax.plot(mean_x, mean_y, marker='x', color='#c79b5a',
                     markersize=14, markeredgewidth=2.4, zorder=6)
         else:
             mean_x = mean_y = 0
@@ -10180,9 +10497,9 @@ def _report_accuracy_over_time(user_id, date_from=None, date_to=None):
     import matplotlib.dates as mdates
 
     fig, ax = plt.subplots(figsize=(9, 4.5))
-    ax.plot(line_x, line_mpi, color='#c0392b', marker='o', linewidth=1.8,
+    ax.plot(line_x, line_mpi, color='#1a3a5c', marker='o', linewidth=1.8,
             markersize=5, label='Accuracy — MPI')
-    ax.plot(line_x, line_r95, color='#1a7a3a', marker='s', linewidth=1.8,
+    ax.plot(line_x, line_r95, color='#c79b5a', marker='s', linewidth=1.8,
             markersize=5, label='Precision — R95')
     ax.set_xlabel(f'Session start ({period_label} buckets)')
     ax.set_ylabel('Normalized units (1.0 = target edge)\nlower is better')
@@ -10218,8 +10535,8 @@ def _report_accuracy_over_time(user_id, date_from=None, date_to=None):
         '<strong>Precision</strong> is how tightly your shots cluster '
         'around their own centroid, regardless of where that centroid '
         'sits — a consistency error you fix with form, tuning, and '
-        'execution. The red <em>MPI</em> trace tracks accuracy; the '
-        'green <em>R95</em> trace tracks precision. Both can improve '
+        'execution. The blue <em>MPI</em> trace tracks accuracy; the '
+        'amber <em>R95</em> trace tracks precision. Both can improve '
         'or worsen independently.'
         '</p>'
     )
@@ -10408,10 +10725,10 @@ def _report_within_session_drift(user_id):
                label='Sessions reaching this quiver')
     ax_bar.set_ylabel('Sessions reaching this quiver', color='#5a6b8a')
     ax_bar.tick_params(axis='y', labelcolor='#5a6b8a')
-    ax.plot(line_x, line_mpi, color='#c0392b', marker='o',
+    ax.plot(line_x, line_mpi, color='#1a3a5c', marker='o',
             linewidth=1.8, markersize=5, zorder=3,
             label='Accuracy — MPI')
-    ax.plot(line_x, line_r95, color='#1a7a3a', marker='s',
+    ax.plot(line_x, line_r95, color='#c79b5a', marker='s',
             linewidth=1.8, markersize=5, zorder=3,
             label='Precision — R95')
     ax.set_xlabel('Quiver index within session (1 = first quiver)')
@@ -10644,30 +10961,30 @@ def _report_accuracy_precision_traces(user_id, date_from=None, date_to=None):
 
     fig, ax = plt.subplots(figsize=(10, 5.2))
 
-    # Accuracy traces — red family. Precision traces — green family.
+    # Accuracy traces — blue family. Precision traces — amber family.
     # Vary style/marker per granularity so the six lines are tellable
     # apart at a glance.
     if session_dates:
-        ax.plot(session_dates, session_mpi, color='#c0392b',
+        ax.plot(session_dates, session_mpi, color='#1a3a5c',
                 marker='o', markersize=4, linewidth=1.4,
                 linestyle='-', label='Accuracy — per session (MPI)')
-        ax.plot(session_dates, session_r95, color='#1a7a3a',
+        ax.plot(session_dates, session_r95, color='#c79b5a',
                 marker='s', markersize=4, linewidth=1.4,
                 linestyle='-', label='Precision — per session (R95)')
     if quiver_dates:
-        ax.plot(quiver_dates, quiver_mpi, color='#e67e6f',
+        ax.plot(quiver_dates, quiver_mpi, color='#6f8cbf',
                 marker='.', markersize=4, linewidth=0.9,
                 linestyle=':', alpha=0.75,
                 label='Accuracy — per quiver (MPI)')
-        ax.plot(quiver_dates, quiver_r95, color='#6fb88a',
+        ax.plot(quiver_dates, quiver_r95, color='#d4b988',
                 marker='.', markersize=4, linewidth=0.9,
                 linestyle=':', alpha=0.75,
                 label='Precision — per quiver (R95)')
     if alltime_dates:
-        ax.plot(alltime_dates, alltime_mpi, color='#7a1a10',
+        ax.plot(alltime_dates, alltime_mpi, color='#0d1f3a',
                 marker='^', markersize=4, linewidth=2.0,
                 linestyle='--', label='Accuracy — all-time rolling (MPI)')
-        ax.plot(alltime_dates, alltime_r95, color='#0d4a23',
+        ax.plot(alltime_dates, alltime_r95, color='#8e6a3a',
                 marker='v', markersize=4, linewidth=2.0,
                 linestyle='--', label='Precision — all-time rolling (R95)')
 
@@ -10685,8 +11002,8 @@ def _report_accuracy_precision_traces(user_id, date_from=None, date_to=None):
         'accurate (centroid closer to bullseye) or more precise '
         '(tighter group), and on what timescale? Six traces share a '
         'date axis: per-session (solid), per-quiver (dotted), and the '
-        'all-time rolling pool (dashed). Red traces are accuracy '
-        '(MPI); green traces are precision (R95). All values are '
+        'all-time rolling pool (dashed). Blue traces are accuracy '
+        '(MPI); amber traces are precision (R95). All values are '
         'normalized by target half-width so mixed targets are '
         'comparable. Misses are excluded.'
         '</p>'
@@ -10923,8 +11240,8 @@ def _report_draw_weight_traces(user_id, date_from=None, date_to=None):
     # Each bow gets a base hue. Accuracy and precision share the hue;
     # marker shape and linestyle differentiate the four traces per bow.
     palette = [
-        '#c0392b', '#2e7a8e', '#7a4ec0', '#c97a4a', '#1a7a3a',
-        '#7a1a5c', '#1a3a7a', '#7a6a1a', '#5c1a7a', '#1a7a7a',
+        '#1a3a5c', '#c79b5a', '#4d6da6', '#8e6a3a', '#95abcf',
+        '#d4b988', '#2e5680', '#b87a52', '#636a80', '#a1d8ed',
     ]
     fig, ax = plt.subplots(figsize=(10, 5.6))
     bow_keys = list(bow_series.keys())
@@ -11593,7 +11910,7 @@ def _report_calendar_heatmap(user_id):
     years = list(range(first_d.year, last_d.year + 1))
     cmap = LinearSegmentedColormap.from_list(
         'apollo_volume',
-        ['#eef3fa', '#a8c4e8', '#4d6da6', '#c0392b'],
+        ['#eef3fa', '#a8c4e8', '#4d6da6', '#c79b5a'],
     )
     max_shots = max(per_day.values())
     norm = Normalize(vmin=0, vmax=max(1, max_shots))
@@ -11973,12 +12290,12 @@ def _report_quiver_spread(user_id, date_from=None, date_to=None,
 
     xs = list(range(1, len(quivers) + 1))
     fig, ax = plt.subplots(figsize=(9, 4.5))
-    ax.fill_between(xs, smallest, biggest, color='#a3b6d2', alpha=0.25,
+    ax.fill_between(xs, smallest, biggest, color='#b3c6e3', alpha=0.25,
                     label='Within-quiver gap')
-    ax.plot(xs, biggest, color='#c0392b', marker='o',
+    ax.plot(xs, biggest, color='#1a3a5c', marker='o',
             linewidth=1.6, markersize=4,
             label='Biggest spread (max pair)')
-    ax.plot(xs, smallest, color='#1a7a3a', marker='s',
+    ax.plot(xs, smallest, color='#c79b5a', marker='s',
             linewidth=1.6, markersize=4,
             label='Smallest spread (min pair)')
     ax.set_xlabel('Session date (sequential quivers in date range)')
@@ -12014,8 +12331,8 @@ def _report_quiver_spread(user_id, date_from=None, date_to=None,
         '<p class="report-intro">'
         '<strong>What this answers:</strong> for each completed quiver, '
         'how spread out were the arrows across the <em>whole target</em>? '
-        'The red trace is the worst pair (biggest gap between any two '
-        'arrows in the quiver); the green trace is the tightest pair. '
+        'The blue trace is the worst pair (biggest gap between any two '
+        'arrows in the quiver); the amber trace is the tightest pair. '
         'The shaded band between them is the within-quiver spread '
         'gap — a thinner band means a more consistent group. '
         'Distances are normalized by the target face width, so '
@@ -12087,8 +12404,8 @@ REPORTS = {
         'label': 'Accuracy & precision traces',
         'description': 'Accuracy and precision on a single timeline at '
                        'three granularities, overlaid: per session, per '
-                       'quiver, and as an all-time rolling pool. Red '
-                       'traces are accuracy (MPI); green traces are '
+                       'quiver, and as an all-time rolling pool. Blue '
+                       'traces are accuracy (MPI); amber traces are '
                        'precision (R95). Values are normalized by target '
                        'half-width so mixed-target histories are '
                        'comparable. Misses excluded.',
@@ -12257,7 +12574,7 @@ def _predict_user_targets(user_id):
             continue
         out.append({
             'id': int(r['id']),
-            'name': r['name'] or f'Target {r["id"]}',
+            'name': _display_target_name(r['name']) or f'Target {r["id"]}',
             'physical_size_mm': float(r['physical_size_mm'] or 0),
         })
     return out
@@ -12499,7 +12816,7 @@ def _build_predict_segments(form, user_id):
         if not t:
             raise ValueError('That target doesn\'t exist.')
         phys = float(t['physical_size_mm'] or 0)
-        face_name = t['name'] or f'Target {target_id}'
+        face_name = _display_target_name(t['name']) or f'Target {target_id}'
 
     seg = {
         'distance_m':         distance_m,

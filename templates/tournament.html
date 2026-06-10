@@ -340,26 +340,15 @@
     <input type="hidden" name="x_coord" id="x_coord" value="">
     <input type="hidden" name="y_coord" id="y_coord" value="">
     <input type="hidden" name="arrow_shot" value="arrow_shot">
-    <input type="hidden" name="is_precise" id="is_precise" value="0">
+    <!-- Tournament mode is always precise placement (paper-face scoring
+         is the whole point); the Estimated/Precise toggle that lives on
+         the regular session is intentionally absent here. -->
+    <input type="hidden" name="is_precise" id="is_precise" value="1">
     <input type="hidden" name="record_mode" id="record_mode_hidden" value="0">
 
     <div class="session-layout">
         <!-- LEFT: target panel -->
         <div class="target-panel">
-            <div class="autosubmit-bar" style="margin-top:4px;">
-                <span class="autosubmit-label has-tooltip"
-                      data-tooltip="Estimated — you place the shot by eye. Precise — paper face or careful coords; shows the arrow's true diameter on the target.">Placement:</span>
-                <div class="radio-group" style="margin:0;">
-                    <label class="radio-option">
-                        <input type="radio" name="precision_mode" value="0" checked>
-                        <span>Estimated</span>
-                    </label>
-                    <label class="radio-option">
-                        <input type="radio" name="precision_mode" value="1">
-                        <span>Precise</span>
-                    </label>
-                </div>
-            </div>
 
             <!-- Touch input mode toggle (mobile only) -->
             <div class="autosubmit-bar" id="touch-input-bar" style="margin-top:4px;display:none;">
@@ -540,7 +529,6 @@ const form    = document.getElementById('shot-form');
 const isPreciseInput = document.getElementById('is_precise');
 
 const UNITS_KEY  = 'apollo_units';
-const PRECISION_KEY = 'apollo_precision_mode';
 const IS_TOUCH   = matchMedia('(hover: none) and (pointer: coarse)').matches;
 const ROUND_COMPLETE = {{ 'true' if progress.is_complete else 'false' }};
 
@@ -551,27 +539,84 @@ const ROUND_COMPLETE = {{ 'true' if progress.is_complete else 'false' }};
 function drawRings() {
     const old = document.getElementById('rings-layer');
     if (old) old.remove();
-    const rings = (window.FACE_RENDER && window.FACE_RENDER.rings) || [];
+    const fr = window.FACE_RENDER;
+    const rings = (fr && fr.rings) || [];
     if (!rings.length) return;
     const w = img.clientWidth, h = img.clientHeight;
     if (!w || !h) return;
     const mmW = window.APOLLO.target_width_mm;
     const mmH = window.APOLLO.target_height_mm;
+    const px = mm => mm * (w / mmW);
     const layer = document.createElementNS('http://www.w3.org/2000/svg', 'g');
     layer.id = 'rings-layer';
-    rings.forEach((ring, idx) => {
-        const c = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
-        c.setAttribute('cx', w / 2);
-        c.setAttribute('cy', h / 2);
-        c.setAttribute('r', ring.radius_mm * (w / mmW));
-        c.setAttribute('fill', ring.color);
-        c.setAttribute('stroke', '#1a3a5c');
-        c.setAttribute('stroke-width', '0.5');
-        layer.appendChild(c);
+    if (fr && fr.face_bg) {
+        const bg = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+        bg.setAttribute('x', 0);
+        bg.setAttribute('y', 0);
+        bg.setAttribute('width', w);
+        bg.setAttribute('height', h);
+        bg.setAttribute('fill', fr.face_bg);
+        layer.appendChild(bg);
+    }
+    const centers = (fr.multi_spot && Array.isArray(fr.multi_spot.centers_mm))
+        ? fr.multi_spot.centers_mm
+        : [[0, 0]];
+    const toPx = (mmX, mmY) => [
+        w / 2 + mmX * (w / mmW),
+        h / 2 - mmY * (h / mmH),
+    ];
+    centers.forEach(c => {
+        const [cx, cy] = toPx(c[0], c[1]);
+        rings.forEach(ring => {
+            const el = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+            el.setAttribute('cx', cx);
+            el.setAttribute('cy', cy);
+            el.setAttribute('r', px(ring.radius_mm));
+            el.setAttribute('fill', ring.color);
+            el.setAttribute('stroke', _contrastingMarkColor(ring.color));
+            el.setAttribute('stroke-width', '0.8');
+            layer.appendChild(el);
+        });
+        if (fr && fr.center_mark) {
+            const xMm = parseFloat(fr.x_ring_mm) || 0;
+            const arm = px(Math.max(2.0, xMm * 0.55));
+            const stroke = Math.max(1.2, px(Math.max(1.0, xMm * 0.08)));
+            const innerColor = (rings[rings.length - 1] && rings[rings.length - 1].color) || '#ffffff';
+            const markColor = _contrastingMarkColor(innerColor);
+            const mk = (x1, y1, x2, y2) => {
+                const l = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+                l.setAttribute('x1', x1); l.setAttribute('y1', y1);
+                l.setAttribute('x2', x2); l.setAttribute('y2', y2);
+                l.setAttribute('stroke', markColor);
+                l.setAttribute('stroke-width', stroke);
+                l.setAttribute('stroke-linecap', 'round');
+                layer.appendChild(l);
+            };
+            if (fr.center_mark === 'cross') {
+                mk(cx - arm, cy, cx + arm, cy);
+                mk(cx, cy - arm, cx, cy + arm);
+            } else if (fr.center_mark === 'x') {
+                const d = arm * 0.7071;
+                mk(cx - d, cy - d, cx + d, cy + d);
+                mk(cx - d, cy + d, cx + d, cy - d);
+            }
+        }
     });
     // Insert at the very back of the overlay so crosshair / shots
     // render on top.
     svg.prepend(layer);
+}
+
+function _contrastingMarkColor(hex) {
+    if (typeof hex !== 'string') return '#1a3a5c';
+    const m = hex.replace('#', '');
+    if (m.length !== 6) return '#1a3a5c';
+    const r = parseInt(m.slice(0, 2), 16);
+    const g = parseInt(m.slice(2, 4), 16);
+    const b = parseInt(m.slice(4, 6), 16);
+    if ([r, g, b].some(v => isNaN(v))) return '#1a3a5c';
+    const lum = 0.299 * r + 0.587 * g + 0.114 * b;
+    return lum > 140 ? '#1a3a5c' : '#ffffff';
 }
 
 function drawCrosshair() {
@@ -653,7 +698,17 @@ function currentShaftDiameterMm() {
 function isOffTarget(x, y) {
     if (!ZONE_RADII.length) return false;
     const shaftR = currentShaftDiameterMm() / 2;
-    const dist = Math.max(0, Math.hypot(x, y) - shaftR);
+    // Multi-spot faces (NFAA 5-spot): measure to nearest spot center.
+    const fr = window.FACE_RENDER;
+    const centers = (fr && fr.multi_spot && Array.isArray(fr.multi_spot.centers_mm))
+        ? fr.multi_spot.centers_mm
+        : [[0, 0]];
+    let best = Infinity;
+    for (const c of centers) {
+        const d = Math.hypot(x - c[0], y - c[1]);
+        if (d < best) best = d;
+    }
+    const dist = Math.max(0, best - shaftR);
     const outer = ZONE_RADII[ZONE_RADII.length - 1];
     return dist > outer;
 }
@@ -995,7 +1050,11 @@ if (sessionStorage.getItem('apollo_miss_notice')) {
 // mousemove handlers never register). Same pattern as session.html.
 var precisionCursorEl = null;
 
-function isPrecisionActive() { return isPreciseInput.value === '1'; }
+// Tournament mode is always-on precise placement — the regular session's
+// Estimated/Precise toggle is intentionally absent. Keep the hidden
+// is_precise input pinned to 1 in case any later code reads it.
+isPreciseInput.value = '1';
+function isPrecisionActive() { return true; }
 
 function ensurePrecisionCursor() {
     if (precisionCursorEl) return precisionCursorEl;
@@ -1012,7 +1071,11 @@ function ensurePrecisionCursor() {
 
 function updatePrecisionCursorRadius() {
     if (!precisionCursorEl) return;
-    const w = img.clientWidth;
+    // Firefox can return 0 for `clientWidth` on the placeholder <img>
+    // because tournament mode hides it with `visibility:hidden`; the
+    // svg overlay fills the same box, so use that as the authoritative
+    // width when the img reads as zero.
+    const w = img.clientWidth || svg.clientWidth || svg.getBoundingClientRect().width;
     if (!w) return;
     const r = (currentShaftDiameterMm() / 2) * (w / window.APOLLO.target_width_mm);
     precisionCursorEl.setAttribute('r', r);
@@ -1042,7 +1105,12 @@ function removePrecisionCursor() {
 stage.addEventListener('mousemove', e => {
     if (IS_TOUCH) return;
     if (!isPrecisionActive()) { hidePrecisionCursor(); return; }
-    const r = img.getBoundingClientRect();
+    // svg overlays the (hidden) placeholder image and shares its box —
+    // it's the more reliable layout reference in Firefox where the
+    // hidden img can sometimes report zero from getBoundingClientRect.
+    const r = svg.getBoundingClientRect().width
+        ? svg.getBoundingClientRect()
+        : img.getBoundingClientRect();
     const dx = e.clientX - r.left;
     const dy = e.clientY - r.top;
     if (dx < 0 || dy < 0 || dx > r.width || dy > r.height) {
@@ -1060,16 +1128,8 @@ stage.addEventListener('mouseleave', () => {
 const arrowSelectEl = document.getElementById('arrow_type');
 if (arrowSelectEl) arrowSelectEl.addEventListener('change', updatePrecisionCursorRadius);
 
-// Precision toggle (persists across sessions)
-const precisionRadios = document.querySelectorAll('input[name="precision_mode"]');
-function applyPrecision(v) {
-    precisionRadios.forEach(r => { r.checked = (r.value === v); });
-    isPreciseInput.value = v;
-    localStorage.setItem(PRECISION_KEY, v);
-    if (v !== '1') removePrecisionCursor();
-}
-applyPrecision(localStorage.getItem(PRECISION_KEY) || '0');
-precisionRadios.forEach(r => r.addEventListener('change', () => applyPrecision(r.value)));
+// (Estimated/Precise toggle removed — tournament shots are always
+// precise, so there's no radio group or localStorage persistence here.)
 
 // Leave-warning modal — same as session.html
 const leaveModal     = document.getElementById('leave-modal');
