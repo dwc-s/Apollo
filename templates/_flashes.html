@@ -1,0 +1,19 @@
+{# Renders queued flash() messages. Self-contained (inline styles) so it
+   can be dropped into any standalone template — the app has no base layout.
+   Include it right after the page's <h1 class="title"> heading. #}
+{% with messages = get_flashed_messages() | unique | list %}
+  {% if messages %}
+    <div class="flash-messages" role="status" aria-live="polite"
+         style="max-width:900px;margin:0 auto 1rem;padding:0 1rem;">
+      {% for message in messages %}
+        <div class="flash-message"
+             style="font-family:'Quantico',sans-serif;font-size:0.9rem;
+                    letter-spacing:0.03em;color:#cfe0f7;background:#13283f;
+                    border:1px solid #1a3a5c;border-left:4px solid #4a90d9;
+                    border-radius:4px;padding:10px 14px;margin-bottom:8px;">
+          {{ message }}
+        </div>
+      {% endfor %}
+    </div>
+  {% endif %}
+{% endwith %}

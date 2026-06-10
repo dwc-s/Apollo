@@ -339,6 +339,7 @@
     {% endif %}
 </nav>
 <h1 class="title">Previous Sessions</h1>
+{% include '_flashes.html' %}
 {% set has_active_filter = filters.q_notes or filters.q_tags or filters.q_target
                             or filters.q_bow or filters.q_arrow
                             or filters.date_from or filters.date_to %}
