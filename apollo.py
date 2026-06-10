@@ -1552,23 +1552,8 @@ def _compute_tournament_progress(session_id, user_id, round_def):
             out['ten_count'] += 1
         # X count: inside the X ring (using line-cutter slack). For
         # multi-spot faces, measure to the nearest spot center.
-        if (xraw != MISS_SENTINEL and yraw != MISS_SENTINEL
-                and x_ring_radius > 0):
-            try:
-                x = float(xraw); y = float(yraw)
-                shaft_r = _parse_shaft_diameter_mm(shaft) / 2.0
-                if seg_centers:
-                    d_to_nearest = min(
-                        math.sqrt((x - sx) ** 2 + (y - sy) ** 2)
-                        for (sx, sy) in seg_centers
-                    )
-                    eff = max(0.0, d_to_nearest - shaft_r)
-                else:
-                    eff = max(0.0, math.sqrt(x*x + y*y) - shaft_r)
-                if eff <= x_ring_radius:
-                    out['x_count'] += 1
-            except (TypeError, ValueError):
-                pass
+        if _shot_is_x(xraw, yraw, x_ring_radius, shaft, seg_centers):
+            out['x_count'] += 1
         running += points
         end_arrows.append({'points': points, 'x': xraw, 'y': yraw,
                            'miss': (xraw == MISS_SENTINEL and yraw == MISS_SENTINEL)})
@@ -1612,21 +1597,6 @@ def _app_now():
     while keeping the value naive (matches existing column shapes).
     """
     return datetime.now(timezone.utc).replace(tzinfo=None)
-
-
-def _format_session_dt(val):
-    """Render a session datetime in the canonical form for form fields."""
-    if val is None:
-        return ''
-    if isinstance(val, datetime):
-        return val.strftime(SESSION_DT_FMT)
-    s = str(val).strip()
-    for fmt in (SESSION_DT_FMT_WITH_MS, SESSION_DT_FMT):
-        try:
-            return datetime.strptime(s, fmt).strftime(SESSION_DT_FMT)
-        except ValueError:
-            continue
-    return s[:19]
 
 
 def _parse_session_dt(raw):
@@ -1822,13 +1792,19 @@ def get_stats(session_id, user_id):
             sw_zones = _fetch_target_zones(sw_target_id, user_id) \
                 if sw_target_id is not None else []
             sw_scoring = _zones_define_scoring(sw_zones)
+            # Multi-spot faces (NFAA 5-spot): score against the nearest
+            # spot center so a corner-spot hit isn't read as a miss off
+            # the face origin. Matches the tournament-progress code path.
+            sw_centers = (_target_multi_spot_centers(sw_target_id, user_id)
+                          if sw_target_id is not None else None)
             missed_shots = 0
             for srow in shot_class_rows:
                 xraw = str(srow['x_coord']).strip() if srow['x_coord'] is not None else ''
                 yraw = str(srow['y_coord']).strip() if srow['y_coord'] is not None else ''
                 if sw_scoring:
                     if _classify_shot(xraw, yraw, sw_zones,
-                                      _row_get(srow, 'arrow_shaft_diameter')) is None:
+                                      _row_get(srow, 'arrow_shaft_diameter'),
+                                      spot_centers_mm=sw_centers) is None:
                         missed_shots += 1
                 elif xraw == MISS_SENTINEL and yraw == MISS_SENTINEL:
                     missed_shots += 1
@@ -1869,6 +1845,9 @@ def get_stats(session_id, user_id):
             zones = _fetch_target_zones(first_target_id, user_id) \
                 if first_target_id is not None else []
             scoring_available = _zones_define_scoring(zones)
+            # Nearest-spot centers for multi-spot faces (see sw_centers above).
+            spot_centers = (_target_multi_spot_centers(first_target_id, user_id)
+                            if first_target_id is not None else None)
             max_zone_points = max((int(z['point_value'] or 0) for z in zones),
                                   default=0) if scoring_available else 0
 
@@ -1912,6 +1891,7 @@ def get_stats(session_id, user_id):
                                 str(q['y_coord']).strip() if q['y_coord'] is not None else '',
                                 zones,
                                 _row_get(q, 'arrow_shaft_diameter'),
+                                spot_centers_mm=spot_centers,
                             )
                             if idx is not None:
                                 number_hit += 1
@@ -1938,7 +1918,8 @@ def get_stats(session_id, user_id):
                         int(q['is_precise'] or 0) == 1 for q in buf
                     )
                     if scoring_available and all_precise:
-                        score = _compute_quiver_score(buf, zones)
+                        score = _compute_quiver_score(buf, zones,
+                                                       spot_centers_mm=spot_centers)
                         max_score = buf_size * max_zone_points
                         q_stat["score_points"] = score
                         q_stat["max_score"] = max_score
@@ -5996,18 +5977,17 @@ def _participant_scorecard(user_id, session_id, round_def):
                 out_arrows.append('M')
             else:
                 # Detect X by checking coords distance against the X-ring
-                # of this end's segment face.
+                # of this end's segment face. Multi-spot faces measure to
+                # the nearest spot center (shared with the x_count total).
                 seg_idx = end.get('segment_idx', 0)
                 seg_face = segments[seg_idx]['face_key'] if 0 <= seg_idx < len(segments) else None
                 face = TOURNAMENT_FACES.get(seg_face, {}) if seg_face else {}
                 x_ring = float(face.get('x_ring_mm') or 0.0)
-                is_x = False
-                try:
-                    x = float(a['x']); y = float(a['y'])
-                    if x_ring > 0 and math.sqrt(x*x + y*y) <= x_ring:
-                        is_x = True
-                except (TypeError, ValueError):
-                    pass
+                seg_multi = face.get('multi_spot') or None
+                seg_centers = (list(seg_multi['centers_mm'])
+                               if seg_multi and seg_multi.get('centers_mm') else None)
+                is_x = _shot_is_x(a['x'], a['y'], x_ring,
+                                  spot_centers_mm=seg_centers)
                 out_arrows.append('X' if is_x else str(a['points']))
         ends_out.append({
             'arrows':      out_arrows,
@@ -7959,14 +7939,43 @@ def _row_get(row, key, default=None):
         return default
 
 
-def _compute_quiver_score(shot_rows, zones):
+def _shot_is_x(xraw, yraw, x_ring_radius, shaft_diameter_mm=None,
+               spot_centers_mm=None):
+    """Return True when a shot lands inside the inner-X ring.
+
+    Mirrors the line-cutter slack of ``_classify_shot``: effective
+    distance is ``hypot(x, y) - shaft_radius`` (or distance to the
+    nearest spot center, for multi-spot faces) and the shot counts as an
+    X when that is ``<= x_ring_radius``. Shared by the tournament progress
+    counter and the scorecard's per-arrow label so the two can't drift.
+    """
+    if x_ring_radius is None or x_ring_radius <= 0:
+        return False
+    if xraw == MISS_SENTINEL and yraw == MISS_SENTINEL:
+        return False
+    try:
+        x = float(xraw)
+        y = float(yraw)
+    except (TypeError, ValueError):
+        return False
+    shaft_r = _parse_shaft_diameter_mm(shaft_diameter_mm) / 2.0
+    if spot_centers_mm:
+        d = min(math.sqrt((x - sx) ** 2 + (y - sy) ** 2)
+                for (sx, sy) in spot_centers_mm)
+    else:
+        d = math.sqrt(x * x + y * y)
+    return max(0.0, d - shaft_r) <= x_ring_radius
+
+
+def _compute_quiver_score(shot_rows, zones, spot_centers_mm=None):
     """Sum points across the shots in one quiver."""
     total = 0
     for r in shot_rows:
         xraw = str(r['x_coord']).strip() if r['x_coord'] is not None else ''
         yraw = str(r['y_coord']).strip() if r['y_coord'] is not None else ''
         shaft = _row_get(r, 'arrow_shaft_diameter')
-        total += _score_one_shot(xraw, yraw, zones, shaft)
+        total += _score_one_shot(xraw, yraw, zones, shaft,
+                                 spot_centers_mm=spot_centers_mm)
     return total
 
 
@@ -13404,6 +13413,13 @@ def import_data():
         print(f"❌ Import write error: {e}")
         return jsonify(ok=False,
                        error="Database error while inserting rows."), 500
+    except (ValueError, TypeError, KeyError) as e:
+        # _apply_import re-raises non-DB failures (e.g. the unsafe-table
+        # guard, a bad coerced value) after rolling back. Surface a clean
+        # JSON error instead of letting it escape as an unhandled 500.
+        print(f"❌ Import parse/validation error: {e}")
+        return jsonify(ok=False,
+                       error="Import data was malformed and could not be applied."), 400
 
     total = sum(counts.values())
     return jsonify(ok=True, total=total, counts=counts)
