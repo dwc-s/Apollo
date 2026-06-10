@@ -6565,13 +6565,15 @@ def _ts_date_str(value):
 def delete_session(session_id):
     """Hard-delete a single past session's shots and timing row for this user."""
     user_id = current_user_id()
-    # Refuse to delete the session currently held in the cookie — otherwise
-    # subsequent /sesh POSTs would write shots into a session_id with no
-    # session_times row, and the unique (user_id, session_id) index would
-    # block the user from re-allocating the same id in /end_session.
-    if session.get('session_id') == session_id:
-        flash("Can't delete the session you're currently in — end it first.")
-        return redirect(url_for('previous_sessions'))
+    # The session currently held in the cookie shows up in the Previous
+    # Sessions list too, so users naturally try to delete it from there.
+    # We allow it — but must also clear the in-progress keys from the
+    # cookie afterwards. Otherwise the cookie would still point at a
+    # session_id with no session_times row: subsequent /sesh POSTs would
+    # orphan shots into it and the unique (user_id, session_id) index would
+    # block /end_session from re-allocating the same id. Clearing the keys
+    # makes the next /sesh GET allocate a fresh session_id cleanly.
+    deleting_current = (session.get('session_id') == session_id)
     try:
         with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
             owner_row = cur.execute(
@@ -6593,6 +6595,15 @@ def delete_session(session_id):
         print(f"❌ Delete-session error: {e}")
         flash("Could not delete session — please try again.")
         return redirect(url_for('previous_sessions'))
+    # Drop the in-progress keys if we just deleted the active session, so
+    # the next /sesh allocates a fresh id instead of writing into the now
+    # orphaned one. Mirrors the key list end_session pops.
+    if deleting_current:
+        for k in ('session_id', 'quivers_completed', 'arrows_remaining',
+                  'record_mode', 'target_id', 'current_quiver_size',
+                  'tournament_round_key', 'tournament_segment_idx',
+                  'tournament_practice'):
+            session.pop(k, None)
     return redirect(url_for('previous_sessions'))
 
 
@@ -8559,19 +8570,25 @@ def _apply_import(data, user_id):
 
 
 # ─── Data analysis / visualization ────────────────────────────────────────
-# Reports render a matplotlib PNG (base64 inline) and a tabular dataset the
+# Reports render a matplotlib SVG (base64 inline) and a tabular dataset the
 # template can show in a <table> and offer as CSV/Excel download. Each entry
-# in REPORTS is a function user_id → {title, png_b64, columns, rows} or None
+# in REPORTS is a function user_id → {title, svg_b64, columns, rows} or None
 # (None = not enough data to render). matplotlib is imported lazily so a
 # missing package only breaks /analyze, not the whole app.
 
 
-def _render_matplotlib_png(fig):
-    """Serialize a Matplotlib figure to a base64-encoded PNG data URL."""
+def _render_matplotlib_svg(fig):
+    """Serialize a Matplotlib figure to a base64-encoded SVG data URL.
+
+    SVG (vector) rather than PNG so the chart stays crisp when the analyze
+    lightbox blows it up to fill the screen's longest axis. Text is rendered
+    as paths (svg.fonttype='path') so the output doesn't depend on the
+    viewing browser having our fonts installed."""
     import base64
-    buf = io.BytesIO()
-    fig.savefig(buf, format='png', dpi=110, bbox_inches='tight')
     import matplotlib.pyplot as plt
+    buf = io.BytesIO()
+    with plt.rc_context({'svg.fonttype': 'path'}):
+        fig.savefig(buf, format='svg', bbox_inches='tight')
     plt.close(fig)
     return base64.b64encode(buf.getvalue()).decode('ascii')
 
@@ -8643,7 +8660,7 @@ def _report_arrows_vs_time(user_id):
     ax.xaxis.set_major_locator(locator)
     ax.xaxis.set_major_formatter(mdates.ConciseDateFormatter(locator))
     fig.autofmt_xdate()
-    png_b64 = _render_matplotlib_png(fig)
+    svg_b64 = _render_matplotlib_svg(fig)
 
     columns = ['Session', 'Start time', 'Arrows shot']
     rows_out = [
@@ -8655,7 +8672,7 @@ def _report_arrows_vs_time(user_id):
     return {
         'key': 'arrows_vs_time',
         'title': 'Arrows shot vs time',
-        'png_b64': png_b64,
+        'svg_b64': svg_b64,
         'columns': columns,
         'rows': rows_out,
     }
@@ -8712,7 +8729,7 @@ def _report_sessions_per_day(user_id):
     ax.xaxis.set_major_locator(locator)
     ax.xaxis.set_major_formatter(mdates.ConciseDateFormatter(locator))
     fig.autofmt_xdate()
-    png_b64 = _render_matplotlib_png(fig)
+    svg_b64 = _render_matplotlib_svg(fig)
 
     # Table shows only the days that actually had sessions — listing every
     # zero-count day would bury the signal in noise.
@@ -8721,7 +8738,7 @@ def _report_sessions_per_day(user_id):
     return {
         'key': 'sessions_per_day',
         'title': 'Sessions per day',
-        'png_b64': png_b64,
+        'svg_b64': svg_b64,
         'columns': columns,
         'rows': rows_out,
     }
@@ -8825,7 +8842,7 @@ def _report_hits_by_boundaries(user_id):
                         bar.get_height(), str(n),
                         ha='center', va='bottom', fontsize=9)
         fig.autofmt_xdate(rotation=20)
-        png_b64 = _render_matplotlib_png(fig)
+        svg_b64 = _render_matplotlib_svg(fig)
 
         # Table: one row per ring, then miss footer.
         columns = ['Zone', 'Points', 'Radius (mm)', 'Hits', 'Percent']
@@ -8859,7 +8876,7 @@ def _report_hits_by_boundaries(user_id):
         panels.append({
             'key': f'hits_by_boundaries__{target_id}',
             'title': f'{target_name} — hits by zone',
-            'png_b64': png_b64,
+            'svg_b64': svg_b64,
             'columns': columns,
             'rows': rows_out,
             'replay': replay,
@@ -9060,7 +9077,7 @@ def _report_all_shots_per_target(user_id, date_from=None, date_to=None):
                      f'{"" if miss == 0 else f", {miss} missed"})')
         ax.set_xlabel('X (mm from center)')
         ax.set_ylabel('Y (mm from center)')
-        png_b64 = _render_matplotlib_png(fig)
+        svg_b64 = _render_matplotlib_svg(fig)
 
         # Summary stats table — split into Accuracy (where the centroid
         # sits relative to the bull) and Precision (how tight the group
@@ -9141,7 +9158,7 @@ def _report_all_shots_per_target(user_id, date_from=None, date_to=None):
         panels.append({
             'key': f'all_shots_per_target__{target_id}',
             'title': f'{target_name} — every shot{range_label}',
-            'png_b64': png_b64,
+            'svg_b64': svg_b64,
             'columns': columns,
             'rows': rows_out,
             # No animated replay here — the static scatter *is* the
@@ -10117,7 +10134,7 @@ def _report_equipment_head_to_head(user_id, categories=None, tag_filter=None):
             fig.suptitle(f'{label_singular} head-to-head',
                          fontsize=12, fontweight='bold', y=0.99)
             fig.tight_layout(rect=(0, 0, 1, 0.86))
-            png_b64 = _render_matplotlib_png(fig)
+            svg_b64 = _render_matplotlib_svg(fig)
 
             def _fmt(v, digits=3):
                 return '—' if v is None else f'{v:.{digits}f}'
@@ -10274,7 +10291,7 @@ def _report_equipment_head_to_head(user_id, categories=None, tag_filter=None):
             panels.append({
                 'key': f'head_to_head__{column}__{a_name}__vs__{b_name}',
                 'title': f'{label_singular}: {a_name} vs {b_name}',
-                'png_b64': png_b64,
+                'svg_b64': svg_b64,
                 'columns': columns_out,
                 'rows': rows_out,
             })
@@ -10520,7 +10537,7 @@ def _report_accuracy_over_time(user_id, date_from=None, date_to=None):
     ax.xaxis.set_major_locator(locator)
     ax.xaxis.set_major_formatter(mdates.ConciseDateFormatter(locator))
     fig.autofmt_xdate()
-    png_b64 = _render_matplotlib_png(fig)
+    svg_b64 = _render_matplotlib_svg(fig)
 
     if range_from is not None and range_to is not None:
         report_title = (f'Accuracy & precision over time '
@@ -10554,7 +10571,7 @@ def _report_accuracy_over_time(user_id, date_from=None, date_to=None):
         'key': 'accuracy_over_time',
         'title': report_title,
         'intro_html': intro_html,
-        'png_b64': png_b64,
+        'svg_b64': svg_b64,
         'columns': [
             'Bucket', 'Shots',
             _tip('MPI (norm)',
@@ -10751,7 +10768,7 @@ def _report_within_session_drift(user_id):
     h1, l1 = ax.get_legend_handles_labels()
     h2, l2 = ax_bar.get_legend_handles_labels()
     ax.legend(h1 + h2, l1 + l2, loc='upper left', fontsize=9)
-    png_b64 = _render_matplotlib_png(fig)
+    svg_b64 = _render_matplotlib_svg(fig)
 
     intro = Markup(
         '<p class="report-intro">'
@@ -10768,7 +10785,7 @@ def _report_within_session_drift(user_id):
         'key': 'within_session_drift',
         'title': 'Within-session drift',
         'intro_html': intro,
-        'png_b64': png_b64,
+        'svg_b64': svg_b64,
         'columns': [
             'Quiver index', 'Sessions', 'Shots',
             _tip('MPI (norm)',
@@ -11003,7 +11020,7 @@ def _report_accuracy_precision_traces(user_id, date_from=None, date_to=None):
     ax.grid(True, axis='y', linestyle='--', alpha=0.4)
     fig.autofmt_xdate()
     ax.legend(loc='upper left', fontsize=8, ncol=2, framealpha=0.85)
-    png_b64 = _render_matplotlib_png(fig)
+    svg_b64 = _render_matplotlib_svg(fig)
 
     intro = Markup(
         '<p class="report-intro">'
@@ -11022,7 +11039,7 @@ def _report_accuracy_precision_traces(user_id, date_from=None, date_to=None):
         'key': 'accuracy_precision_traces',
         'title': 'Accuracy & precision traces',
         'intro_html': intro,
-        'png_b64': png_b64,
+        'svg_b64': svg_b64,
         'columns': [
             'Session date', 'Session id',
             _tip('Shots',
@@ -11292,7 +11309,7 @@ def _report_draw_weight_traces(user_id, date_from=None, date_to=None):
     ax.set_title('Accuracy & precision by draw weight')
     ax.grid(True, linestyle='--', alpha=0.4)
     ax.legend(loc='upper left', fontsize=7, ncol=2, framealpha=0.85)
-    png_b64 = _render_matplotlib_png(fig)
+    svg_b64 = _render_matplotlib_svg(fig)
 
     intro = Markup(
         '<p class="report-intro">'
@@ -11311,7 +11328,7 @@ def _report_draw_weight_traces(user_id, date_from=None, date_to=None):
         'key': 'draw_weight_traces',
         'title': 'Accuracy & precision by draw weight',
         'intro_html': intro,
-        'png_b64': png_b64,
+        'svg_b64': svg_b64,
         'columns': [
             'Session date', 'Bow', 'Session id',
             _tip('Shots',
@@ -11431,7 +11448,7 @@ def _report_cold_bore_vs_warmed(user_id):
         loc='upper center', bbox_to_anchor=(0.5, 0.96),
         ncol=2, frameon=False, fontsize=9)
     fig.tight_layout(rect=(0, 0, 1, 0.86))
-    png_b64 = _render_matplotlib_png(fig)
+    svg_b64 = _render_matplotlib_svg(fig)
 
     def _fmt_p(p):
         if p is None:
@@ -11521,7 +11538,7 @@ def _report_cold_bore_vs_warmed(user_id):
         'key': 'cold_bore_vs_warmed',
         'title': 'Cold bore vs warmed up',
         'intro_html': intro,
-        'png_b64': png_b64,
+        'svg_b64': svg_b64,
         'columns': columns_out,
         'rows': rows_out,
     }
@@ -11613,7 +11630,7 @@ def _report_shot_density_heatmap(user_id):
         ax.set_title(f'{target_name} — shot density ({len(xs)} hits)')
         ax.set_xlabel('X (mm from center)')
         ax.set_ylabel('Y (mm from center)')
-        png_b64 = _render_matplotlib_png(fig)
+        svg_b64 = _render_matplotlib_svg(fig)
 
         # Tabulate a quadrant breakdown — actionable summary that the
         # heatmap itself only hints at.
@@ -11646,7 +11663,7 @@ def _report_shot_density_heatmap(user_id):
         panels.append({
             'key': f'shot_density__{target_id}',
             'title': f'{target_name} — shot density ({n} hits)',
-            'png_b64': png_b64,
+            'svg_b64': svg_b64,
             'columns': ['Metric', 'Value'],
             'rows': rows_out,
         })
@@ -11821,7 +11838,7 @@ def _report_expected_score(user_id):
                         bar.get_height(),
                         f'{p:.1f}%', ha='center', va='bottom', fontsize=9)
         fig.autofmt_xdate(rotation=20)
-        png_b64 = _render_matplotlib_png(fig)
+        svg_b64 = _render_matplotlib_svg(fig)
 
         rows_out = [[Markup('<em>— Expected per arrow —</em>'), '', '']]
         rows_out.append(['Expected score (points / arrow)',
@@ -11843,7 +11860,7 @@ def _report_expected_score(user_id):
         panels.append({
             'key': f'expected_score__{target_id}',
             'title': f'{target_name} — expected score',
-            'png_b64': png_b64,
+            'svg_b64': svg_b64,
             'columns': ['Metric', 'Value', 'Notes'],
             'rows': rows_out,
         })
@@ -11990,7 +12007,7 @@ def _report_calendar_heatmap(user_id):
     # warning.
     fig.subplots_adjust(left=0.06, right=0.9, top=0.92, bottom=0.08,
                         hspace=0.55)
-    png_b64 = _render_matplotlib_png(fig)
+    svg_b64 = _render_matplotlib_svg(fig)
 
     # Summary table.
     total_shots = sum(per_day.values())
@@ -12023,7 +12040,7 @@ def _report_calendar_heatmap(user_id):
         'key': 'calendar_heatmap',
         'title': 'Shot volume calendar',
         'intro_html': intro,
-        'png_b64': png_b64,
+        'svg_b64': svg_b64,
         'columns': ['Metric', 'Value'],
         'rows': rows_out,
     }
@@ -12334,7 +12351,7 @@ def _report_quiver_spread(user_id, date_from=None, date_to=None,
     ax.set_xticks(tick_positions)
     ax.set_xticklabels(tick_labels, rotation=35, ha='right')
     fig.subplots_adjust(bottom=0.22)
-    png_b64 = _render_matplotlib_png(fig)
+    svg_b64 = _render_matplotlib_svg(fig)
 
     intro = Markup(
         '<p class="report-intro">'
@@ -12356,7 +12373,7 @@ def _report_quiver_spread(user_id, date_from=None, date_to=None,
         'key': 'quiver_spread',
         'title': 'Biggest vs smallest spread per quiver',
         'intro_html': intro,
-        'png_b64': png_b64,
+        'svg_b64': svg_b64,
         'columns': [
             '#', 'Session date', 'Quiver in session', 'Hits',
             'Face width (mm)',
@@ -13039,7 +13056,7 @@ def analyze():
                         results.append({
                             'key': key,
                             'title': REPORTS[key]['label'],
-                            'png_b64': None,
+                            'svg_b64': None,
                             'columns': [],
                             'rows': [],
                             'empty': True,

@@ -424,6 +424,30 @@
             text-transform: uppercase;
             color: #4a6080;
         }
+        /* Lightbox (lightGallery) view of a chart: blow the SVG up to fill
+           100% of the screen's longest axis. The charts render as vector
+           SVG, so this stays crisp at any size. Scoped via the
+           `lg-chart-fullaxis` class added in the lightGallery init, so only
+           the analyze chart galleries get this treatment — the inline
+           thumbnails are untouched. Landscape → fill width; portrait → fill
+           height; the other axis follows the aspect ratio. */
+        .lg-chart-fullaxis .lg-img-wrap { padding: 0; }
+        @media (orientation: landscape) {
+            .lg-chart-fullaxis .lg-image {
+                width: 100vw !important;
+                max-width: 100vw !important;
+                height: auto !important;
+                max-height: none !important;
+            }
+        }
+        @media (orientation: portrait) {
+            .lg-chart-fullaxis .lg-image {
+                height: 100vh !important;
+                max-height: 100vh !important;
+                width: auto !important;
+                max-width: none !important;
+            }
+        }
         .replay-block {
             text-align: center;
         }
@@ -898,12 +922,12 @@
             </div>
         </div>
         <div class="panel-aside">
-            {% if p.png_b64 %}
+            {% if p.svg_b64 %}
             <a class="chart-thumb"
-               href="data:image/png;base64,{{ p.png_b64 }}"
-               data-src="data:image/png;base64,{{ p.png_b64 }}"
+               href="data:image/svg+xml;base64,{{ p.svg_b64 }}"
+               data-src="data:image/svg+xml;base64,{{ p.svg_b64 }}"
                data-sub-html="<h4>{{ title }}</h4>">
-                <img src="data:image/png;base64,{{ p.png_b64 }}"
+                <img src="data:image/svg+xml;base64,{{ p.svg_b64 }}"
                      alt="{{ title }}">
             </a>
             <span class="thumb-zoom-hint">Click to zoom</span>
@@ -1026,6 +1050,10 @@
             selector: 'a.chart-thumb',
             speed: 300,
             download: true,
+            // Scopes the full-axis sizing CSS below to these chart galleries
+            // (the class lands on .lg-outer) so we don't restyle any other
+            // lightGallery instance on the page.
+            addClass: 'lg-chart-fullaxis',
             plugins: [window.lgZoom, window.lgThumbnail].filter(Boolean),
         });
     });
