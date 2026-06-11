@@ -6,6 +6,9 @@ new in tournament mode is the **enforcement layer** that locks the
 end size, face, scoring rule, and total-arrow count to the chosen
 round.
 
+> For the precise formulas behind scoring and the `/analyze` statistics,
+> see [docs/FORMULAS.md](../../docs/FORMULAS.md).
+
 ## Coordinate system
 
 Every shot is stored as `(x_coord, y_coord)` in **physical millimetres

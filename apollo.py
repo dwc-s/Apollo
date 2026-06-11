@@ -1555,7 +1555,8 @@ def _compute_tournament_progress(session_id, user_id, round_def):
             out['ten_count'] += 1
         # X count: inside the X ring (using line-cutter slack). For
         # multi-spot faces, measure to the nearest spot center.
-        if _shot_is_x(xraw, yraw, x_ring_radius, shaft, seg_centers):
+        if _shot_is_x(xraw, yraw, x_ring_radius,
+                      shaft_diameter_mm=shaft, spot_centers_mm=seg_centers):
             out['x_count'] += 1
         running += points
         end_arrows.append({'points': points, 'x': xraw, 'y': yraw,
@@ -8093,6 +8094,10 @@ def _sample_zone_colors(zones, target_cfg, fallback_count=None):
     n_rings = fallback_count if fallback_count is not None else len(zones)
 
     def _fallback_gradient(n):
+        # Synthetic warm→cool ramp used only when the image can't be
+        # sampled. ``t`` runs 0→1 across the rings; the channel slopes
+        # (R 255→145, G 170→110, B 40→190) walk a warm gold toward a cool
+        # blue so adjacent bars stay visually distinct.
         out = []
         for i in range(n):
             t = i / max(n - 1, 1)
@@ -9677,6 +9682,8 @@ def _f_sf(f, df1, df2):
 
 
 def _median(xs):
+    """Sample median: middle value for odd n, mean of the two middle
+    values for even n. Returns 0.0 for an empty sequence."""
     s = sorted(xs)
     n = len(s)
     if n == 0:

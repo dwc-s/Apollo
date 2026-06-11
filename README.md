@@ -276,7 +276,8 @@ helpers fall back to the normal approximation (Mann-Whitney) or a
 continued-fraction regularized incomplete beta (F-distribution). χ²₂
 quantiles for R95 / CEP use the closed-form `−2·ln(1 − q)`. All paths
 agree to better-than-display precision for the sample sizes /analyze
-sees.
+sees. Every scoring, statistical, and predictive formula is catalogued
+with its source function in [docs/FORMULAS.md](docs/FORMULAS.md).
 
 ---
 
@@ -316,11 +317,14 @@ across all three bow types.
   expire after a short TTL. Without `RESEND_API_KEY`, the reset URL is
   printed to the server log instead of mailed — fine for solo/offline
   use.
-- **Tournament mode.** `/tournament` runs WA / NFAA / USAA / NASP
-  rounds with the right end size, target face, and scoring rule. See
-  [documentation/tournament/](documentation/tournament/) for the
+- **Tournament mode.** `/tournament` runs World Archery / NFAA / USA
+  Archery rounds with the right end size, target face, and scoring rule,
+  and supports live match play (2–4 archers taking turns on one device).
+  See [documentation/tournament/](documentation/tournament/) for the
   internal rule reference. Verify against current official rulebooks
-  before relying on a score for competition.
+  before relying on a score for competition. (NASP no longer has its own
+  round in the selector; the NASP 40 cm face ships as the default seeded
+  target for new accounts.)
 - **End-session redirect.** The session-stats screen on `/end_session`
   auto-redirects to the splash 7 seconds after rendering so a user
   ending a session and walking away lands on the public page rather
