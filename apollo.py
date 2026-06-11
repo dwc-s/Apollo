@@ -702,6 +702,7 @@ TOURNAMENT_ROUNDS = {
         'equipment_class':  'recurve',
         'description':      '5 ends of 3 arrows at 70m, cumulative scoring. Highest total wins (used in compound match play; also handy as a recurve drill).',
         'segments':         None,
+        'match_scoring':    'cumulative',
     },
     'wa_match_recurve_set': {
         'org':              'World Archery',
@@ -716,6 +717,7 @@ TOURNAMENT_ROUNDS = {
         'equipment_class':  'recurve',
         'description':      'Olympic recurve match: 5 sets of 3 arrows at 70m. Per set the higher total earns 2 set points (1 each on a tie). First to 6 set points wins; tie 5-5 → single-arrow shoot-off. Apollo logs your set totals so you can compare to an opponent’s scorecard.',
         'segments':         None,
+        'match_scoring':    'set',
     },
     'wa_match_compound': {
         'org':              'World Archery',
@@ -730,6 +732,7 @@ TOURNAMENT_ROUNDS = {
         'equipment_class':  'compound',
         'description':      '5 ends of 3 arrows at 50m. Highest cumulative wins.',
         'segments':         None,
+        'match_scoring':    'cumulative',
     },
     'wa_1440_recurve_m': {
         'org':              'World Archery',
@@ -3262,6 +3265,15 @@ app.config.update(
 # CSRFProtect requires every POST form to include a csrf_token hidden
 # input rendered via {{ csrf_token() }}. Tokens are signed with secret_key
 # above, so rotating SECRET_KEY invalidates in-flight tokens (expected).
+#
+# WTF_CSRF_TIME_LIMIT=None disables the token's *age* check (Flask-WTF
+# defaults to 3600 s). Without this, a page left open longer than an hour
+# — routine on a tablet mid-round, where the device sleeps between ends —
+# fails its next POST with "CSRF token has expired" (surfacing as a 502
+# behind the proxy). The token stays bound to the signed session cookie,
+# so it remains valid only for the life of the login (30 days) and to that
+# one session; dropping the age cap is not a security regression.
+app.config['WTF_CSRF_TIME_LIMIT'] = None
 csrf = CSRFProtect(app)
 
 
@@ -5342,33 +5354,8 @@ def tournament():
     # the user is starting a fresh round. Stamps the round tag onto the
     # first shot row written below.
     if not session.get('session_id'):
-        new_session_id = None
-        for _attempt in range(12):
-            with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
-                res = cur.execute(
-                    "SELECT MAX(session_id) FROM apollo WHERE user_id = %s",
-                    (user_id,)
-                ).fetchone()
-                max_apollo = res[0] if res and res[0] is not None else 0
-                res = cur.execute(
-                    "SELECT MAX(session_id) FROM session_times WHERE user_id = %s",
-                    (user_id,)
-                ).fetchone()
-                max_st = res[0] if res and res[0] is not None else 0
-                candidate = max(int(max_apollo or 0), int(max_st or 0)) + 1
-                try:
-                    cur.execute(
-                        "INSERT INTO session_times "
-                        "(user_id, session_id, session_begin_time) "
-                        "VALUES (%s, %s, %s)",
-                        (user_id, candidate, _app_now())
-                    )
-                    con.commit()
-                    new_session_id = candidate
-                    break
-                except DBIntegrityError:
-                    time.sleep(0.005 + secrets.randbelow(20) / 1000.0)
-                    continue
+        with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
+            new_session_id = _mint_session_id(con, cur, user_id)
         if new_session_id is None:
             return "Could not allocate session id — please try again", 500
         session['session_id'] = new_session_id
@@ -5378,11 +5365,40 @@ def tournament():
         session['record_mode'] = 0
 
     session_id = session['session_id']
+
+    # ── Live match-play state ──────────────────────────────────────────
+    # When `match_id` is in the cookie we're running 2–4 archers on this
+    # device. `match_archers` holds the roster in seat order; `match_idx`
+    # points at the archer whose turn it is — their session_id is mirrored
+    # into session['session_id'] above, so everything below renders for
+    # the active archer. We only diverge to (a) tag shots with the match,
+    # (b) swap the active archer at end boundaries, and (c) build a
+    # combined scoreboard for the GET render.
+    match_id      = session.get('match_id')
+    match_archers = session.get('match_archers') or []
+    match_idx     = int(session.get('match_idx', 0) or 0)
+    if match_id and match_archers:
+        if match_idx >= len(match_archers):
+            match_idx = 0
+        active_archer = match_archers[match_idx]
+        # Keep session_id locked to the active archer (defensive against a
+        # cookie that drifted between the two keys).
+        session_id = active_archer.get('sid', session_id)
+        session['session_id'] = session_id
+    else:
+        match_id = None
+        active_archer = None
+
     # All tournament rounds in Apollo are practice by definition — real
     # competitions don't use a phone-based score logger. The historical
     # `practice` tag is retained on past sessions, but new shots no
     # longer get tagged with it.
     tournament_tag = _tournament_tag_for_round(round_key)
+    if match_id and active_archer:
+        tournament_tag += f', match:{match_id}, participant:{active_archer.get("name","")}'
+        if active_archer.get('email'):
+            tournament_tag += f', email:{active_archer["email"]}'
+        tournament_tag += f', seat:{active_archer.get("seat", match_idx)}'
 
     # ── POST: record a shot ─────────────────────────────────────────────
     if request.method == 'POST':
@@ -5424,6 +5440,17 @@ def tournament():
             return redirect(url_for('tournament'))
         if x == '' or y == '':
             return redirect(url_for('tournament'))
+        # In a live match, refuse further shots once the match is already
+        # decided — set play (12.1.4.1) ends the moment an archer reaches
+        # 6 set points, which can happen before all ends are shot.
+        if match_id and len(match_archers) > 1:
+            decided_check = [{
+                'name':     a.get('name', ''),
+                'seat':     a.get('seat'),
+                'progress': _compute_tournament_progress(a.get('sid'), user_id, round_def),
+            } for a in match_archers]
+            if _match_set_scoring(decided_check, round_def).get('decided'):
+                return redirect(url_for('tournament'))
 
         # Recover quiver bookkeeping (same logic as /sesh, but the size
         # is fixed at arrows_per_end — no user-supplied value to lock).
@@ -5506,7 +5533,9 @@ def tournament():
             return "Error saving entry", 500
 
         arrows_remaining -= 1
+        end_completed = False
         if arrows_remaining <= 0:
+            end_completed = True
             quivers_completed += 1
             # Refill arrows_remaining to the *next* segment's end size,
             # which differs from the current one on rounds where the
@@ -5523,6 +5552,41 @@ def tournament():
         session['arrows_remaining'] = arrows_remaining
         session['quivers_completed'] = quivers_completed
 
+        # ── Live match: hand the canvas to the next archer ─────────────
+        # An end just finished; AB-CD detail shooting means the next
+        # archer (who still has arrows left in the round) steps to the
+        # line. Cycle forward from the current seat; if every archer has
+        # finished the whole round, leave state put so the GET render
+        # shows the winner banner. A switched-in archer always begins a
+        # fresh end, so arrows_remaining=0 (route refills on their next
+        # shot) is correct.
+        if end_completed and match_id and len(match_archers) > 1:
+            try:
+                with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
+                    counts = {}
+                    for a in match_archers:
+                        row = cur.execute(
+                            "SELECT COUNT(*) FROM apollo "
+                            "WHERE session_id = %s AND user_id = %s",
+                            (a['sid'], user_id)
+                        ).fetchone()
+                        counts[a['sid']] = int(row[0]) if row and row[0] is not None else 0
+            except SQLAlchemyError:
+                counts = {}
+            n = len(match_archers)
+            next_idx = None
+            for step in range(1, n + 1):
+                cand = (match_idx + step) % n
+                if counts.get(match_archers[cand]['sid'], 0) < round_total_arrows:
+                    next_idx = cand
+                    break
+            if next_idx is not None:
+                session['match_idx'] = next_idx
+                session['session_id'] = match_archers[next_idx]['sid']
+                session['arrows_remaining'] = 0
+                session['quivers_completed'] = 0
+                session['tournament_segment_idx'] = 0
+
         return redirect(url_for('tournament'))
 
     # ── GET path with active round: render the shot UI ─────────────────
@@ -5537,6 +5601,29 @@ def tournament():
             (user_id,)).fetchall() or []]
 
     progress = _compute_tournament_progress(session_id, user_id, round_def)
+
+    # ── Live match scoreboard ──────────────────────────────────────────
+    # One progress per archer (reuse the active archer's, already
+    # computed), scored via _match_set_scoring for set points / winner.
+    match_ctx = None
+    if match_id and match_archers:
+        archers_for_scoring = []
+        for i, a in enumerate(match_archers):
+            a_prog = (progress if a.get('sid') == session_id
+                      else _compute_tournament_progress(a.get('sid'), user_id, round_def))
+            archers_for_scoring.append({
+                'name':      a.get('name', ''),
+                'seat':      a.get('seat', i),
+                'is_active': (i == match_idx),
+                'progress':  a_prog,
+            })
+        match_ctx = {
+            'score':       _match_set_scoring(archers_for_scoring, round_def),
+            'idx':         match_idx,
+            'count':       len(match_archers),
+            'active_name': active_archer.get('name', '') if active_archer else '',
+            'match_id':    match_id,
+        }
 
     # Surface the active segment's distance / index to the template
     # (already resolved above from the shot count).
@@ -5566,6 +5653,19 @@ def tournament():
     # end-size used in any segment.
     max_arrows_per_end = max(int(s['arrows_per_end']) for s in segments)
 
+    # In match mode the cookie's quiver counters belong to whichever
+    # archer was active when they were written — derive the active
+    # archer's end count from their own progress instead so the right-
+    # rail counter and shot-clock end index follow the canvas handoff.
+    if match_id:
+        _completed_ends = sum(1 for e in (progress.get('ends') or [])
+                              if not e.get('partial'))
+        quivers_completed_display = _completed_ends
+        current_end_index = _completed_ends + 1
+    else:
+        quivers_completed_display = session.get('quivers_completed', 0)
+        current_end_index = int(session.get('quivers_completed', 0) or 0) + 1
+
     return render_template(
         'tournament.html',
         view='shoot',
@@ -5584,17 +5684,18 @@ def tournament():
         arrows_per_end=arrows_per_end,
         max_arrows_per_end=max_arrows_per_end,
         arrows_remaining=arrows_remaining_display,
-        quivers_completed=session.get('quivers_completed', 0),
+        quivers_completed=quivers_completed_display,
         progress=progress,
         current_distance_m=current_distance_m,
         current_segment_idx=current_segment_idx,
         is_course_round=is_course_round,
         segment_count=len(segments),
         is_practice=is_practice,
+        match=match_ctx,
         # End index used by the shot-clock to detect when a new end has
         # started — JS resets the countdown when this number changes.
         # 1-based so the on-screen label matches the scorecard rows.
-        current_end_index=int(session.get('quivers_completed', 0) or 0) + 1,
+        current_end_index=current_end_index,
     )
 
 
@@ -5645,6 +5746,157 @@ def tournament_start():
     return redirect(url_for('tournament'))
 
 
+def _owner_name_email(user_id):
+    """(username, email) for the device owner — used to pre-fill the
+    first participant row in the score-sheet and match-setup forms."""
+    try:
+        with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
+            row = cur.execute(
+                "SELECT username, email FROM users WHERE id = %s",
+                (user_id,)
+            ).fetchone()
+            if row is not None:
+                name  = row['username'] if 'username' in row else row[0]
+                email = row['email']    if 'email'    in row else row[1]
+                return (name or ''), (email or '')
+    except SQLAlchemyError:
+        pass
+    return '', ''
+
+
+def _finalize_match_sessions(user_id):
+    """Ending a live match: stamp session_end_time on every archer
+    session (the end-session routes only finalize the cookie's active
+    session). Reads the roster from the cookie; no-op outside match
+    mode. Leaves an already-set end time untouched."""
+    archers = session.get('match_archers') or []
+    if not archers:
+        return
+    now = _app_now()
+    try:
+        with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
+            for a in archers:
+                sid = a.get('sid')
+                if sid is None:
+                    continue
+                cur.execute(
+                    "UPDATE session_times SET session_end_time = %s "
+                    "WHERE session_id = %s AND user_id = %s "
+                    "AND session_end_time IS NULL",
+                    (now, sid, user_id)
+                )
+            con.commit()
+    except SQLAlchemyError as e:
+        print(f"❌ Match finalize error: {e}")
+
+
+@app.route('/tournament/match/setup', methods=['POST'])
+@login_required
+def tournament_match_setup():
+    """Render the live match-play setup form for a chosen round.
+
+    Live match play runs 2–4 archers on this one device: they take
+    turns at the canvas, the active archer switching after each
+    completed end (AB-CD detail shooting). Each archer keeps a separate
+    scorecard; set points / a winner are computed per the round's
+    scoring system. This route just collects archer names + emails;
+    /tournament/match/start does the work.
+    """
+    user_id = current_user_id()
+    round_key = (request.form.get('round_key') or '').strip()
+    round_def = _tournament_round_def(round_key)
+    if round_def is None:
+        return "Unknown tournament round", 400
+    _seed_tournament_faces(user_id)
+    owner_name, owner_email = _owner_name_email(user_id)
+    return render_template(
+        'tournament.html',
+        view='match_setup',
+        round_key=round_key,
+        round_def=round_def,
+        owner_name=owner_name,
+        owner_email=owner_email,
+        max_archers=4,
+    )
+
+
+@app.route('/tournament/match/start', methods=['POST'])
+@login_required
+def tournament_match_start():
+    """Begin a live multi-archer match.
+
+    Mints one session_id per archer (all under the device owner), tags
+    them with a shared match id, and stores the archer roster +
+    active-archer pointer in the cookie. The active archer's session_id
+    is mirrored into `session['session_id']` so the existing
+    single-archer /tournament render path Just Works; the POST handler
+    swaps it at each end boundary.
+    """
+    user_id = current_user_id()
+    round_key = (request.form.get('round_key') or '').strip()
+    round_def = _tournament_round_def(round_key)
+    if round_def is None:
+        return "Unknown tournament round", 400
+
+    # Refuse if a non-empty session is already in progress (same guard
+    # as /tournament/start) — a live match owns the session_id cookie.
+    if session.get('session_id'):
+        try:
+            with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
+                existing = cur.execute(
+                    "SELECT COUNT(*) FROM apollo "
+                    "WHERE session_id = %s AND user_id = %s",
+                    (session['session_id'], user_id)
+                ).fetchone()
+                shots = int(existing[0]) if existing and existing[0] is not None else 0
+        except SQLAlchemyError:
+            shots = 0
+        if shots > 0:
+            return ("A session is already in progress. End it first via "
+                    "<a href='/end_session'>End session</a>.", 409)
+
+    participants = _parse_participants_from_form(request.form)
+    if len(participants) < 2:
+        return "A live match needs at least two archers.", 400
+    if len(participants) > 4:
+        participants = participants[:4]
+
+    _seed_tournament_faces(user_id)
+    match_id = _match_id_for(user_id, round_key)
+
+    archers = []
+    try:
+        with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
+            for seat, p in enumerate(participants):
+                sid = _mint_session_id(con, cur, user_id)
+                if sid is None:
+                    return "Could not allocate session id — please try again", 500
+                archers.append({
+                    'sid':   sid,
+                    'name':  p['name'],
+                    'email': p['email'],
+                    'seat':  seat,
+                })
+    except SQLAlchemyError as e:
+        print(f"❌ Match start error: {e}")
+        return "Error starting match — please try again", 500
+
+    # Clear any stale per-round state, then install the match roster.
+    for k in ('quivers_completed', 'arrows_remaining', 'current_quiver_size',
+              'record_mode', 'tournament_segment_idx'):
+        session.pop(k, None)
+    session['match_id']       = match_id
+    session['match_archers']  = archers
+    session['match_idx']      = 0
+    session['session_id']     = archers[0]['sid']
+    session['tournament_round_key'] = round_key
+    session['tournament_segment_idx'] = 0
+    session['arrows_remaining'] = 0
+    session['quivers_completed'] = 0
+    session['target_id'] = _tournament_face_target_id(user_id, round_def['face_key'])
+    return redirect(url_for('tournament'))
+
+
 @app.route('/tournament/score_sheet/setup', methods=['POST'])
 @login_required
 def tournament_score_sheet_setup():
@@ -5664,19 +5916,7 @@ def tournament_score_sheet_setup():
 
     # Pre-fill the first participant row with the device owner's
     # username + email so a solo logger doesn't have to retype.
-    owner_name = ''
-    owner_email = ''
-    try:
-        with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
-            row = cur.execute(
-                "SELECT username, email FROM users WHERE id = %s",
-                (user_id,)
-            ).fetchone()
-            if row is not None:
-                owner_name  = row['username'] if 'username' in row else row[0]
-                owner_email = row['email']    if 'email'    in row else row[1]
-    except SQLAlchemyError:
-        pass
+    owner_name, owner_email = _owner_name_email(user_id)
 
     segments = _round_segments(round_def)
     # Per-end metadata for the template — labels, valid ring labels,
@@ -5733,6 +5973,41 @@ def tournament_score_sheet_setup():
     )
 
 
+def _mint_session_id(con, cur, user_id):
+    """Allocate a fresh session_id for `user_id` and insert its
+    session_times row, committing on success. Returns the new id, or
+    None if all retries lose the race. Same retry-with-backoff trick
+    used by /sesh, /tournament, and the score-sheet/match flows —
+    factored here so they share one implementation. Caller supplies the
+    open connection + cursor (the cursor stays usable for follow-up
+    inserts in the same transaction scope)."""
+    for _attempt in range(12):
+        res = cur.execute(
+            "SELECT MAX(session_id) FROM apollo WHERE user_id = %s",
+            (user_id,)
+        ).fetchone()
+        max_apollo = res[0] if res and res[0] is not None else 0
+        res = cur.execute(
+            "SELECT MAX(session_id) FROM session_times WHERE user_id = %s",
+            (user_id,)
+        ).fetchone()
+        max_st = res[0] if res and res[0] is not None else 0
+        candidate = max(int(max_apollo or 0), int(max_st or 0)) + 1
+        try:
+            cur.execute(
+                "INSERT INTO session_times "
+                "(user_id, session_id, session_begin_time) "
+                "VALUES (%s, %s, %s)",
+                (user_id, candidate, _app_now())
+            )
+            con.commit()
+            return candidate
+        except DBIntegrityError:
+            time.sleep(0.005 + secrets.randbelow(20) / 1000.0)
+            continue
+    return None
+
+
 def _match_id_for(user_id, round_key):
     """Mint a short, opaque match id. Each score-sheet submission
     becomes one "match" — a group of participant sessions tagged with
@@ -5754,6 +6029,137 @@ def _parse_participants_from_form(form):
             continue
         out.append({'idx': i, 'name': name, 'email': email})
     return out
+
+
+def _match_set_scoring(archers, round_def):
+    """Score a live (or finished) match across `archers`.
+
+    `archers` is a list of dicts in seat order, each carrying:
+      {'name', 'seat', 'is_active'(opt), 'progress'} where `progress`
+    is a _compute_tournament_progress() result.
+
+    Returns a dict the templates render:
+      {'mode': 'set'|'cumulative'|'leaderboard',
+       'rows': [{'name','seat','total','x_count','set_points'(or None),
+                 'is_active','is_complete'}, ...],   # seat order
+       'decided': bool, 'winner_name': str|None, 'is_tie': bool,
+       'summary': str}
+
+    Set scoring (WA 12.1.4.1) is only defined head-to-head, so it
+    applies when the round declares match_scoring=='set' AND there are
+    exactly two archers; otherwise we fall back to a cumulative-total
+    leaderboard. Compound / cumulative match rounds rank by total.
+    """
+    scoring = (round_def or {}).get('match_scoring')
+
+    def _end_totals(p):
+        return [e['end_total'] for e in (p.get('ends') or [])
+                if not e.get('partial')]
+
+    rows = []
+    for a in archers:
+        p = a.get('progress') or {}
+        rows.append({
+            'name':        a.get('name', ''),
+            'seat':        a.get('seat'),
+            'total':       int(p.get('total_score', 0) or 0),
+            'x_count':     int(p.get('x_count', 0) or 0),
+            'set_points':  None,
+            'is_active':   bool(a.get('is_active')),
+            'is_complete': bool(p.get('is_complete')),
+            '_end_totals': _end_totals(p),
+        })
+
+    all_complete = bool(rows) and all(r['is_complete'] for r in rows)
+
+    # ── Set system: two archers, recurve/barebow set play ──────────────
+    if scoring == 'set' and len(rows) == 2:
+        a, b = rows[0], rows[1]
+        a['set_points'] = 0
+        b['set_points'] = 0
+        # Award per end both archers have completed (the trailing archer
+        # may be one end behind mid-cycle — only score settled ends).
+        settled_ends = min(len(a['_end_totals']), len(b['_end_totals']))
+        for i in range(settled_ends):
+            ta, tb = a['_end_totals'][i], b['_end_totals'][i]
+            if ta > tb:
+                a['set_points'] += 2
+            elif tb > ta:
+                b['set_points'] += 2
+            else:
+                a['set_points'] += 1
+                b['set_points'] += 1
+        decided = False
+        winner_name = None
+        is_tie = False
+        # First to 6 set points wins (WA 12.1.4.1).
+        if a['set_points'] >= 6 or b['set_points'] >= 6:
+            decided = True
+            winner_name = (a['name'] if a['set_points'] >= b['set_points']
+                           else b['name'])
+        elif all_complete:
+            decided = True
+            if a['set_points'] > b['set_points']:
+                winner_name = a['name']
+            elif b['set_points'] > a['set_points']:
+                winner_name = b['name']
+            else:
+                is_tie = True  # 5–5 → single-arrow shoot-off
+        if is_tie:
+            summary = (f"Tied {a['set_points']}–{b['set_points']} on set "
+                       f"points — shoot-off")
+        elif decided:
+            hi = max(a['set_points'], b['set_points'])
+            lo = min(a['set_points'], b['set_points'])
+            summary = f"{winner_name} wins {hi}–{lo} on set points"
+        else:
+            lead = (a if a['set_points'] >= b['set_points'] else b)
+            trail = b if lead is a else a
+            if lead['set_points'] == trail['set_points']:
+                summary = f"Level {a['set_points']}–{b['set_points']} on set points"
+            else:
+                summary = (f"{lead['name']} leads "
+                           f"{lead['set_points']}–{trail['set_points']} on set points")
+        for r in rows:
+            r.pop('_end_totals', None)
+        return {'mode': 'set', 'rows': rows, 'decided': decided,
+                'winner_name': winner_name, 'is_tie': is_tie,
+                'summary': summary}
+
+    # ── Cumulative / leaderboard: rank by total ────────────────────────
+    mode = 'cumulative' if scoring == 'cumulative' else 'leaderboard'
+    ranked = sorted(rows, key=lambda r: r['total'], reverse=True)
+    decided = False
+    winner_name = None
+    is_tie = False
+    summary = ''
+    if all_complete and ranked:
+        top = ranked[0]
+        tied_top = [r for r in ranked if r['total'] == top['total']]
+        if len(tied_top) > 1:
+            is_tie = True
+            decided = True
+            summary = (f"Tied at {top['total']} — shoot-off "
+                       f"({', '.join(r['name'] for r in tied_top)})")
+        else:
+            decided = True
+            winner_name = top['name']
+            margin = top['total'] - ranked[1]['total'] if len(ranked) > 1 else top['total']
+            summary = f"{winner_name} wins by {margin} ({top['total']})"
+    elif ranked:
+        top = ranked[0]
+        leaders = [r for r in ranked if r['total'] == top['total']]
+        if len(leaders) > 1 or top['total'] == 0:
+            summary = "All level" if top['total'] == 0 else (
+                "Tied at " + str(top['total']))
+        else:
+            margin = top['total'] - ranked[1]['total'] if len(ranked) > 1 else top['total']
+            summary = f"{top['name']} leads by {margin} ({top['total']})"
+    for r in rows:
+        r.pop('_end_totals', None)
+    return {'mode': mode, 'rows': rows, 'decided': decided,
+            'winner_name': winner_name, 'is_tie': is_tie,
+            'summary': summary}
 
 
 @app.route('/tournament/score_sheet', methods=['POST'])
@@ -5802,32 +6208,7 @@ def tournament_score_sheet_submit():
                 # Mint a fresh session_id for this participant. Retry
                 # on integrity errors the same way /sesh + /tournament
                 # already do.
-                session_id = None
-                for _attempt in range(12):
-                    res = cur.execute(
-                        "SELECT MAX(session_id) FROM apollo WHERE user_id = %s",
-                        (user_id,)
-                    ).fetchone()
-                    max_apollo = res[0] if res and res[0] is not None else 0
-                    res = cur.execute(
-                        "SELECT MAX(session_id) FROM session_times WHERE user_id = %s",
-                        (user_id,)
-                    ).fetchone()
-                    max_st = res[0] if res and res[0] is not None else 0
-                    candidate = max(int(max_apollo or 0), int(max_st or 0)) + 1
-                    try:
-                        cur.execute(
-                            "INSERT INTO session_times "
-                            "(user_id, session_id, session_begin_time) "
-                            "VALUES (%s, %s, %s)",
-                            (user_id, candidate, _app_now())
-                        )
-                        con.commit()
-                        session_id = candidate
-                        break
-                    except DBIntegrityError:
-                        time.sleep(0.005 + secrets.randbelow(20) / 1000.0)
-                        continue
+                session_id = _mint_session_id(con, cur, user_id)
                 if session_id is None:
                     return "Could not allocate session id — please try again", 500
 
@@ -5931,12 +6312,18 @@ def _match_participants(user_id, match_id):
         comp_name = ''
         comp_date = ''
         comp_location = ''
+        seat = None
         for part in (tags or '').split(','):
             p = part.strip()
             if p.startswith('participant:'):
                 name = p.split(':', 1)[1].strip()
             elif p.startswith('email:'):
                 email = p.split(':', 1)[1].strip()
+            elif p.startswith('seat:'):
+                try:
+                    seat = int(p.split(':', 1)[1].strip())
+                except (TypeError, ValueError):
+                    seat = None
             elif p.startswith('competition_name:'):
                 comp_name = unquote(p.split(':', 1)[1].strip())
             elif p.startswith('competition_date:'):
@@ -5947,6 +6334,7 @@ def _match_participants(user_id, match_id):
             'session_id':            sid,
             'name':                  name,
             'email':                 email,
+            'seat':                  seat,
             'round_key':             round_key,
             'notes':                 notes or '',
             'competition_name':      comp_name,
@@ -6203,6 +6591,19 @@ def tournament_match_results(match_id):
     if round_def is None:
         return "Unknown round.", 400
 
+    # Score the match (set points / cumulative / leaderboard) from each
+    # participant's raw progress, in seat order so set play pairs the
+    # archers consistently.
+    by_seat = sorted(participants,
+                     key=lambda q: (q.get('seat') if q.get('seat') is not None else 999))
+    archers_for_scoring = [{
+        'name':      p['name'],
+        'seat':      p.get('seat'),
+        'is_active': False,
+        'progress':  _compute_tournament_progress(p['session_id'], user_id, round_def),
+    } for p in by_seat]
+    match_score = _match_set_scoring(archers_for_scoring, round_def)
+
     results = []
     for p in participants:
         scorecard = _participant_scorecard(user_id, p['session_id'], round_def)
@@ -6220,6 +6621,7 @@ def tournament_match_results(match_id):
         match_id=match_id,
         round_def=round_def,
         results=results,
+        match_score=match_score,
         email_enabled=email_enabled,
     )
 
@@ -6602,7 +7004,8 @@ def delete_session(session_id):
         for k in ('session_id', 'quivers_completed', 'arrows_remaining',
                   'record_mode', 'target_id', 'current_quiver_size',
                   'tournament_round_key', 'tournament_segment_idx',
-                  'tournament_practice'):
+                  'tournament_practice',
+                  'match_id', 'match_archers', 'match_idx'):
             session.pop(k, None)
     return redirect(url_for('previous_sessions'))
 
@@ -6832,7 +7235,8 @@ def end_session():
                 # the user logged in.
                 for k in ('session_id', 'quivers_completed', 'arrows_remaining',
                           'record_mode', 'target_id', 'current_quiver_size',
-                  'tournament_round_key', 'tournament_segment_idx', 'tournament_practice'):
+                  'tournament_round_key', 'tournament_segment_idx', 'tournament_practice',
+                  'match_id', 'match_archers', 'match_idx'):
                     session.pop(k, None)
                 return render_template('splash.html')
 
@@ -6935,10 +7339,13 @@ def end_session():
     if isinstance(stats, tuple):
         return stats
     stats["session_id"] = session_id
+    # A live match also has the other archers' sessions open — close them.
+    _finalize_match_sessions(user_id)
     # Clear the in-progress keys but keep the user logged in.
     for k in ('session_id', 'quivers_completed', 'arrows_remaining',
               'record_mode', 'target_id', 'current_quiver_size',
-                  'tournament_round_key', 'tournament_segment_idx', 'tournament_practice'):
+                  'tournament_round_key', 'tournament_segment_idx', 'tournament_practice',
+                  'match_id', 'match_archers', 'match_idx'):
         session.pop(k, None)
     return render_template('end_session.html', stats=stats, session_id=None, begin_time=None)
 
@@ -7009,11 +7416,14 @@ def end_session_silent():
                 con.commit()
         except SQLAlchemyError as e:
             print(f"❌ Silent end-session error: {e}")
+    # A live match also has the other archers' sessions open — close them.
+    _finalize_match_sessions(user_id)
     # Drop per-round keys but keep the user logged in. session.clear()
     # would log them out, which isn't what the leave-warning modal means.
     for k in ('session_id', 'quivers_completed', 'arrows_remaining',
               'record_mode', 'target_id', 'current_quiver_size',
-                  'tournament_round_key', 'tournament_segment_idx', 'tournament_practice'):
+                  'tournament_round_key', 'tournament_segment_idx', 'tournament_practice',
+                  'match_id', 'match_archers', 'match_idx'):
         session.pop(k, None)
     return redirect(next_url)
 

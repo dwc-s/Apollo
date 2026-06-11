@@ -293,6 +293,10 @@
                     title="Tap the target after every arrow on this device. Best for solo practice or a friendly shoot where one person tracks the group.">
                 Practice
             </button>
+            <button type="submit" formaction="/tournament/match/setup"
+                    title="2–4 archers take turns at the canvas on this device. After each end the target hands off to the next archer; set points and a winner are tracked automatically.">
+                Match play
+            </button>
             <button type="submit" formaction="/tournament/score_sheet/setup"
                     title="Skip the canvas — type each arrow's ring number from a paper scorecard. Use this to log a real competition (yours or your team's) after the fact.">
                 Enter scoresheet from actual tournament
@@ -308,9 +312,72 @@
 {% if view == 'shoot' %}
 
 <h4 class="quantico">
-    Tournament: {{ round_def.name }} (#{{ session_id }})
-    / <a href="/end_session" data-no-warn="1">End round</a>
+    Tournament: {{ round_def.name }}{% if not match %} (#{{ session_id }}){% endif %}
+    / <a href="/end_session" data-no-warn="1">{% if match %}End match{% else %}End round{% endif %}</a>
 </h4>
+
+{% if match %}
+{% set ms = match.score %}
+<style>
+    .match-banner {
+        background:#1a3a5c;color:#fff;border-radius:8px;
+        padding:10px 16px;margin:6px 0 12px 0;font-family:'Quantico',sans-serif;
+        font-size:1.05rem;
+    }
+    .match-banner strong { font-size:1.15rem; }
+    .match-scoreboard {
+        width:100%;border-collapse:collapse;margin:0 0 14px 0;
+        font-family:'Quantico',sans-serif;
+    }
+    .match-scoreboard th, .match-scoreboard td {
+        padding:6px 10px;border-bottom:1px solid #d6e0ee;text-align:center;
+    }
+    .match-scoreboard th { color:#1a3a5c;font-size:0.8rem;text-transform:uppercase;letter-spacing:0.04em; }
+    .match-scoreboard td.name-cell { text-align:left;font-weight:600; }
+    .match-scoreboard tr.active { background:#fff7d6; }
+    .match-scoreboard tr.active td.name-cell::after {
+        content:" ◀ shooting";color:#a07a00;font-weight:400;font-size:0.8rem;
+    }
+    .match-scoreboard .setpts { font-weight:700;color:#1a3a5c; }
+    .match-sub {
+        font-family:'Quantico',sans-serif;font-style:italic;
+        font-size:0.9rem;color:#1a3a5c;margin:-6px 0 14px 0;text-align:center;
+    }
+</style>
+{% if ms.decided %}
+<div class="complete-banner">
+    {% if ms.is_tie %}Match tied — {{ ms.summary }}.{% else %}Match complete — {{ ms.summary }}.{% endif %}
+    <a href="/tournament/match/{{ match.match_id }}" data-no-warn="1"
+       style="color:#fff;text-decoration:underline;">View scorecards →</a>
+</div>
+{% else %}
+<div class="match-banner">
+    Now shooting: <strong>{{ match.active_name }}</strong>
+    (Archer {{ match.idx + 1 }} of {{ match.count }}) · End {{ current_end_index }}
+</div>
+{% endif %}
+<table class="match-scoreboard">
+    <thead>
+        <tr>
+            <th>#</th><th style="text-align:left;">Archer</th>
+            <th>Total</th><th>X</th>
+            {% if ms.mode == 'set' %}<th>Set pts</th>{% endif %}
+        </tr>
+    </thead>
+    <tbody>
+        {% for r in ms.rows %}
+        <tr class="{% if r.is_active and not ms.decided %}active{% endif %}">
+            <td>{% if r.seat is not none and r.seat < 4 %}{{ 'ABCD'[r.seat] }}{% else %}{{ loop.index }}{% endif %}</td>
+            <td class="name-cell">{{ r.name }}</td>
+            <td><strong>{{ r.total }}</strong></td>
+            <td>{{ r.x_count }}</td>
+            {% if ms.mode == 'set' %}<td class="setpts">{{ r.set_points }}</td>{% endif %}
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% if not ms.decided and ms.summary %}<div class="match-sub">{{ ms.summary }}</div>{% endif %}
+{% endif %}
 
 <!-- Leave-session warning modal — same wiring as session.html -->
 <div class="modal-backdrop" id="leave-modal" role="dialog" aria-modal="true" aria-labelledby="leave-modal-title">
@@ -328,7 +395,7 @@
     </div>
 </div>
 
-{% if progress.is_complete %}
+{% if progress.is_complete and not match %}
 <div class="complete-banner">
     Round complete — {{ progress.total_score }} / {{ round_def.max_score }} ({{ progress.x_count }}X).
     <a href="/end_session" data-no-warn="1" style="color:#fff;text-decoration:underline;">Finalize and view stats →</a>
@@ -530,7 +597,7 @@ const isPreciseInput = document.getElementById('is_precise');
 
 const UNITS_KEY  = 'apollo_units';
 const IS_TOUCH   = matchMedia('(hover: none) and (pointer: coarse)').matches;
-const ROUND_COMPLETE = {{ 'true' if progress.is_complete else 'false' }};
+const ROUND_COMPLETE = {{ 'true' if (progress.is_complete or (match and match.score.decided)) else 'false' }};
 
 // ── Ring overlay rendering ───────────────────────────────────────────
 // Draw the official scoring rings from face_render.rings on top of the
@@ -1307,6 +1374,128 @@ applyUnits();
 {% endif %}
 
 
+{% if view == 'match_setup' %}
+<style>
+    #match-setup-form {
+        font-family:"Quantico",sans-serif;max-width:560px;margin:0 auto;padding:0 16px;
+    }
+    #match-setup-form h2, #match-setup-form h4, #match-setup-form label,
+    #match-setup-form p, #match-setup-form input, #match-setup-form button {
+        font-family:"Quantico",sans-serif;
+    }
+    .archer-card {
+        border:1px solid #c3d0e3;border-radius:10px;background:#fbfdff;
+        padding:14px 18px;margin:14px 0;
+    }
+    .archer-card .fields { display:grid;grid-template-columns:auto 1fr;gap:8px 12px;align-items:center; }
+    .archer-card input { padding:6px 8px; }
+    .archer-card .rm-archer {
+        float:right;border:none;background:none;font-size:1.2rem;cursor:pointer;color:#a04a4a;
+    }
+    .add-archer-btn { margin:6px 0 4px 0; }
+</style>
+
+<h2 class="quantico" style="text-align:center;color:#1a3a5c;">Live match — {{ round_def.name }}</h2>
+<p class="selector-intro">
+    Enter 2–4 archers who'll share this device. They take turns at the canvas:
+    each archer shoots a full end, then the target hands off to the next archer.
+    {% if round_def.match_scoring == 'set' %}
+        Set points are awarded per end (2 to the higher score, 1 each on a tie);
+        first to 6 set points wins.
+    {% elif round_def.match_scoring == 'cumulative' %}
+        Highest cumulative total after all ends wins.
+    {% else %}
+        Each archer's running total is tracked separately; highest total leads.
+    {% endif %}
+</p>
+
+<form action="/tournament/match/start" method="POST" id="match-setup-form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="round_key" value="{{ round_key }}">
+
+    <h4>Archers</h4>
+    <div id="archers-list">
+        <div class="archer-card" data-pidx="0">
+            <h5 style="margin:0 0 10px 0;" class="archer-title">Archer A</h5>
+            <div class="fields">
+                <label>Name</label>
+                <input type="text" name="participant_0_name"
+                       placeholder="Real name (e.g. Robin Hood)"
+                       value="{{ owner_name }}" required>
+                <label>Email</label>
+                <input type="email" name="participant_0_email"
+                       placeholder="email@example.com (optional)"
+                       value="{{ owner_email }}">
+            </div>
+        </div>
+        <div class="archer-card" data-pidx="1">
+            <h5 style="margin:0 0 10px 0;" class="archer-title">Archer B</h5>
+            <div class="fields">
+                <label>Name</label>
+                <input type="text" name="participant_1_name"
+                       placeholder="Real name" required>
+                <label>Email</label>
+                <input type="email" name="participant_1_email"
+                       placeholder="email@example.com (optional)">
+            </div>
+        </div>
+    </div>
+
+    <button type="button" id="add-archer" class="add-archer-btn">+ Add another archer</button>
+
+    <div style="margin:24px 0;text-align:center;">
+        <button type="submit" class="submit-btn">Start match</button>
+    </div>
+</form>
+
+<template id="archer-card-template">
+    <div class="archer-card" data-pidx="__IDX__">
+        <button type="button" class="rm-archer" title="Remove this archer">×</button>
+        <h5 style="margin:0 0 10px 0;" class="archer-title">Archer __LETTER__</h5>
+        <div class="fields">
+            <label>Name</label>
+            <input type="text" name="participant___IDX___name" placeholder="Real name" required>
+            <label>Email</label>
+            <input type="email" name="participant___IDX___email" placeholder="email@example.com (optional)">
+        </div>
+    </div>
+</template>
+
+<script>
+(function() {
+    const MAX_ARCHERS = {{ max_archers }};
+    const LETTERS = 'ABCDEFGH';
+    const list = document.getElementById('archers-list');
+    const addBtn = document.getElementById('add-archer');
+
+    function renumber() {
+        list.querySelectorAll('.archer-card').forEach((card, i) => {
+            card.querySelector('.archer-title').textContent = 'Archer ' + LETTERS[i];
+        });
+        addBtn.style.display =
+            list.querySelectorAll('.archer-card').length >= MAX_ARCHERS ? 'none' : '';
+    }
+
+    addBtn.addEventListener('click', () => {
+        const idx = list.querySelectorAll('.archer-card').length;
+        if (idx >= MAX_ARCHERS) return;
+        const tpl = document.getElementById('archer-card-template').innerHTML;
+        list.insertAdjacentHTML('beforeend',
+            tpl.replaceAll('__IDX__', idx).replaceAll('__LETTER__', LETTERS[idx]));
+        const card = list.lastElementChild;
+        card.querySelector('.rm-archer').addEventListener('click', () => {
+            card.remove();
+            renumber();
+        });
+        renumber();
+    });
+
+    renumber();
+})();
+</script>
+{% endif %}
+
+
 {% if view == 'score_sheet' %}
 <style>
     /* Score sheet layout — Quantico everywhere, content-sized cards,
@@ -1762,6 +1951,19 @@ applyUnits();
     Saved. Each competitor's full scorecard is below — download a copy
     in PDF, CSV, or Excel, or email everyone their report in one click.
 </p>
+
+{% if match_score and match_score.summary %}
+<div class="results-card" style="text-align:center;background:#1a3a5c;color:#fff;border-color:#1a3a5c;">
+    <div style="font-size:1.15rem;font-weight:700;">{{ match_score.summary }}</div>
+    {% if match_score.mode == 'set' %}
+    <div style="margin-top:8px;font-size:0.95rem;">
+        {% for r in match_score.rows %}
+            {{ r.name }}: {{ r.set_points }} set pts{% if not loop.last %} · {% endif %}
+        {% endfor %}
+    </div>
+    {% endif %}
+</div>
+{% endif %}
 
 {% for r in results %}
 <div class="results-card">
