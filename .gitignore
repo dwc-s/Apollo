@@ -29,7 +29,13 @@ apolloshoots.org-ssl-bundle.zip
 
 # Apollo runtime data
 apollo.db
-static/targets/
+# Ignore everything under static/targets/ (user uploads) EXCEPT the bundled
+# seed image. nasp_40cm.jpg is the default target seeded for every new user
+# AND the placeholder under every tournament face — it must ship so a fresh
+# clone works out of the box. Note: must ignore the *contents* (targets/*),
+# not the directory itself, or git can't re-include a file inside it.
+static/targets/*
+!static/targets/nasp_40cm.jpg
 wsgi_snippet.py
 inject_gtag.py
 venv/
