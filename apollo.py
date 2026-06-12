@@ -27,6 +27,18 @@ import re
 import uuid
 from urllib.parse import urlparse
 
+# Local pure-Python modules (no Flask/DB) for the AGB handicap math and the
+# classification resolvers. Kept standalone so they stay unit-testable.
+import handicap
+import classifications
+
+# Ordered choice lists for the archer-profile form (classification category).
+ARCHER_GENDERS = ['male', 'female', 'open']
+ARCHER_AGE_GROUPS = ['adult', '50+', 'under 21', 'under 18', 'under 16',
+                     'under 15', 'under 14', 'under 12']
+ARCHER_BOWSTYLES = ['recurve', 'compound', 'barebow', 'longbow',
+                    'traditional', 'flatbow']
+
 # Resend is the transactional-email backend. Optional at import time so
 # `python apollo.py` still launches when the package isn't installed yet
 # (e.g. an older venv that predates the forgot-password feature) — the
@@ -1118,6 +1130,78 @@ def _round_segments(round_def):
     ]
 
 
+# ── Handicap & classification adapters ─────────────────────────────────────
+# These bridge Apollo's faces/rounds to the pure handicap.py / classifications
+# modules. Handicaps are computed only for AGB-recognised target rounds, using
+# the scheme-standard arrow diameter (so the number matches published AGB
+# tables); the raw score itself is still Apollo's real-arrow line-cutter score.
+
+def _round_handicap_passes(round_key):
+    """Build handicap.py 'passes' for a round, or None if not handicappable.
+
+    Each pass is ``{dist_m, n_arrows, zones, arrow_d_m}``, pulling ring
+    geometry from ``TOURNAMENT_FACES`` and the indoor/outdoor standard arrow
+    diameter.
+    """
+    round_def = _tournament_round_def(round_key)
+    if not round_def:
+        return None
+    indoor = round_key in classifications.data.INDOOR_ROUNDS
+    arrow_d = handicap.ARROW_D_INDOOR if indoor else handicap.ARROW_D_OUTDOOR
+    passes = []
+    for seg in _round_segments(round_def):
+        face = TOURNAMENT_FACES.get(seg['face_key'])
+        if not face or not face.get('zones'):
+            return None
+        passes.append({
+            'dist_m':    float(seg['distance_m']),
+            'n_arrows':  int(seg['arrows_per_end']) * int(seg['ends']),
+            'zones':     face['zones'],
+            'arrow_d_m': arrow_d,
+        })
+    return passes
+
+
+def _session_handicap(round_key, total_score):
+    """AGB handicap (int) for a completed round score, or None.
+
+    Only meaningful for AGB-recognised target rounds; returns None for other
+    formats (NFAA, field, match) or an out-of-range score.
+    """
+    if round_key not in classifications.data.AGB_TARGET_ROUNDS or not total_score:
+        return None
+    passes = _round_handicap_passes(round_key)
+    round_def = _tournament_round_def(round_key)
+    if not passes or not round_def:
+        return None
+    return handicap.handicap_from_score(total_score, passes, round_def.get('max_score'))
+
+
+def _archer_category(session_tags=None):
+    """Build a classifications.Category from the user's profile, with an
+    optional per-round bowstyle override carried in ``session_tags``
+    (e.g. ``bowstyle:compound``).
+    """
+    user = current_user()
+    bowstyle = (user.get('default_bowstyle') if user else None) or 'recurve'
+    gender = (user.get('gender') if user else None) or 'male'
+    age_group = (user.get('age_group') if user else None) or 'adult'
+    if session_tags:
+        for part in str(session_tags).split(','):
+            part = part.strip()
+            if part.startswith('bowstyle:'):
+                bowstyle = part.split(':', 1)[1].strip() or bowstyle
+    return classifications.Category(bowstyle, gender, age_group)
+
+
+def _session_handicap_awards(round_key, total_score, session_tags=None):
+    """Return ``{'handicap': int|None, 'awards': [...]}`` for a finished round."""
+    hc_val = _session_handicap(round_key, total_score)
+    category = _archer_category(session_tags)
+    awards = classifications.resolve_awards(round_key, total_score, hc_val, category)
+    return {'handicap': hc_val, 'awards': awards}
+
+
 def _segment_for_shot(segments, shot_index):
     """Return (segment_idx, segment_def, arrow_offset_into_segment) for
     the segment containing the given zero-based shot index.
@@ -2023,6 +2107,15 @@ users_table = Table('users', metadata,
     # input back to UTC. Validated against zoneinfo.available_timezones()
     # on write, so a stale row never feeds an invalid name to ZoneInfo().
     Column('timezone', String(64), server_default=text("'UTC'")),
+    # Archer profile for handicap/classification. All nullable — handicaps
+    # need none of these; classifications use them to pick the right Archery
+    # GB threshold table. ``age_group`` is stored as a label (e.g. 'adult',
+    # '50+', 'under 18') so there is no birthday math; ``gender`` is
+    # 'male'/'female'/'open'; ``default_bowstyle`` seeds the per-round
+    # bowstyle (recurve/compound/barebow/longbow/…).
+    Column('gender', String(16)),
+    Column('age_group', String(32)),
+    Column('default_bowstyle', String(32)),
 )
 
 apollo_table = Table('apollo', metadata,
@@ -2098,6 +2191,11 @@ bows_table = Table('bows', metadata,
     Column('effective_draw_weight', String(64)),
     Column('amo', String(64)),
     Column('nock_height', String(64)),
+    # AGB bowstyle for this bow (recurve/compound/barebow/longbow/…). Used as
+    # the per-round bowstyle default when shooting with this bow, feeding the
+    # classification category. Nullable; falls back to the user's
+    # ``default_bowstyle`` then 'recurve'.
+    Column('bowstyle', String(32)),
 )
 
 session_times_table = Table('session_times', metadata,
@@ -2725,6 +2823,39 @@ def _ensure_user_timezone_column():
         conn.execute(text("ALTER TABLE users ADD COLUMN timezone VARCHAR(64) DEFAULT 'UTC'"))
 
 
+def _ensure_archer_profile_columns():
+    """Add archer-profile columns used by handicap/classification.
+
+    ``users.gender``, ``users.age_group``, ``users.default_bowstyle`` and
+    ``bows.bowstyle``. Idempotent: each column is only ALTERed in when
+    missing, and all are nullable so existing rows keep working — an archer
+    without a profile still gets a handicap (which needs none of these), just
+    no Archery GB classification until they fill the category in.
+    """
+    insp = sa_inspect(engine)
+    tables = set(insp.get_table_names())
+    wanted = {
+        'users': [
+            ('gender', "VARCHAR(16)"),
+            ('age_group', "VARCHAR(32)"),
+            ('default_bowstyle', "VARCHAR(32)"),
+        ],
+        'bows': [
+            ('bowstyle', "VARCHAR(32)"),
+        ],
+    }
+    for tbl, cols in wanted.items():
+        if tbl not in tables:
+            continue
+        existing = {c['name'] for c in insp.get_columns(tbl)}
+        for col_name, col_decl in cols:
+            if col_name in existing:
+                continue
+            print(f"⚙️  Migrating: adding {col_name} column to {tbl}")
+            with engine.begin() as conn:
+                conn.execute(text(f"ALTER TABLE {tbl} ADD COLUMN {col_name} {col_decl}"))
+
+
 def _ensure_is_root_column():
     """Add the is_root column to users on DBs that predate root support.
 
@@ -2889,6 +3020,7 @@ def migrate_db():
     _ensure_session_tags_column()
     _ensure_is_root_column()
     _ensure_user_timezone_column()
+    _ensure_archer_profile_columns()
     metadata.create_all(engine)
     _drop_legacy_unique_target_name()
     _ensure_session_times_unique_index()
@@ -3499,7 +3631,8 @@ def current_user():
         with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
             row = cur.execute(
                 "SELECT id AS rowid, username, email, created_at, last_login, "
-                "is_root, timezone FROM users WHERE id = %s AND is_active = 1", (uid,)
+                "is_root, timezone, gender, age_group, default_bowstyle "
+                "FROM users WHERE id = %s AND is_active = 1", (uid,)
             ).fetchone()
             # Stale session: cookie says user 42 but user 42 was deleted
             # or deactivated. Clear the cookie so the next request bumps
@@ -3811,6 +3944,9 @@ def inject_template_globals():
         timezones=_TIMEZONE_CHOICES,
         apollo_backend=APOLLO_BACKEND,
         server_timezone=get_app_setting('server_timezone', 'UTC'),
+        archer_genders=ARCHER_GENDERS,
+        archer_age_groups=ARCHER_AGE_GROUPS,
+        archer_bowstyles=ARCHER_BOWSTYLES,
     )
 
 @app.route('/', methods=['GET'])
@@ -4257,6 +4393,40 @@ def account():
         g.pop('_current_user', None)
         return render_template('account.html', error=None,
                                success=f"Your timezone set to {new_tz}.")
+
+    # Archer profile (gender / age group / default bowstyle) drives the
+    # classification category. Display-only preference — no password re-prompt.
+    if action == 'change_archer_profile':
+        gender = (request.form.get('gender') or '').strip().lower()
+        age_group = (request.form.get('age_group') or '').strip().lower()
+        bowstyle = (request.form.get('default_bowstyle') or '').strip().lower()
+        # Blank = "leave unset"; otherwise validate against the known options.
+        if gender and gender not in ('male', 'female', 'open'):
+            return render_template('account.html',
+                error="Unknown gender option.", success=None), 400
+        if age_group and age_group not in classifications.data.AGB_AGE_STEP:
+            return render_template('account.html',
+                error="Unknown age group.", success=None), 400
+        if bowstyle and bowstyle not in classifications.data.AGB_BOWSTYLES:
+            return render_template('account.html',
+                error="Unknown bowstyle.", success=None), 400
+        try:
+            with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
+                cur.execute(
+                    "UPDATE users SET gender = %s, age_group = %s, "
+                    "default_bowstyle = %s WHERE id = %s",
+                    (gender or None, age_group or None, bowstyle or None,
+                     user['rowid'])
+                )
+                con.commit()
+        except SQLAlchemyError as e:
+            print(f"❌ Change-archer-profile error: {e}")
+            return render_template('account.html',
+                error="Could not update archer profile — please try again.",
+                success=None), 500
+        g.pop('_current_user', None)
+        return render_template('account.html', error=None,
+                               success="Archer profile updated.")
 
     # Server-wide timezone is admin-only and only meaningful on the
     # multi-user MySQL flavor; reject from the local SQLite install too.
@@ -5620,6 +5790,12 @@ def tournament():
     # `practice` tag is retained on past sessions, but new shots no
     # longer get tagged with it.
     tournament_tag = _tournament_tag_for_round(round_key)
+    # Per-round bowstyle override (set at round start) — carried on each shot
+    # so the classification category reflects what was actually shot, even if
+    # it differs from the archer's profile default.
+    _bs_override = session.get('tournament_bowstyle')
+    if _bs_override:
+        tournament_tag += f', bowstyle:{_bs_override}'
     if match_id and active_archer:
         tournament_tag += f', match:{match_id}, participant:{active_archer.get("name","")}'
         if active_archer.get('email'):
@@ -5892,12 +6068,22 @@ def tournament():
         quivers_completed_display = session.get('quivers_completed', 0)
         current_end_index = int(session.get('quivers_completed', 0) or 0) + 1
 
+    # Once the round is complete, compute the AGB handicap and any
+    # classification awards for the single-archer score. Skipped for live
+    # match play (short set/cumulative formats aren't handicap rounds).
+    handicap_info = None
+    if progress.get('is_complete') and not match_id:
+        handicap_info = _session_handicap_awards(
+            round_key, progress.get('total_score'),
+            _last_session_tags(user_id, session_id))
+
     return render_template(
         'tournament.html',
         view='shoot',
         session_id=session_id,
         round_key=round_key,
         round_def=round_def,
+        handicap_info=handicap_info,
         face_def=face_def,
         face_render=_tournament_face_render_payload(face_key),
         target_config=target_config,
@@ -5969,6 +6155,13 @@ def tournament_start():
     session['tournament_round_key'] = round_key
     session['tournament_segment_idx'] = 0
     session['target_id'] = _tournament_face_target_id(user_id, round_def['face_key'])
+    # Optional per-round bowstyle override (defaults to the profile bowstyle
+    # when blank). Only stored when it names a known AGB bowstyle.
+    bs = (request.form.get('bowstyle') or '').strip().lower()
+    if bs in classifications.data.AGB_BOWSTYLES:
+        session['tournament_bowstyle'] = bs
+    else:
+        session.pop('tournament_bowstyle', None)
     return redirect(url_for('tournament'))
 
 
@@ -6570,14 +6763,16 @@ def _match_participants(user_id, match_id):
     return out
 
 
-def _participant_scorecard(user_id, session_id, round_def):
+def _participant_scorecard(user_id, session_id, round_def, round_key=None):
     """Return the canonical scorecard for one participant:
     {'ends': [{'arrows':[label,...], 'end_total':n, 'running':n, 'segment_idx':i}],
-     'total_score': n, 'x_count': n, 'arrows_shot': n}.
+     'total_score': n, 'x_count': n, 'arrows_shot': n, 'handicap': n, 'awards': [...]}.
 
     Uses _compute_tournament_progress under the hood (already segment-
     aware) and decorates each arrow with the ring label the user
-    originally entered, reverse-mapped from the stored coordinates."""
+    originally entered, reverse-mapped from the stored coordinates. When
+    ``round_key`` is supplied and the round is complete, the AGB handicap and
+    classification awards are included too."""
     progress = _compute_tournament_progress(session_id, user_id, round_def)
     segments = _round_segments(round_def)
     # Reverse-map points → ring label. This is approximate for compound
@@ -6610,12 +6805,20 @@ def _participant_scorecard(user_id, session_id, round_def):
             'segment_idx': end.get('segment_idx', 0),
             'partial':     end.get('partial', False),
         })
+    handicap = None
+    awards = []
+    if round_key and progress.get('is_complete'):
+        info = _session_handicap_awards(round_key, progress['total_score'])
+        handicap = info['handicap']
+        awards = info['awards']
     return {
         'total_score': progress['total_score'],
         'x_count':     progress['x_count'],
         'arrows_shot': progress['arrows_shot'],
         'planned':     progress['arrows_planned'],
         'ends':        ends_out,
+        'handicap':    handicap,
+        'awards':      awards,
     }
 
 
@@ -6650,6 +6853,10 @@ def _scorecard_csv(round_def, participant, scorecard):
     w.writerow(['Total score', scorecard['total_score'], f"/ {round_def['max_score']}"])
     w.writerow(['X count', scorecard['x_count']])
     w.writerow(['Arrows shot', f"{scorecard['arrows_shot']} / {scorecard['planned']}"])
+    if scorecard.get('handicap') is not None:
+        w.writerow(['AGB handicap', scorecard['handicap']])
+    for a in scorecard.get('awards') or []:
+        w.writerow([f"{a['scheme']} classification", a['name']])
     if participant.get('notes'):
         w.writerow([])
         w.writerow(['Notes', participant['notes']])
@@ -6708,11 +6915,21 @@ def _scorecard_xlsx(round_def, participant, scorecard):
     ws.cell(row=summary_r + 1, column=2, value=scorecard['x_count'])
     ws.cell(row=summary_r + 2, column=1, value='Arrows shot').font = Font(bold=True)
     ws.cell(row=summary_r + 2, column=2, value=f"{scorecard['arrows_shot']} / {scorecard['planned']}")
+    extra_r = summary_r + 3
+    if scorecard.get('handicap') is not None:
+        ws.cell(row=extra_r, column=1, value='AGB handicap').font = Font(bold=True)
+        ws.cell(row=extra_r, column=2, value=scorecard['handicap'])
+        extra_r += 1
+    for a in scorecard.get('awards') or []:
+        ws.cell(row=extra_r, column=1, value=f"{a['scheme']} class").font = Font(bold=True)
+        ws.cell(row=extra_r, column=2, value=a['name'])
+        extra_r += 1
     if participant.get('notes'):
-        ws.cell(row=summary_r + 4, column=1, value='Notes').font = Font(bold=True)
-        ws.cell(row=summary_r + 4, column=2, value=participant['notes']).alignment = Alignment(wrap_text=True)
-        ws.merge_cells(start_row=summary_r + 4, start_column=2,
-                       end_row=summary_r + 4, end_column=2 + max_ape)
+        notes_r = extra_r + 1
+        ws.cell(row=notes_r, column=1, value='Notes').font = Font(bold=True)
+        ws.cell(row=notes_r, column=2, value=participant['notes']).alignment = Alignment(wrap_text=True)
+        ws.merge_cells(start_row=notes_r, start_column=2,
+                       end_row=notes_r, end_column=2 + max_ape)
     ws.column_dimensions['A'].width = 16
     for col in range(2, 4 + max_ape):
         ws.column_dimensions[chr(ord('A') + col - 1)].width = 9
@@ -6784,8 +7001,15 @@ def _scorecard_pdf(round_def, participant, scorecard):
     summary = (f"Total: {scorecard['total_score']} / {round_def['max_score']}    "
                f"X: {scorecard['x_count']}    "
                f"Arrows: {scorecard['arrows_shot']} / {scorecard['planned']}")
+    if scorecard.get('handicap') is not None:
+        summary += f"    Handicap: {scorecard['handicap']}"
     ax.text(0.5, -0.02, summary, transform=ax.transAxes, ha='center',
             fontsize=11, fontweight='bold', fontfamily=font_family)
+    if scorecard.get('awards'):
+        award_txt = '   '.join(f"{a['scheme']}: {a['name']}"
+                               for a in scorecard['awards'])
+        ax.text(0.5, -0.05, award_txt, transform=ax.transAxes, ha='center',
+                fontsize=9, fontfamily=font_family)
     # Notes below the summary
     if participant.get('notes'):
         ax.text(0.05, -0.08, f"Notes: {participant['notes']}",
@@ -6832,7 +7056,8 @@ def tournament_match_results(match_id):
 
     results = []
     for p in participants:
-        scorecard = _participant_scorecard(user_id, p['session_id'], round_def)
+        scorecard = _participant_scorecard(user_id, p['session_id'], round_def,
+                                           round_key=p['round_key'])
         results.append({**p, 'scorecard': scorecard})
 
     # Sort highest score first (ranking)
@@ -6865,7 +7090,8 @@ def tournament_match_download(match_id, session_id, fmt):
     round_def = _tournament_round_def(p['round_key'])
     if round_def is None:
         return "Round not found.", 400
-    scorecard = _participant_scorecard(user_id, session_id, round_def)
+    scorecard = _participant_scorecard(user_id, session_id, round_def,
+                                       round_key=p['round_key'])
     safe_name = ''.join(c for c in p['name']
                         if c.isalnum() or c in ('-', '_')) or f's{session_id}'
     base = f"apollo-{p['round_key']}-{safe_name}"
@@ -6912,7 +7138,8 @@ def tournament_match_email(match_id):
         if not p.get('email'):
             skipped.append({'name': p['name'], 'reason': 'no email on file'})
             continue
-        scorecard = _participant_scorecard(user_id, p['session_id'], round_def)
+        scorecard = _participant_scorecard(user_id, p['session_id'], round_def,
+                                           round_key=p['round_key'])
         attachments = [
             {'filename': 'scorecard.pdf',  'content': _scorecard_pdf(round_def, p, scorecard)},
             {'filename': 'scorecard.csv',  'content': _scorecard_csv(round_def, p, scorecard)},
@@ -6932,6 +7159,10 @@ def tournament_match_email(match_id):
             f"X count: {scorecard['x_count']}",
             f"Arrows shot: {scorecard['arrows_shot']} / {scorecard['planned']}",
         ]
+        if scorecard.get('handicap') is not None:
+            body_lines.append(f"AGB handicap: {scorecard['handicap']}")
+        for a in scorecard.get('awards') or []:
+            body_lines.append(f"{a['scheme']} classification: {a['name']}")
         if p.get('notes'):
             body_lines += ['', f"Notes: {p['notes']}"]
         body_lines += ['', 'Full per-end breakdown is attached as PDF / CSV / Excel.']
@@ -7084,6 +7315,19 @@ def previous_sessions():
             'target': target_cfg,
             'replay_shots': replay_shots,
         }
+        # For a completed tournament round, surface its AGB handicap and any
+        # classification awards so the history list mirrors the round-complete
+        # banner. Skipped for practice/regular sessions and partial rounds.
+        tags0 = res[0]['session_tags'] if res else None
+        rkey = _round_key_from_tags(tags0)
+        if rkey:
+            rdef = _tournament_round_def(rkey)
+            prog = _compute_tournament_progress(session_id, user_id, rdef)
+            if prog.get('is_complete'):
+                info = _session_handicap_awards(rkey, prog.get('total_score'), tags0)
+                session_data[session_id]['round_name'] = rdef.get('name')
+                session_data[session_id]['handicap'] = info['handicap']
+                session_data[session_id]['awards'] = info['awards']
 
     # Dropdown options for the filter bar — derived from every shot the
     # user has ever recorded, so the dropdowns surface the full history
@@ -7229,7 +7473,7 @@ def delete_session(session_id):
     if deleting_current:
         for k in ('session_id', 'quivers_completed', 'arrows_remaining',
                   'record_mode', 'target_id', 'current_quiver_size',
-                  'tournament_round_key', 'tournament_segment_idx',
+                  'tournament_round_key', 'tournament_segment_idx', 'tournament_bowstyle',
                   'tournament_practice',
                   'match_id', 'match_archers', 'match_idx'):
             session.pop(k, None)
@@ -7462,6 +7706,7 @@ def end_session():
                 for k in ('session_id', 'quivers_completed', 'arrows_remaining',
                           'record_mode', 'target_id', 'current_quiver_size',
                   'tournament_round_key', 'tournament_segment_idx', 'tournament_practice',
+                  'tournament_bowstyle',
                   'match_id', 'match_archers', 'match_idx'):
                     session.pop(k, None)
                 return render_template('splash.html')
@@ -7571,6 +7816,7 @@ def end_session():
     for k in ('session_id', 'quivers_completed', 'arrows_remaining',
               'record_mode', 'target_id', 'current_quiver_size',
                   'tournament_round_key', 'tournament_segment_idx', 'tournament_practice',
+                  'tournament_bowstyle',
                   'match_id', 'match_archers', 'match_idx'):
         session.pop(k, None)
     return render_template('end_session.html', stats=stats, session_id=None, begin_time=None)
@@ -7649,6 +7895,7 @@ def end_session_silent():
     for k in ('session_id', 'quivers_completed', 'arrows_remaining',
               'record_mode', 'target_id', 'current_quiver_size',
                   'tournament_round_key', 'tournament_segment_idx', 'tournament_practice',
+                  'tournament_bowstyle',
                   'match_id', 'match_archers', 'match_idx'):
         session.pop(k, None)
     return redirect(next_url)

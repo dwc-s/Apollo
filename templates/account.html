@@ -200,6 +200,42 @@
     </div>
     {% endif %}
 
+    <form action="/account" method="POST" autocomplete="off" style="margin-top:18px;">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="action" value="change_archer_profile">
+        <div class="form-panel">
+            <h4>Archer profile</h4>
+            <p class="account-tz-note">
+                Used to award the right Archery GB classification for your
+                category. Optional — your handicap is calculated without it.
+            </p>
+            <span class="form-label">Gender</span>
+            <select name="gender">
+                <option value="">— not set —</option>
+                {% for gnd in archer_genders %}
+                <option value="{{ gnd }}" {% if current_user and current_user.gender == gnd %}selected{% endif %}>{{ gnd | capitalize }}</option>
+                {% endfor %}
+            </select>
+            <span class="form-label" style="margin-top:10px;">Age group</span>
+            <select name="age_group">
+                <option value="">— not set —</option>
+                {% for ag in archer_age_groups %}
+                <option value="{{ ag }}" {% if current_user and current_user.age_group == ag %}selected{% endif %}>{{ ag | capitalize }}</option>
+                {% endfor %}
+            </select>
+            <span class="form-label" style="margin-top:10px;">Default bowstyle</span>
+            <select name="default_bowstyle">
+                <option value="">— not set —</option>
+                {% for bs in archer_bowstyles %}
+                <option value="{{ bs }}" {% if current_user and current_user.default_bowstyle == bs %}selected{% endif %}>{{ bs | capitalize }}</option>
+                {% endfor %}
+            </select>
+            <div class="submit-row">
+                <input type="submit" value="Update archer profile">
+            </div>
+        </div>
+    </form>
+
     <form action="/delete_account" method="POST" autocomplete="off"
           onsubmit="return confirm('Permanently delete your account and ALL your data? This cannot be undone.');">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">

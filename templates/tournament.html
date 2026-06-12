@@ -289,6 +289,15 @@
         <form method="POST" class="round-start-form">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <input type="hidden" name="round_key" value="{{ r.key }}">
+            <label style="display:inline-flex;align-items:center;gap:6px;font-family:'Quantico',sans-serif;font-size:0.8rem;margin-bottom:6px;"
+                   title="Bowstyle for this round — sets your Archery GB classification category. Defaults to your profile.">
+                Bowstyle:
+                <select name="bowstyle">
+                    {% for bs in archer_bowstyles %}
+                    <option value="{{ bs }}" {% if current_user and current_user.default_bowstyle == bs %}selected{% endif %}>{{ bs | capitalize }}</option>
+                    {% endfor %}
+                </select>
+            </label>
             <button type="submit" formaction="/tournament/start"
                     title="Tap the target after every arrow on this device. Best for solo practice or a friendly shoot where one person tracks the group.">
                 Practice
@@ -398,7 +407,24 @@
 {% if progress.is_complete and not match %}
 <div class="complete-banner">
     Round complete — {{ progress.total_score }} / {{ round_def.max_score }} ({{ progress.x_count }}X).
+    {% if handicap_info and handicap_info.handicap is not none %}
+    · <strong title="Archery GB 2023 handicap — lower is better">Handicap {{ handicap_info.handicap }}</strong>
+    {% endif %}
     <a href="/end_session" data-no-warn="1" style="color:#fff;text-decoration:underline;">Finalize and view stats →</a>
+    {% if handicap_info and handicap_info.awards %}
+    <div style="margin-top:6px;display:flex;flex-wrap:wrap;gap:6px;align-items:center;">
+        {% for a in handicap_info.awards %}
+        <span style="display:inline-block;padding:2px 8px;border-radius:10px;font-size:0.82em;
+                     background:rgba(255,255,255,0.18);border:1px solid rgba(255,255,255,0.35);"
+              title="{{ a.scheme }}{% if a.record_status %} — awarded only at record-status events{% endif %}">
+            {{ a.scheme }}: {{ a.name }}{% if a.record_status %} *{% endif %}
+        </span>
+        {% endfor %}
+        {% if handicap_info.awards | selectattr('record_status') | list %}
+        <span style="font-size:0.74em;opacity:0.85;">* record-status events only</span>
+        {% endif %}
+    </div>
+    {% endif %}
 </div>
 {% endif %}
 

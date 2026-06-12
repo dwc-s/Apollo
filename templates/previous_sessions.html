@@ -483,6 +483,14 @@
               {% elif is_tournament.v %}
                 <span class="practice-badge" style="background:#1a3a5c;"
                       title="Recorded as a tournament round.">Competition: {{ tournament_round_name or tournament_key.v }}</span>
+                {% if data.handicap is defined and data.handicap is not none %}
+                <span class="practice-badge" style="background:#3a5c1a;"
+                      title="Archery GB 2023 handicap — lower is better.">Handicap {{ data.handicap }}</span>
+                {% endif %}
+                {% for a in data.awards if data.awards is defined %}
+                <span class="practice-badge" style="background:#5c3a1a;"
+                      title="{{ a.scheme }}{% if a.record_status %} — record-status events only{% endif %}">{{ a.scheme }}: {{ a.name }}</span>
+                {% endfor %}
               {% elif is_practice.v %}
                 <span class="practice-badge" title="Flagged as practice.">Practice</span>
               {% endif %}
