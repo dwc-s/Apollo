@@ -9574,72 +9574,6 @@ def _report_arrows_vs_time(user_id):
     }
 
 
-def _report_sessions_per_day(user_id):
-    """Number of practice sessions per calendar day."""
-    with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
-        rows = cur.execute(
-            "SELECT session_begin_time FROM session_times "
-            "WHERE user_id = %s AND session_begin_time IS NOT NULL "
-            "ORDER BY session_begin_time ASC",
-            (user_id,)
-        ).fetchall()
-
-    from collections import Counter
-    counts = Counter()
-    for r in rows:
-        begin_dt = _utc_to_user(r['session_begin_time'])
-        if begin_dt is None:
-            continue
-        counts[begin_dt.date()] += 1
-
-    if not counts:
-        return None
-
-    # Fill in zero-count days between the first and last so the time axis
-    # is continuous and gaps in practice are visible.
-    days_sorted = sorted(counts.keys())
-    first_day, last_day = days_sorted[0], days_sorted[-1]
-    span = (last_day - first_day).days
-    series = []
-    for i in range(span + 1):
-        d = first_day + timedelta(days=i)
-        series.append((d, counts.get(d, 0)))
-
-    import matplotlib
-    matplotlib.use('Agg')
-    import matplotlib.pyplot as plt
-    import matplotlib.dates as mdates
-
-    fig, ax = plt.subplots(figsize=(9, 4.5))
-    xs = [datetime.combine(d, datetime.min.time()) for d, _ in series]
-    ys = [n for _, n in series]
-    ax.bar(xs, ys, width=0.8, color='#4d6da6', edgecolor='#1a3a5c')
-    ax.set_xlabel('Day')
-    ax.set_ylabel('Sessions')
-    ax.set_title('Sessions per day')
-    ax.grid(True, axis='y', linestyle='--', alpha=0.4)
-    # Integer ticks on the y-axis — fractional sessions don't exist.
-    from matplotlib.ticker import MaxNLocator
-    ax.yaxis.set_major_locator(MaxNLocator(integer=True))
-    locator = mdates.AutoDateLocator()
-    ax.xaxis.set_major_locator(locator)
-    ax.xaxis.set_major_formatter(mdates.ConciseDateFormatter(locator))
-    fig.autofmt_xdate()
-    svg_b64 = _render_matplotlib_svg(fig)
-
-    # Table shows only the days that actually had sessions — listing every
-    # zero-count day would bury the signal in noise.
-    columns = ['Date', 'Sessions']
-    rows_out = [[d.strftime('%Y-%m-%d'), counts[d]] for d in days_sorted]
-    return {
-        'key': 'sessions_per_day',
-        'title': 'Sessions per day',
-        'svg_b64': svg_b64,
-        'columns': columns,
-        'rows': rows_out,
-    }
-
-
 def _report_hits_by_boundaries(user_id):
     """Per-target hit distribution across user-defined scoring zones.
 
@@ -10704,56 +10638,6 @@ def _tag_shot_samples(user_id):
     return groups
 
 
-def _cooccurring_pairs(user_id, kind):
-    """Names that have ever shared a session — disqualifies head-to-head pairs.
-
-    ``kind`` is 'bow', 'arrow_type', or 'tag'. Returns a set of frozensets
-    of canonical (lowercased) names. Two names land in the set iff at
-    least one session_id has shots from both. The head-to-head report
-    uses this to drop non-mutually-exclusive pairs, since a meaningful
-    A-vs-B comparison requires the two never to have been used together.
-    """
-    if kind not in ('bow', 'arrow_type', 'tag'):
-        raise ValueError(f"Invalid kind: {kind!r}")
-    by_session = {}
-    with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
-        if kind == 'tag':
-            rows = cur.execute(
-                "SELECT session_id, session_tags FROM apollo "
-                "WHERE user_id = %s AND session_id IS NOT NULL "
-                "      AND session_tags IS NOT NULL AND session_tags <> ''",
-                (user_id,)
-            ).fetchall()
-            for r in rows:
-                sid = r['session_id']
-                bucket = by_session.setdefault(sid, set())
-                for part in (r['session_tags'] or '').split(','):
-                    t = part.strip()
-                    if t:
-                        bucket.add(t.lower())
-        else:
-            rows = cur.execute(
-                f"SELECT DISTINCT session_id, {kind} AS eq FROM apollo "
-                f"WHERE user_id = %s AND session_id IS NOT NULL "
-                f"      AND {kind} IS NOT NULL AND {kind} <> ''",
-                (user_id,)
-            ).fetchall()
-            for r in rows:
-                sid = r['session_id']
-                name = (r['eq'] or '').strip()
-                if name:
-                    by_session.setdefault(sid, set()).add(name.lower())
-    pairs = set()
-    for names in by_session.values():
-        if len(names) < 2:
-            continue
-        ordered = list(names)
-        for i in range(len(ordered)):
-            for j in range(i + 1, len(ordered)):
-                pairs.add(frozenset((ordered[i], ordered[j])))
-    return pairs
-
-
 def _summarize_equipment(shots):
     """Per-equipment summary stats used by the head-to-head report.
 
@@ -10916,10 +10800,6 @@ def _report_equipment_head_to_head(user_id, categories=None, tag_filter=None):
         }
         if len(eligible) < 2:
             continue
-        # Drop pairs that have ever co-occurred in the same session — a
-        # head-to-head only tells you something useful when the two sides
-        # are mutually exclusive.
-        cooccur = _cooccurring_pairs(user_id, column)
         # Collect this kind's panels into its own list so we can wrap them
         # in a section titled "{Kind} head-to-head" at the end of the loop.
         panels = []
@@ -10938,8 +10818,6 @@ def _report_equipment_head_to_head(user_id, categories=None, tag_filter=None):
             for j in range(i + 1, len(names_sorted)):
                 a_name = names_sorted[i]
                 b_name = names_sorted[j]
-                if frozenset((a_name.lower(), b_name.lower())) in cooccur:
-                    continue
                 a_sum = summaries[a_name]
                 b_sum = summaries[b_name]
                 if a_sum['n_hit'] < 2 or b_sum['n_hit'] < 2:
@@ -11249,256 +11127,6 @@ def _report_equipment_head_to_head(user_id, categories=None, tag_filter=None):
 
 
 # ---------------------------------------------------------------------------
-# Accuracy-over-time helpers + report
-# ---------------------------------------------------------------------------
-# "Accuracy" here = radial distance from target center, normalized by that
-# target's half-width. A normalized distance of 1.0 means the shot is at
-# the target's outer edge regardless of target size, so different targets
-# in the same dataset are comparable. Lower numbers = more accurate.
-
-_ACC_BUCKET_TARGET = (12, 40)  # auto-pick bucket size so count lands here
-
-
-def _accuracy_bucket_period(span_days):
-    """Pick day/week/month so the timeline ends up with ~12–40 buckets.
-
-    Returns a (label, key_fn) pair where key_fn maps a datetime → a
-    bucket-start datetime and label is the human-readable resolution.
-    """
-    lo, hi = _ACC_BUCKET_TARGET
-    if span_days <= hi:
-        return 'day', lambda dt: datetime(dt.year, dt.month, dt.day)
-    if span_days / 7 <= hi:
-        # ISO week starting Monday
-        def week_start(dt):
-            d0 = datetime(dt.year, dt.month, dt.day)
-            return d0 - timedelta(days=d0.weekday())
-        return 'week', week_start
-    return 'month', lambda dt: datetime(dt.year, dt.month, 1)
-
-
-def _report_accuracy_over_time(user_id, date_from=None, date_to=None):
-    """Per-time-bucket accuracy/precision traces — the two error modes
-    plotted independently so the user can tell *which* improved.
-
-      * Accuracy line — MPI (|centroid| in normalized units). Captures
-        systematic bias (sight off, anchor drift) regardless of grouping.
-      * Precision line — R95 about each bucket's own centroid (normalized).
-        How tight the group is, *independent* of where the group sits.
-
-    The table also exposes the supporting numbers (MR, σ_x, σ_y) so
-    stringing trends are visible even when R95 alone is flat.
-
-    Misses excluded; only hits with x,y coords contribute.
-    """
-    range_from = None
-    range_to = None
-    if date_from:
-        try:
-            range_from = datetime.strptime(date_from, '%Y-%m-%d')
-        except ValueError:
-            range_from = None
-    if date_to:
-        try:
-            range_to = datetime.strptime(date_to, '%Y-%m-%d') \
-                + timedelta(days=1) - timedelta(microseconds=1)
-        except ValueError:
-            range_to = None
-
-    # Pull every hit shot with its target width and the parent session's
-    # begin time. We join on session_times for the time axis because shot
-    # timestamps can drift if the user edits a session retroactively,
-    # whereas session_begin_time is set at session start and is stable.
-    with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
-        sql = (
-            "SELECT a.x_coord, a.y_coord, t.physical_size_mm AS width_mm, "
-            "       st.session_begin_time "
-            "FROM apollo a "
-            "JOIN session_times st "
-            "  ON st.session_id = a.session_id AND st.user_id = a.user_id "
-            "JOIN targets t "
-            "  ON t.id = a.target_id AND t.user_id = a.user_id "
-            "WHERE a.user_id = %s "
-            "  AND st.session_begin_time IS NOT NULL "
-            "  AND t.physical_size_mm IS NOT NULL"
-        )
-        params = [user_id]
-        if range_from is not None:
-            sql += " AND st.session_begin_time >= %s"
-            params.append(range_from)
-        if range_to is not None:
-            sql += " AND st.session_begin_time <= %s"
-            params.append(range_to)
-        sql += " ORDER BY st.session_begin_time ASC"
-        rows = cur.execute(sql, tuple(params)).fetchall()
-
-    # Parse + normalize. Drop misses and any row whose target has zero
-    # physical size (the normalization would explode).
-    points = []  # list of (begin_dt, nx, ny, ndist)
-    for r in rows:
-        xraw = str(r['x_coord']).strip() if r['x_coord'] is not None else ''
-        yraw = str(r['y_coord']).strip() if r['y_coord'] is not None else ''
-        if xraw == MISS_SENTINEL and yraw == MISS_SENTINEL:
-            continue
-        try:
-            x = float(xraw)
-            y = float(yraw)
-        except ValueError:
-            continue
-        try:
-            width_mm = float(r['width_mm'])
-        except (TypeError, ValueError):
-            continue
-        if width_mm <= 0:
-            continue
-        half = width_mm / 2.0
-        nx = x / half
-        ny = y / half
-        ndist = math.sqrt(nx * nx + ny * ny)
-
-        begin_dt = _utc_to_user(r['session_begin_time'])
-        if begin_dt is None:
-            continue
-        begin_dt = begin_dt.replace(tzinfo=None)
-        points.append((begin_dt, nx, ny, ndist))
-
-    if not points:
-        return None
-
-    points.sort(key=lambda p: p[0])
-    first_dt = points[0][0]
-    last_dt = points[-1][0]
-    span_days = max(1, (last_dt - first_dt).days + 1)
-    period_label, bucket_fn = _accuracy_bucket_period(span_days)
-
-    # Bucket the points. Preserve ordering of bucket keys so the slider
-    # and line chart share the same x-axis sequence.
-    buckets = {}
-    bucket_order = []
-    for begin_dt, nx, ny, ndist in points:
-        key = bucket_fn(begin_dt)
-        if key not in buckets:
-            buckets[key] = []
-            bucket_order.append(key)
-        buckets[key].append((nx, ny, ndist))
-
-    line_x = []
-    line_mpi = []
-    line_r95 = []
-    rows_out = []
-    for key in bucket_order:
-        pts = buckets[key]
-        n = len(pts)
-        if n:
-            xs_b = [p[0] for p in pts]
-            ys_b = [p[1] for p in pts]
-            s = _archery_stats(xs_b, ys_b)
-            mpi = s['mpi']
-            r95 = s['r95']
-            mr = s['mr']
-            sx = s['sigma_x']
-            sy = s['sigma_y']
-        else:
-            mpi = r95 = mr = sx = sy = 0.0
-        if period_label == 'day':
-            label = key.strftime('%Y-%m-%d')
-        elif period_label == 'week':
-            label = 'Wk of ' + key.strftime('%Y-%m-%d')
-        else:
-            label = key.strftime('%Y-%m')
-        line_x.append(key)
-        line_mpi.append(mpi)
-        line_r95.append(r95)
-        rows_out.append([
-            label, n,
-            round(mpi, 3), round(r95, 3), round(mr, 3),
-            round(sx, 3), round(sy, 3),
-        ])
-
-    import matplotlib
-    matplotlib.use('Agg')
-    import matplotlib.pyplot as plt
-    import matplotlib.dates as mdates
-
-    fig, ax = plt.subplots(figsize=(9, 4.5))
-    ax.plot(line_x, line_mpi, color='#1a3a5c', marker='o', linewidth=1.8,
-            markersize=5, label='Accuracy — MPI')
-    ax.plot(line_x, line_r95, color='#c79b5a', marker='s', linewidth=1.8,
-            markersize=5, label='Precision — R95')
-    ax.set_xlabel(f'Session start ({period_label} buckets)')
-    ax.set_ylabel('Normalized units (1.0 = target edge)\nlower is better')
-    ax.set_title('Accuracy & precision over time')
-    ax.grid(True, axis='y', linestyle='--', alpha=0.4)
-    ax.axhline(0.5, color='#888', linewidth=0.7, linestyle=':')
-    ax.legend(loc='upper right', fontsize=9)
-    locator = mdates.AutoDateLocator()
-    ax.xaxis.set_major_locator(locator)
-    ax.xaxis.set_major_formatter(mdates.ConciseDateFormatter(locator))
-    fig.autofmt_xdate()
-    svg_b64 = _render_matplotlib_svg(fig)
-
-    if range_from is not None and range_to is not None:
-        report_title = (f'Accuracy & precision over time '
-                        f'({date_from} → {date_to})')
-    elif range_from is not None:
-        report_title = f'Accuracy & precision over time (from {date_from})'
-    elif range_to is not None:
-        report_title = f'Accuracy & precision over time (through {date_to})'
-    else:
-        report_title = (
-            f'Accuracy & precision over time ({period_label} buckets)'
-        )
-
-    # Short explainer paragraph rendered above the chart. Accuracy and
-    # precision get conflated constantly — naming them here means the
-    # rest of the page (and the head-to-head split) lands in context.
-    intro_html = Markup(
-        '<p class="report-intro">'
-        '<strong>Accuracy</strong> is how close your group sits to the '
-        'bull — a bias error you fix with sight or anchor adjustments. '
-        '<strong>Precision</strong> is how tightly your shots cluster '
-        'around their own centroid, regardless of where that centroid '
-        'sits — a consistency error you fix with form, tuning, and '
-        'execution. The blue <em>MPI</em> trace tracks accuracy; the '
-        'amber <em>R95</em> trace tracks precision. Both can improve '
-        'or worsen independently.'
-        '</p>'
-    )
-
-    return {
-        'key': 'accuracy_over_time',
-        'title': report_title,
-        'intro_html': intro_html,
-        'svg_b64': svg_b64,
-        'columns': [
-            'Bucket', 'Shots',
-            _tip('MPI (norm)',
-                 'Mean Point of Impact: magnitude of the bucket centroid\'s '
-                 'offset from the bullseye, normalized by target half-width '
-                 '(1.0 = target edge). Pure accuracy — independent of how '
-                 'tight the group is.'),
-            _tip('R95 (norm)',
-                 'Radius about the bucket centroid that contains 95% of its '
-                 'shots, normalized by target half-width. Headline precision '
-                 'number — independent of where the centroid sits.'),
-            _tip('MR (norm)',
-                 'Mean Radius: average distance of each shot from the '
-                 'bucket centroid (normalized). Secondary precision '
-                 'metric, canonical in shooting-sport testing.'),
-            _tip('σ_x (norm)',
-                 'Per-axis standard deviation about the centroid in the '
-                 'horizontal direction. Large σ_x with small σ_y is '
-                 'horizontal stringing — often a bow-torque or grip cue.'),
-            _tip('σ_y (norm)',
-                 'Per-axis standard deviation about the centroid in the '
-                 'vertical direction. Large σ_y with small σ_x is vertical '
-                 'stringing — often a release or anchor-height cue.'),
-        ],
-        'rows': rows_out,
-    }
-
-
-# ---------------------------------------------------------------------------
 # Quiver-indexed reports (within-session drift, cold-bore vs warmed-up)
 # ---------------------------------------------------------------------------
 # Arrows aren't entered in shot-order — but quivers are, since the user has
@@ -11699,16 +11327,48 @@ def _report_within_session_drift(user_id):
     }
 
 
-def _report_accuracy_precision_traces(user_id, date_from=None, date_to=None):
+# The six toggleable traces for the accuracy/precision report. Each tuple is
+# (category_key, granularity, metric, legend_label); the registry derives its
+# category pills from this list, and the report reads it to decide which
+# series to draw.
+_TRACE_DEFS = [
+    ('session_acc',  'session', 'acc',  'Accuracy — per session (MPI)'),
+    ('session_prec', 'session', 'prec', 'Precision — per session (R95)'),
+    ('quiver_acc',   'quiver',  'acc',  'Accuracy — per quiver (MPI)'),
+    ('quiver_prec',  'quiver',  'prec', 'Precision — per quiver (R95)'),
+    ('alltime_acc',  'alltime', 'acc',  'Accuracy — all-time rolling (MPI)'),
+    ('alltime_prec', 'alltime', 'prec', 'Precision — all-time rolling (R95)'),
+]
+_TRACE_CATEGORIES = [
+    {'key': 'session_acc',  'label': 'Session · accuracy'},
+    {'key': 'session_prec', 'label': 'Session · precision'},
+    {'key': 'quiver_acc',   'label': 'Quiver · accuracy'},
+    {'key': 'quiver_prec',  'label': 'Quiver · precision'},
+    {'key': 'alltime_acc',  'label': 'All-time · accuracy'},
+    {'key': 'alltime_prec', 'label': 'All-time · precision'},
+]
+
+
+def _report_accuracy_precision_traces(user_id, date_from=None, date_to=None,
+                                      categories=None, bow_filter=None,
+                                      arrow_filter=None, tag_filter=None):
     """Combined accuracy + precision traces over time, three granularities.
 
-    Plots six lines on one date-axis:
+    Plots up to six lines on one date-axis, each independently toggleable
+    via ``categories`` (see ``_TRACE_DEFS``):
       * Accuracy per session  (MPI of every shot in the session)
       * Precision per session (R95 about the session centroid)
       * Accuracy per quiver   (MPI of every shot in each completed quiver)
       * Precision per quiver  (R95 about the quiver centroid)
       * Accuracy all-time     (running MPI through every shot to date)
       * Precision all-time    (running R95 through every shot to date)
+
+    Optional head-to-head: ``bow_filter`` / ``arrow_filter`` / ``tag_filter``
+    each name specific subjects to overlay. When any are given, every
+    selected bow / arrow / tag becomes its own colored set of traces
+    (filtered to that subject's shots) on the shared timeline; with none
+    given the report draws a single combined "All shots" set, preserving
+    its original behavior.
 
     All values are normalized by the target half-width (1.0 = target edge)
     so mixed-target histories are comparable, matching the convention in
@@ -11728,14 +11388,42 @@ def _report_accuracy_precision_traces(user_id, date_from=None, date_to=None):
         except ValueError:
             range_to = None
 
+    # Which trace series to draw. Empty / None ≡ all six (the route hands us
+    # the full list when the user ticks nothing, but guard here too so the
+    # export path and direct callers keep the same default).
+    valid_keys = {d[0] for d in _TRACE_DEFS}
+    enabled = {c for c in (categories or []) if c in valid_keys}
+    if not enabled:
+        enabled = set(valid_keys)
+
+    # Build the subject list for the optional head-to-head overlay. Each
+    # selected bow / arrow / tag is one subject; de-duped on (kind, key) so
+    # a name picked twice doesn't double-plot. No selection → a single
+    # combined subject that includes every shot (the classic behavior).
+    subjects = []
+    seen_subj = set()
+    for kind, names in (('bow', bow_filter), ('arrow', arrow_filter),
+                        ('tag', tag_filter)):
+        for raw in (names or []):
+            key = (raw or '').strip().lower()
+            if not key or (kind, key) in seen_subj:
+                continue
+            seen_subj.add((kind, key))
+            subjects.append({'kind': kind, 'name': raw.strip(), 'key': key})
+    split = bool(subjects)
+    if not subjects:
+        subjects = [{'kind': None, 'name': 'All shots', 'key': None}]
+
     # Pull every shot with its session_id, quiver_size, target width and
-    # the parent session's begin time. Quiver bookkeeping needs the rows
+    # the parent session's begin time, plus the equipment / tag columns so
+    # we can filter per subject in Python. Quiver bookkeeping needs the rows
     # in (session, id) order so the slicer reproduces the same quiver
     # grouping the per-shot machinery used at recording time.
     with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
         sql = (
             "SELECT a.session_id, a.id, a.quiver_size, "
             "       a.x_coord, a.y_coord, "
+            "       a.bow, a.arrow_type, a.session_tags, "
             "       t.physical_size_mm AS width_mm, "
             "       st.session_begin_time "
             "FROM apollo a "
@@ -11757,9 +11445,10 @@ def _report_accuracy_precision_traces(user_id, date_from=None, date_to=None):
         sql += " ORDER BY a.session_id ASC, a.id ASC"
         rows = cur.execute(sql, tuple(params)).fetchall()
 
-    # First pass: per-shot normalized coords, in (session, id) order so
-    # the quiver slicer can walk them naturally below.
-    by_session = {}  # session_id → list of (begin_dt, nx, ny, quiver_size)
+    # First pass: per-shot normalized coords (plus the attrs needed to test
+    # subject membership), in (session, id) order so the quiver slicer can
+    # walk them naturally below.
+    master = {}  # session_id → list of shot dicts
     for r in rows:
         xraw = str(r['x_coord']).strip() if r['x_coord'] is not None else ''
         yraw = str(r['y_coord']).strip() if r['y_coord'] is not None else ''
@@ -11777,8 +11466,6 @@ def _report_accuracy_precision_traces(user_id, date_from=None, date_to=None):
         if width_mm <= 0:
             continue
         half = width_mm / 2.0
-        nx = x / half
-        ny = y / half
         begin_dt = _utc_to_user(r['session_begin_time'])
         if begin_dt is None:
             continue
@@ -11787,473 +11474,221 @@ def _report_accuracy_precision_traces(user_id, date_from=None, date_to=None):
             qs = int(r['quiver_size']) if r['quiver_size'] else 0
         except (TypeError, ValueError):
             qs = 0
-        by_session.setdefault(r['session_id'], []).append(
-            (begin_dt, nx, ny, qs)
-        )
+        # Tokenize session_tags the same way _tag_shot_samples does so the
+        # tag picker's values match what we filter on here.
+        tagset = {t.strip().lower()
+                  for t in (r['session_tags'] or '').split(',')
+                  if t.strip()}
+        master.setdefault(r['session_id'], []).append({
+            'dt': begin_dt,
+            'nx': x / half,
+            'ny': y / half,
+            'qs': qs,
+            'bow': (r['bow'] or '').strip().lower(),
+            'arrow': (r['arrow_type'] or '').strip().lower(),
+            'tags': tagset,
+        })
 
-    if not by_session:
+    if not master:
         return None
 
-    # Sessions sorted by begin date — this is also the chronological
-    # walk-order for the all-time rolling series.
-    sessions_sorted = sorted(
-        by_session.items(),
-        key=lambda kv: kv[1][0][0]
-    )
+    def _shot_matches(shot, subj):
+        kind = subj['kind']
+        if kind is None:
+            return True
+        if kind == 'bow':
+            return shot['bow'] == subj['key']
+        if kind == 'arrow':
+            return shot['arrow'] == subj['key']
+        return subj['key'] in shot['tags']  # tag
 
-    session_dates = []
-    session_mpi = []
-    session_r95 = []
-    quiver_dates = []
-    quiver_mpi = []
-    quiver_r95 = []
-    alltime_dates = []
-    alltime_mpi = []
-    alltime_r95 = []
-    table_rows = []
-
-    rolling_xs = []
-    rolling_ys = []
-
-    for sid, shots in sessions_sorted:
-        if not shots:
-            continue
-        sess_dt = shots[0][0]
-        xs_sess = [p[1] for p in shots]
-        ys_sess = [p[2] for p in shots]
-        s_sess = _archery_stats(xs_sess, ys_sess)
-        if s_sess is None:
-            continue
-        session_dates.append(sess_dt)
-        session_mpi.append(s_sess['mpi'])
-        session_r95.append(s_sess['r95'])
-
-        # Walk quivers within this session using the recorded quiver_size
-        # on the first shot of each group — same slicer logic as
-        # _iter_quivers. Trailing partial quiver is intentionally skipped.
-        buf_x, buf_y = [], []
-        buf_size = 0
-        n_quivers_in_session = 0
-        for (_dt, nx, ny, qs) in shots:
-            if qs <= 0:
-                buf_x = []
-                buf_y = []
-                buf_size = 0
+    def _compute_series(sessions_sorted):
+        """Per-session / per-quiver / all-time MPI & R95 series + table rows
+        for one subject's sessions (already date-sorted). Mirrors the
+        original single-group aggregation."""
+        out = {
+            'session': ([], [], []),   # dates, mpi, r95
+            'quiver':  ([], [], []),
+            'alltime': ([], [], []),
+            'table': [],
+        }
+        rolling_xs, rolling_ys = [], []
+        for sid, shots in sessions_sorted:
+            if not shots:
                 continue
-            if not buf_x:
-                buf_size = qs
-            buf_x.append(nx)
-            buf_y.append(ny)
-            if len(buf_x) >= buf_size:
-                s_q = _archery_stats(buf_x, buf_y)
-                if s_q is not None:
-                    quiver_dates.append(sess_dt)
-                    quiver_mpi.append(s_q['mpi'])
-                    quiver_r95.append(s_q['r95'])
-                    n_quivers_in_session += 1
-                buf_x = []
-                buf_y = []
-                buf_size = 0
+            sess_dt = shots[0]['dt']
+            xs_sess = [s['nx'] for s in shots]
+            ys_sess = [s['ny'] for s in shots]
+            s_sess = _archery_stats(xs_sess, ys_sess)
+            if s_sess is None:
+                continue
+            out['session'][0].append(sess_dt)
+            out['session'][1].append(s_sess['mpi'])
+            out['session'][2].append(s_sess['r95'])
 
-        # Update the rolling all-time pool with this session's shots and
-        # emit a point at the session's date.
-        rolling_xs.extend(xs_sess)
-        rolling_ys.extend(ys_sess)
-        s_all = _archery_stats(rolling_xs, rolling_ys)
-        if s_all is not None:
-            alltime_dates.append(sess_dt)
-            alltime_mpi.append(s_all['mpi'])
-            alltime_r95.append(s_all['r95'])
+            # Walk quivers using the recorded quiver_size on the first shot
+            # of each group — same slicer as _iter_quivers. Trailing partial
+            # quiver is intentionally skipped.
+            buf_x, buf_y = [], []
+            buf_size = 0
+            n_quivers_in_session = 0
+            for shot in shots:
+                qs = shot['qs']
+                if qs <= 0:
+                    buf_x, buf_y, buf_size = [], [], 0
+                    continue
+                if not buf_x:
+                    buf_size = qs
+                buf_x.append(shot['nx'])
+                buf_y.append(shot['ny'])
+                if len(buf_x) >= buf_size:
+                    s_q = _archery_stats(buf_x, buf_y)
+                    if s_q is not None:
+                        out['quiver'][0].append(sess_dt)
+                        out['quiver'][1].append(s_q['mpi'])
+                        out['quiver'][2].append(s_q['r95'])
+                        n_quivers_in_session += 1
+                    buf_x, buf_y, buf_size = [], [], 0
 
-        table_rows.append([
-            sess_dt.strftime('%Y-%m-%d'),
-            sid,
-            s_sess['n'],
-            n_quivers_in_session,
-            round(s_sess['mpi'], 3),
-            round(s_sess['r95'], 3),
-            round(s_all['mpi'], 3) if s_all else '',
-            round(s_all['r95'], 3) if s_all else '',
-        ])
+            rolling_xs.extend(xs_sess)
+            rolling_ys.extend(ys_sess)
+            s_all = _archery_stats(rolling_xs, rolling_ys)
+            if s_all is not None:
+                out['alltime'][0].append(sess_dt)
+                out['alltime'][1].append(s_all['mpi'])
+                out['alltime'][2].append(s_all['r95'])
 
-    if not session_dates:
+            out['table'].append([
+                sess_dt.strftime('%Y-%m-%d'),
+                sid,
+                s_sess['n'],
+                n_quivers_in_session,
+                round(s_sess['mpi'], 3),
+                round(s_sess['r95'], 3),
+                round(s_all['mpi'], 3) if s_all else '',
+                round(s_all['r95'], 3) if s_all else '',
+            ])
+        return out
+
+    # Compute each subject's series, dropping subjects that yield no data.
+    subjects_with_data = []
+    table_rows = []
+    for subj in subjects:
+        subset = {}
+        for sid, shots in master.items():
+            kept = ([s for s in shots if _shot_matches(s, subj)]
+                    if split else shots)
+            if kept:
+                subset[sid] = kept
+        if not subset:
+            continue
+        sessions_sorted = sorted(subset.items(),
+                                 key=lambda kv: kv[1][0]['dt'])
+        series = _compute_series(sessions_sorted)
+        if not series['session'][0]:
+            continue
+        subj['series'] = series
+        subjects_with_data.append(subj)
+        for row in series['table']:
+            table_rows.append([subj['name']] + row if split else row)
+
+    if not subjects_with_data:
         return None
 
     import matplotlib
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
 
-    fig, ax = plt.subplots(figsize=(10, 5.2))
+    fig, ax = plt.subplots(figsize=(10, 5.4))
 
-    # Accuracy traces — blue family. Precision traces — amber family.
-    # Vary style/marker per granularity so the six lines are tellable
-    # apart at a glance.
-    if session_dates:
-        ax.plot(session_dates, session_mpi, color='#1a3a5c',
-                marker='o', markersize=4, linewidth=1.4,
-                linestyle='-', label='Accuracy — per session (MPI)')
-        ax.plot(session_dates, session_r95, color='#c79b5a',
-                marker='s', markersize=4, linewidth=1.4,
-                linestyle='-', label='Precision — per session (R95)')
-    if quiver_dates:
-        ax.plot(quiver_dates, quiver_mpi, color='#6f8cbf',
-                marker='.', markersize=4, linewidth=0.9,
-                linestyle=':', alpha=0.75,
-                label='Accuracy — per quiver (MPI)')
-        ax.plot(quiver_dates, quiver_r95, color='#d4b988',
-                marker='.', markersize=4, linewidth=0.9,
-                linestyle=':', alpha=0.75,
-                label='Precision — per quiver (R95)')
-    if alltime_dates:
-        ax.plot(alltime_dates, alltime_mpi, color='#0d1f3a',
-                marker='^', markersize=4, linewidth=2.0,
-                linestyle='--', label='Accuracy — all-time rolling (MPI)')
-        ax.plot(alltime_dates, alltime_r95, color='#8e6a3a',
-                marker='v', markersize=4, linewidth=2.0,
-                linestyle='--', label='Precision — all-time rolling (R95)')
+    # Visual encoding. Single combined subject keeps the classic look:
+    # blue = accuracy, amber = precision, line style by granularity. Split
+    # mode uses color = subject; marker = metric; line style = granularity.
+    GRAN_LS = {'session': '-', 'quiver': ':', 'alltime': '--'}
+    METRIC_MARKER = {'acc': 'o', 'prec': 's'}
+    ACC_COLOR, PREC_COLOR = '#1a3a5c', '#c79b5a'
+    SUBJECT_COLORS = ['#1a3a5c', '#c0392b', '#27ae60', '#8e44ad',
+                      '#d68910', '#16a085', '#2c3e50', '#e74c3c']
+
+    for si, subj in enumerate(subjects_with_data):
+        series = subj['series']
+        subj_color = SUBJECT_COLORS[si % len(SUBJECT_COLORS)]
+        for key, gran, metric, base_label in _TRACE_DEFS:
+            if key not in enabled:
+                continue
+            dates, mpis, r95s = series[gran]
+            if not dates:
+                continue
+            yvals = mpis if metric == 'acc' else r95s
+            color = subj_color if split else (
+                ACC_COLOR if metric == 'acc' else PREC_COLOR)
+            label = f"{subj['name']} — {base_label}" if split else base_label
+            ax.plot(dates, yvals, color=color,
+                    marker=METRIC_MARKER[metric], markersize=4,
+                    linewidth=1.8 if gran == 'alltime' else 1.3,
+                    linestyle=GRAN_LS[gran],
+                    alpha=0.7 if gran == 'quiver' else 0.95,
+                    label=label)
 
     ax.set_xlabel('Date')
     ax.set_ylabel('Normalized units (1.0 = target edge)\nlower is better')
     ax.set_title('Accuracy & precision traces')
     ax.grid(True, axis='y', linestyle='--', alpha=0.4)
     fig.autofmt_xdate()
-    ax.legend(loc='upper left', fontsize=8, ncol=2, framealpha=0.85)
+    ax.legend(loc='upper left', fontsize=7.5, ncol=2, framealpha=0.85)
     svg_b64 = _render_matplotlib_svg(fig)
 
+    if split:
+        overlay = (
+            ' Each selected subject (bow / arrow / tag) is a separate color; '
+            'marker shape is the metric (accuracy ○ vs precision ▢) and line '
+            'style is the granularity (session solid, quiver dotted, all-time '
+            'dashed).')
+    else:
+        overlay = (
+            ' Blue traces are accuracy (MPI); amber traces are precision '
+            '(R95); line style is the granularity (session solid, quiver '
+            'dotted, all-time dashed). Pick bows, arrows, or tags to overlay '
+            'them head-to-head.')
     intro = Markup(
         '<p class="report-intro">'
         '<strong>What this answers:</strong> are you getting more '
         'accurate (centroid closer to bullseye) or more precise '
-        '(tighter group), and on what timescale? Six traces share a '
-        'date axis: per-session (solid), per-quiver (dotted), and the '
-        'all-time rolling pool (dashed). Blue traces are accuracy '
-        '(MPI); amber traces are precision (R95). All values are '
-        'normalized by target half-width so mixed targets are '
-        'comparable. Misses are excluded.'
+        '(tighter group), and on what timescale?' + overlay +
+        ' All values are normalized by target half-width so mixed targets '
+        'are comparable. Misses are excluded.'
         '</p>'
     )
+
+    base_columns = [
+        'Session date', 'Session id',
+        _tip('Shots',
+             'Hits in this session that contributed to the stats. '
+             'Misses excluded.'),
+        _tip('Quivers',
+             'Number of completed quivers in this session — a '
+             'partial last quiver is intentionally skipped.'),
+        _tip('Session MPI (norm)',
+             'Accuracy for this session: distance from origin to '
+             "this session's shot centroid."),
+        _tip('Session R95 (norm)',
+             'Precision for this session: 95% radius about the '
+             "session's centroid."),
+        _tip('All-time MPI (norm)',
+             'Rolling accuracy across every shot through this '
+             'session, inclusive.'),
+        _tip('All-time R95 (norm)',
+             'Rolling precision across every shot through this '
+             'session, inclusive.'),
+    ]
+    columns = (['Subject'] + base_columns) if split else base_columns
 
     return {
         'key': 'accuracy_precision_traces',
         'title': 'Accuracy & precision traces',
         'intro_html': intro,
         'svg_b64': svg_b64,
-        'columns': [
-            'Session date', 'Session id',
-            _tip('Shots',
-                 'Hits in this session that contributed to the stats. '
-                 'Misses excluded.'),
-            _tip('Quivers',
-                 'Number of completed quivers in this session — a '
-                 'partial last quiver is intentionally skipped.'),
-            _tip('Session MPI (norm)',
-                 'Accuracy for this session: distance from origin to '
-                 "this session's shot centroid."),
-            _tip('Session R95 (norm)',
-                 'Precision for this session: 95% radius about the '
-                 "session's centroid."),
-            _tip('All-time MPI (norm)',
-                 'Rolling accuracy across every shot through this '
-                 'session, inclusive.'),
-            _tip('All-time R95 (norm)',
-                 'Rolling precision across every shot through this '
-                 'session, inclusive.'),
-        ],
-        'rows': table_rows,
-    }
-
-
-def _report_draw_weight_traces(user_id, date_from=None, date_to=None):
-    """Accuracy and precision vs draw weight, per bow.
-
-    X-axis is draw weight in lb; y-axis is the same normalized error
-    metric the other accuracy/precision reports use. Every bow gets up
-    to four traces:
-
-      * Accuracy at effective DW  (per-session MPI vs the session's
-        effective draw weight)
-      * Precision at effective DW (per-session R95, same x positions)
-      * Accuracy at rated DW      (per-session MPI for sessions where
-        the archer was effectively shooting at the bow's rated DW;
-        plotted at the rated DW value)
-      * Precision at rated DW     (per-session R95, same x positions)
-
-    A session is classed "effective" when its snapshotted
-    effective_draw_weight differs from the rated bow_draw_weight by
-    more than 0.05 lb; otherwise it's "rated" (and the rated value is
-    used for the x position). The split tells the archer whether
-    re-tuning to a different effective draw weight actually changed
-    how the bow shoots. Misses excluded; normalized by target
-    half-width so mixed-target histories are comparable.
-    """
-    range_from = None
-    range_to = None
-    if date_from:
-        try:
-            range_from = datetime.strptime(date_from, '%Y-%m-%d')
-        except ValueError:
-            range_from = None
-    if date_to:
-        try:
-            range_to = datetime.strptime(date_to, '%Y-%m-%d') \
-                + timedelta(days=1) - timedelta(microseconds=1)
-        except ValueError:
-            range_to = None
-
-    # Pull every shot together with the snapshotted bow + DW values
-    # and the parent session's begin time for the x-axis.
-    with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
-        sql = (
-            "SELECT a.session_id, a.id, a.bow, "
-            "       a.bow_draw_weight, a.effective_draw_weight, "
-            "       a.x_coord, a.y_coord, "
-            "       t.physical_size_mm AS width_mm, "
-            "       st.session_begin_time "
-            "FROM apollo a "
-            "LEFT JOIN session_times st "
-            "  ON st.session_id = a.session_id AND st.user_id = a.user_id "
-            "LEFT JOIN targets t "
-            "  ON t.id = a.target_id AND t.user_id = a.user_id "
-            "WHERE a.user_id = %s "
-            "  AND st.session_begin_time IS NOT NULL "
-            "  AND t.physical_size_mm IS NOT NULL "
-            "  AND a.bow IS NOT NULL AND a.bow <> ''"
-        )
-        params = [user_id]
-        if range_from is not None:
-            sql += " AND st.session_begin_time >= %s"
-            params.append(range_from)
-        if range_to is not None:
-            sql += " AND st.session_begin_time <= %s"
-            params.append(range_to)
-        sql += " ORDER BY a.bow, a.session_id ASC, a.id ASC"
-        rows = cur.execute(sql, tuple(params)).fetchall()
-
-    def _parse_dw(raw):
-        if raw is None:
-            return None
-        s = str(raw).strip()
-        if not s:
-            return None
-        try:
-            return float(s)
-        except ValueError:
-            return None
-
-    # Bucket: bow → session_id → {kind: 'rated'|'effective', dt, xs, ys}
-    # The kind is determined from the shot's denormalized DW snapshot:
-    # treat the session as "effective" if any shot in it has a non-blank
-    # effective_draw_weight that differs from the bow's rated value.
-    by_bow = {}
-    for r in rows:
-        xraw = str(r['x_coord']).strip() if r['x_coord'] is not None else ''
-        yraw = str(r['y_coord']).strip() if r['y_coord'] is not None else ''
-        if xraw == MISS_SENTINEL and yraw == MISS_SENTINEL:
-            continue
-        try:
-            x = float(xraw)
-            y = float(yraw)
-        except ValueError:
-            continue
-        try:
-            width_mm = float(r['width_mm'])
-        except (TypeError, ValueError):
-            continue
-        if width_mm <= 0:
-            continue
-        half = width_mm / 2.0
-        nx = x / half
-        ny = y / half
-        begin_dt = _utc_to_user(r['session_begin_time'])
-        if begin_dt is None:
-            continue
-        begin_dt = begin_dt.replace(tzinfo=None)
-        rated = _parse_dw(r['bow_draw_weight'])
-        eff = _parse_dw(r['effective_draw_weight'])
-        # "Effective" if the user explicitly entered a value that differs
-        # from the rated spec by more than 0.05 lb (tolerance for typos
-        # like "40.0" vs 40). Otherwise the user was effectively shooting
-        # at the rated spec.
-        if eff is not None and rated is not None and abs(eff - rated) > 0.05:
-            kind = 'effective'
-        elif eff is not None and rated is None:
-            kind = 'effective'
-        else:
-            kind = 'rated'
-
-        bow_buckets = by_bow.setdefault(r['bow'], {})
-        bucket = bow_buckets.setdefault(r['session_id'], {
-            'dt': begin_dt, 'kind': kind, 'xs': [], 'ys': [],
-            'rated': rated, 'eff': eff,
-        })
-        # If any shot in the session was 'effective', the whole session
-        # is treated as effective — the user's intent didn't flip mid-
-        # session. This guards against blank effective_draw_weight on
-        # historical rows mixed with set ones in the same session.
-        if kind == 'effective':
-            bucket['kind'] = 'effective'
-            if eff is not None:
-                bucket['eff'] = eff
-        bucket['xs'].append(nx)
-        bucket['ys'].append(ny)
-
-    if not by_bow:
-        return None
-
-    # Compute per-session stats and collect into per-bow per-kind series,
-    # keyed by the draw weight value that defines the x position.
-    bow_series = {}  # bow → {
-                     #   eff_xs, eff_mpi, eff_r95,
-                     #   rated_xs, rated_mpi, rated_r95,
-                     # }
-    table_rows = []
-    for bow in sorted(by_bow.keys()):
-        sessions = by_bow[bow]
-        ser = {
-            'eff_xs': [], 'eff_mpi': [], 'eff_r95': [],
-            'rated_xs': [], 'rated_mpi': [], 'rated_r95': [],
-        }
-        for sid in sorted(sessions, key=lambda s: sessions[s]['dt']):
-            b = sessions[sid]
-            s = _archery_stats(b['xs'], b['ys'])
-            if s is None:
-                continue
-            # X position = the draw weight the user was actually pulling.
-            # For "effective" sessions that's the effective DW; for
-            # "rated" sessions it's the bow's rated DW. Skip sessions
-            # whose DW we don't know — without an x they can't be plotted.
-            if b['kind'] == 'effective':
-                dw_x = b['eff']
-            else:
-                dw_x = b['rated']
-            if dw_x is None:
-                continue
-            if b['kind'] == 'effective':
-                ser['eff_xs'].append(dw_x)
-                ser['eff_mpi'].append(s['mpi'])
-                ser['eff_r95'].append(s['r95'])
-            else:
-                ser['rated_xs'].append(dw_x)
-                ser['rated_mpi'].append(s['mpi'])
-                ser['rated_r95'].append(s['r95'])
-            table_rows.append([
-                b['dt'].strftime('%Y-%m-%d'),
-                bow,
-                sid,
-                s['n'],
-                b['kind'],
-                ('' if b['rated'] is None else round(b['rated'], 1)),
-                ('' if b['eff'] is None else round(b['eff'], 1)),
-                round(dw_x, 1),
-                round(s['mpi'], 3),
-                round(s['r95'], 3),
-            ])
-        if ser['eff_xs'] or ser['rated_xs']:
-            bow_series[bow] = ser
-
-    if not bow_series:
-        return None
-
-    # Sort table rows by draw weight then bow for at-a-glance trends.
-    table_rows.sort(key=lambda r: (r[1], r[7]))
-
-    import matplotlib
-    matplotlib.use('Agg')
-    import matplotlib.pyplot as plt
-
-    # Each bow gets a base hue. Accuracy and precision share the hue;
-    # marker shape and linestyle differentiate the four traces per bow.
-    palette = [
-        '#1a3a5c', '#c79b5a', '#4d6da6', '#8e6a3a', '#95abcf',
-        '#d4b988', '#2e5680', '#b87a52', '#636a80', '#a1d8ed',
-    ]
-    fig, ax = plt.subplots(figsize=(10, 5.6))
-    bow_keys = list(bow_series.keys())
-
-    def _sorted_pairs(xs, ys):
-        # Sort by x so the connecting line walks the draw-weight axis
-        # left-to-right rather than zigzagging in date order.
-        paired = sorted(zip(xs, ys), key=lambda p: p[0])
-        return [p[0] for p in paired], [p[1] for p in paired]
-
-    for i, bow in enumerate(bow_keys):
-        ser = bow_series[bow]
-        hue = palette[i % len(palette)]
-        if ser['eff_xs']:
-            ex, em = _sorted_pairs(ser['eff_xs'], ser['eff_mpi'])
-            _, er = _sorted_pairs(ser['eff_xs'], ser['eff_r95'])
-            ax.plot(ex, em, color=hue,
-                    linestyle='-', marker='o', markersize=5,
-                    linewidth=1.4,
-                    label=f'{bow} — Accuracy @ effective DW')
-            ax.plot(ex, er, color=hue,
-                    linestyle='-', marker='s', markersize=5,
-                    linewidth=1.4, alpha=0.55,
-                    label=f'{bow} — Precision @ effective DW')
-        if ser['rated_xs']:
-            rx, rm = _sorted_pairs(ser['rated_xs'], ser['rated_mpi'])
-            _, rr = _sorted_pairs(ser['rated_xs'], ser['rated_r95'])
-            ax.plot(rx, rm, color=hue,
-                    linestyle='--', marker='^', markersize=6,
-                    linewidth=1.4,
-                    label=f'{bow} — Accuracy @ rated DW')
-            ax.plot(rx, rr, color=hue,
-                    linestyle='--', marker='v', markersize=6,
-                    linewidth=1.4, alpha=0.55,
-                    label=f'{bow} — Precision @ rated DW')
-
-    ax.set_xlabel('Draw weight (lb)')
-    ax.set_ylabel('Normalized units (1.0 = target edge)\nlower is better')
-    ax.set_title('Accuracy & precision by draw weight')
-    ax.grid(True, linestyle='--', alpha=0.4)
-    ax.legend(loc='upper left', fontsize=7, ncol=2, framealpha=0.85)
-    svg_b64 = _render_matplotlib_svg(fig)
-
-    intro = Markup(
-        '<p class="report-intro">'
-        '<strong>What this answers:</strong> does re-tuning to a different '
-        'effective draw weight actually change how the bow shoots? Each '
-        'bow contributes up to four traces: accuracy (MPI, circle/triangle '
-        'markers) and precision (R95, square/diamond markers), split by '
-        'whether the session was shot at the bow’s rated draw weight '
-        '(dashed lines) or at a re-tuned effective draw weight (solid '
-        'lines). Values are normalized by target half-width so mixed-'
-        'target histories are comparable. Misses excluded.'
-        '</p>'
-    )
-
-    return {
-        'key': 'draw_weight_traces',
-        'title': 'Accuracy & precision by draw weight',
-        'intro_html': intro,
-        'svg_b64': svg_b64,
-        'columns': [
-            'Session date', 'Bow', 'Session id',
-            _tip('Shots',
-                 'Hits in this session that contributed to the stats. '
-                 'Misses excluded.'),
-            _tip('Pool',
-                 '"effective" = the user set an effective_draw_weight '
-                 'different from the bow’s rated draw weight for '
-                 'this session; "rated" = the user was effectively '
-                 'shooting at the bow’s rated spec.'),
-            _tip('Rated DW (lb)',
-                 'Rated draw weight on the bow row at shot time. '
-                 'Snapshotted per shot so historical attribution stays '
-                 'correct after edits.'),
-            _tip('Effective DW (lb)',
-                 'Effective (actual) draw weight recorded for this '
-                 'session’s shots, if the user entered one.'),
-            _tip('DW used (lb)',
-                 'The draw weight used to position this session on the '
-                 'chart — the effective DW when the user set one, '
-                 'otherwise the rated DW.'),
-            _tip('MPI (norm)',
-                 'Per-session Mean Point of Impact — distance from origin '
-                 'to the session’s shot centroid.'),
-            _tip('R95 (norm)',
-                 'Per-session 95% radius about the session’s centroid.'),
-        ],
+        'columns': columns,
         'rows': table_rows,
     }
 
@@ -13289,12 +12724,6 @@ REPORTS = {
                        'per-session counts.',
         'fn': _report_arrows_vs_time,
     },
-    'sessions_per_day': {
-        'label': 'Sessions per day',
-        'description': 'How many practice sessions you logged each day '
-                       '(empty days included so gaps are visible).',
-        'fn': _report_sessions_per_day,
-    },
     'all_shots_per_target': {
         'label': 'Shots per target (date range)',
         'description': 'Every shot you have taken on each target — overlaid '
@@ -13314,39 +12743,29 @@ REPORTS = {
                        'every shot on that target.',
         'fn': _report_hits_by_boundaries,
     },
-    'accuracy_over_time': {
-        'label': 'Accuracy over time',
-        'description': 'Per-bucket line chart with three traces: MPI '
-                       '(|centroid|), σ from center, and mean normalized '
-                       'distance from center. Lower is better. Distances '
-                       'are normalized by target half-width so mixed '
-                       'targets are comparable.',
-        'fn': _report_accuracy_over_time,
-        'accepts_date_range': True,
-    },
     'accuracy_precision_traces': {
         'label': 'Accuracy & precision traces',
         'description': 'Accuracy and precision on a single timeline at '
-                       'three granularities, overlaid: per session, per '
-                       'quiver, and as an all-time rolling pool. Blue '
-                       'traces are accuracy (MPI); amber traces are '
-                       'precision (R95). Values are normalized by target '
+                       'three granularities: per session, per quiver, and '
+                       'as an all-time rolling pool. Tick which traces to '
+                       'plot. Optionally pick one or more bows, arrows, or '
+                       'tags to overlay them head-to-head — each subject '
+                       'gets its own colored set of traces on the shared '
+                       'timeline. Values are normalized by target '
                        'half-width so mixed-target histories are '
                        'comparable. Misses excluded.',
         'fn': _report_accuracy_precision_traces,
         'accepts_date_range': True,
-    },
-    'draw_weight_traces': {
-        'label': 'Accuracy & precision by draw weight',
-        'description': 'Per-bow accuracy and precision traces over time, '
-                       'split by whether the session was shot at the '
-                       'bow’s rated draw weight (dashed) or a different '
-                       'effective draw weight (solid). Up to four traces '
-                       'per bow — useful for spotting whether re-tuning '
-                       'actually changed how the bow shoots. Values are '
-                       'normalized by target half-width. Misses excluded.',
-        'fn': _report_draw_weight_traces,
-        'accepts_date_range': True,
+        # Trace toggles — which of the six (granularity × metric) series to
+        # draw. The route defaults to "all" when none are ticked, so the
+        # report keeps its original six-line output by default.
+        'category_label': 'Traces to plot:',
+        'categories': _TRACE_CATEGORIES,
+        # Optional head-to-head: pick specific bows / arrows (equipment
+        # picker) and / or tags (tag picker) to overlay as separate
+        # subjects. Leave all empty for a single combined "All shots" trace.
+        'equipment_picker': True,
+        'tag_picker': True,
     },
     'equipment_head_to_head': {
         'label': 'Head-to-head comparisons',
