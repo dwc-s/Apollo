@@ -29,6 +29,15 @@ from urllib.parse import urlparse
 
 # Local pure-Python modules (no Flask/DB) for the AGB handicap math and the
 # classification resolvers. Kept standalone so they stay unit-testable.
+#
+# Ensure this file's own directory is importable for these sibling modules.
+# When apollo.py is run as a script (``python apollo.py``) Python adds its
+# directory to sys.path automatically, but when it's imported as a module
+# under a WSGI server (``from apollo import app``) that doesn't happen — the
+# server's sys.path may locate apollo.py without its directory being importable
+# for siblings. Inserting it here is idempotent and fixes the deploy import.
+import sys as _sys
+_sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import handicap
 import classifications
 
