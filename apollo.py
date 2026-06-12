@@ -3824,6 +3824,34 @@ def index():
     return render_template('splash.html')
 
 
+# ─── PWA: service worker + manifest ──────────────────────────────────────
+# Both are served from the site root (not /static/) on purpose. A service
+# worker only controls pages within its own URL scope, and a worker fetched
+# from /static/sw.js would be scoped to /static/ — unable to intercept
+# /sesh. Serving it from /sw.js gives it root scope. (The explicit
+# Service-Worker-Allowed header is belt-and-suspenders for the same goal.)
+# The manifest lives at the root too so its start_url / scope resolve to /.
+# Both are public (no @login_required): the browser fetches them before any
+# auth context and they contain nothing user-specific.
+
+@app.route('/sw.js', methods=['GET'])
+def service_worker():
+    resp = app.send_static_file('sw.js')
+    resp.headers['Content-Type'] = 'application/javascript'
+    resp.headers['Service-Worker-Allowed'] = '/'
+    # The SW file itself must never be served stale, or clients can get
+    # wedged on an old cache strategy; the SW handles asset versioning.
+    resp.headers['Cache-Control'] = 'no-cache'
+    return resp
+
+
+@app.route('/manifest.webmanifest', methods=['GET'])
+def web_manifest():
+    resp = app.send_static_file('manifest.webmanifest')
+    resp.headers['Content-Type'] = 'application/manifest+json'
+    return resp
+
+
 # ─── Auth routes ─────────────────────────────────────────────────────────
 
 @app.route('/register', methods=['GET', 'POST'])
@@ -4687,6 +4715,94 @@ def _current_session_effective_dw(user_id, session_id):
     return row[0] or ''
 
 
+def _insert_shot(cur, *, user_id, session_id, timestamp, bow, arrow_type,
+                 quiver_size, arrows_remaining, distance, session_notes,
+                 x, y, is_precise, record_mode, target_id,
+                 effective_dw_session, session_tags):
+    """Snapshot the current bow/arrow config and INSERT one shot row.
+
+    Single source of truth for the per-shot insert, shared by the live
+    /sesh POST path and the offline-sync batch endpoint (/api/sync_shots).
+    The caller owns the connection and the commit; ``cur`` must be an open
+    cursor.
+
+    ``timestamp`` and ``arrows_remaining`` are passed in rather than
+    computed here: the live path passes ``_app_now()`` plus the running
+    cookie counter; the sync path passes the real on-device shot time plus
+    the counter the client tracked while offline. ``arrows_remaining`` is
+    always the *pre-decrement* value, which get_past_shots() and
+    recall_arrow() depend on. ``effective_dw_session`` is the per-session
+    effective draw weight (or None) recorded verbatim.
+    """
+    # Snapshot the bow's current config onto the shot row. Without this, a
+    # later edit to the bow (draw weight changed, AMO measured more
+    # carefully, rename) would silently rewrite the historical attribution
+    # of every shot ever taken with it. bow_type is included so the row
+    # remains self-describing even if the bow row is later deleted.
+    bow_row = cur.execute(
+        "SELECT nock_height, bow_draw_weight, "
+        "amo, bow_type FROM bows "
+        "WHERE bow_model = %s AND user_id = %s LIMIT 1",
+        (bow, user_id)
+    ).fetchone()
+    if bow_row is not None:
+        nock_height          = bow_row['nock_height']           if 'nock_height'           in bow_row else bow_row[0]
+        shot_bow_draw_weight = bow_row['bow_draw_weight']       if 'bow_draw_weight'       in bow_row else bow_row[1]
+        shot_bow_amo         = bow_row['amo']                   if 'amo'                   in bow_row else bow_row[2]
+        shot_bow_type        = bow_row['bow_type']              if 'bow_type'              in bow_row else bow_row[3]
+    else:
+        nock_height = shot_bow_draw_weight = shot_bow_amo = shot_bow_type = None
+    shot_effective_dw = effective_dw_session
+
+    # Same snapshot for the arrow side: capture every field on the arrows
+    # row so a later rename/edit doesn't rewrite the per-shot record. spine
+    # is snapshotted too even though it's locked in the UI — keeps the
+    # apollo row self-describing if the arrow row is ever deleted.
+    arrow_row = cur.execute(
+        "SELECT length, spine, shaft_weight, shaft_diameter, "
+        "shaft_material, nock_weight, tip, tip_weight FROM arrows "
+        "WHERE arrow = %s AND user_id = %s LIMIT 1",
+        (arrow_type, user_id)
+    ).fetchone()
+    if arrow_row is not None:
+        shot_arrow_length    = arrow_row['length']         if 'length'         in arrow_row else arrow_row[0]
+        shot_arrow_spine     = arrow_row['spine']          if 'spine'          in arrow_row else arrow_row[1]
+        shot_arrow_shaft_w   = arrow_row['shaft_weight']   if 'shaft_weight'   in arrow_row else arrow_row[2]
+        shot_arrow_shaft_d   = arrow_row['shaft_diameter'] if 'shaft_diameter' in arrow_row else arrow_row[3]
+        shot_arrow_shaft_m   = arrow_row['shaft_material'] if 'shaft_material' in arrow_row else arrow_row[4]
+        shot_arrow_nock_w    = arrow_row['nock_weight']    if 'nock_weight'    in arrow_row else arrow_row[5]
+        shot_arrow_tip       = arrow_row['tip']            if 'tip'            in arrow_row else arrow_row[6]
+        shot_arrow_tip_w     = arrow_row['tip_weight']     if 'tip_weight'     in arrow_row else arrow_row[7]
+    else:
+        shot_arrow_length = shot_arrow_spine = shot_arrow_shaft_w = None
+        shot_arrow_shaft_d = shot_arrow_shaft_m = shot_arrow_nock_w = None
+        shot_arrow_tip = shot_arrow_tip_w = None
+
+    cur.execute("""
+        INSERT INTO apollo (user_id, session_id, timestamp, bow,
+        arrow_type, quiver_size, arrows_remaining,
+        distance, session_notes, x_coord, y_coord, is_precise,
+        record_mode, target_id, nock_height,
+        bow_draw_weight, effective_draw_weight, bow_amo, bow_type,
+        arrow_length, arrow_spine, arrow_shaft_weight,
+        arrow_shaft_diameter, arrow_shaft_material,
+        arrow_nock_weight, arrow_tip, arrow_tip_weight,
+        session_tags)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                %s, %s, %s, %s,
+                %s, %s, %s, %s, %s, %s, %s, %s,
+                %s)""",
+        (user_id, session_id, timestamp, bow, arrow_type, quiver_size,
+         arrows_remaining, distance, session_notes, x, y, is_precise,
+         record_mode, target_id, nock_height,
+         shot_bow_draw_weight, shot_effective_dw, shot_bow_amo, shot_bow_type,
+         shot_arrow_length, shot_arrow_spine, shot_arrow_shaft_w,
+         shot_arrow_shaft_d, shot_arrow_shaft_m,
+         shot_arrow_nock_w, shot_arrow_tip, shot_arrow_tip_w,
+         session_tags)
+    )
+
+
 @app.route('/sesh', methods=['GET', 'POST'])
 @login_required
 def sesh():
@@ -4917,77 +5033,17 @@ def sesh():
                     session['arrows_remaining'] = effective_quiver_size
                 with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
                     try:
-                        # Snapshot the bow's current config onto the shot row.
-                        # Without this, a later edit to the bow (draw weight
-                        # changed, AMO measured more carefully, rename) would
-                        # silently rewrite the historical attribution of every
-                        # shot ever taken with it. bow_type is included so
-                        # the row remains self-describing even if the bow row
-                        # is later deleted.
-                        bow_row = cur.execute(
-                            "SELECT nock_height, bow_draw_weight, "
-                            "amo, bow_type FROM bows "
-                            "WHERE bow_model = %s AND user_id = %s LIMIT 1",
-                            (bow, user_id)
-                        ).fetchone()
-                        if bow_row is not None:
-                            nock_height          = bow_row['nock_height']           if 'nock_height'           in bow_row else bow_row[0]
-                            shot_bow_draw_weight = bow_row['bow_draw_weight']       if 'bow_draw_weight'       in bow_row else bow_row[1]
-                            shot_bow_amo         = bow_row['amo']                   if 'amo'                   in bow_row else bow_row[2]
-                            shot_bow_type        = bow_row['bow_type']              if 'bow_type'              in bow_row else bow_row[3]
-                        else:
-                            nock_height = shot_bow_draw_weight = shot_bow_amo = shot_bow_type = None
-                        # Effective DW now comes from the session form, not the bows row.
-                        shot_effective_dw = effective_dw_session
-
-                        # Same snapshot for the arrow side: capture every
-                        # field on the arrows row so a later rename/edit
-                        # doesn't rewrite the per-shot record. spine is
-                        # snapshotted too even though it's locked in the
-                        # UI — keeps the apollo row self-describing if the
-                        # arrow row is ever deleted.
-                        arrow_row = cur.execute(
-                            "SELECT length, spine, shaft_weight, shaft_diameter, "
-                            "shaft_material, nock_weight, tip, tip_weight FROM arrows "
-                            "WHERE arrow = %s AND user_id = %s LIMIT 1",
-                            (arrow_type, user_id)
-                        ).fetchone()
-                        if arrow_row is not None:
-                            shot_arrow_length    = arrow_row['length']         if 'length'         in arrow_row else arrow_row[0]
-                            shot_arrow_spine     = arrow_row['spine']          if 'spine'          in arrow_row else arrow_row[1]
-                            shot_arrow_shaft_w   = arrow_row['shaft_weight']   if 'shaft_weight'   in arrow_row else arrow_row[2]
-                            shot_arrow_shaft_d   = arrow_row['shaft_diameter'] if 'shaft_diameter' in arrow_row else arrow_row[3]
-                            shot_arrow_shaft_m   = arrow_row['shaft_material'] if 'shaft_material' in arrow_row else arrow_row[4]
-                            shot_arrow_nock_w    = arrow_row['nock_weight']    if 'nock_weight'    in arrow_row else arrow_row[5]
-                            shot_arrow_tip       = arrow_row['tip']            if 'tip'            in arrow_row else arrow_row[6]
-                            shot_arrow_tip_w     = arrow_row['tip_weight']     if 'tip_weight'     in arrow_row else arrow_row[7]
-                        else:
-                            shot_arrow_length = shot_arrow_spine = shot_arrow_shaft_w = None
-                            shot_arrow_shaft_d = shot_arrow_shaft_m = shot_arrow_nock_w = None
-                            shot_arrow_tip = shot_arrow_tip_w = None
-
-                        cur.execute("""
-                            INSERT INTO apollo (user_id, session_id, timestamp, bow,
-                            arrow_type, quiver_size, arrows_remaining,
-                            distance, session_notes, x_coord, y_coord, is_precise,
-                            record_mode, target_id, nock_height,
-                            bow_draw_weight, effective_draw_weight, bow_amo, bow_type,
-                            arrow_length, arrow_spine, arrow_shaft_weight,
-                            arrow_shaft_diameter, arrow_shaft_material,
-                            arrow_nock_weight, arrow_tip, arrow_tip_weight,
-                            session_tags)
-                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                                    %s, %s, %s, %s,
-                                    %s, %s, %s, %s, %s, %s, %s, %s,
-                                    %s)""",
-                            (user_id, session_id, _app_now(), bow, arrow_type, effective_quiver_size,
-                             arrows_remaining, distance, session_notes, x, y, is_precise,
-                             record_mode, target_id, nock_height,
-                             shot_bow_draw_weight, shot_effective_dw, shot_bow_amo, shot_bow_type,
-                             shot_arrow_length, shot_arrow_spine, shot_arrow_shaft_w,
-                             shot_arrow_shaft_d, shot_arrow_shaft_m,
-                             shot_arrow_nock_w, shot_arrow_tip, shot_arrow_tip_w,
-                             session_tags)
+                        _insert_shot(
+                            cur,
+                            user_id=user_id, session_id=session_id,
+                            timestamp=_app_now(), bow=bow, arrow_type=arrow_type,
+                            quiver_size=effective_quiver_size,
+                            arrows_remaining=arrows_remaining,
+                            distance=distance, session_notes=session_notes,
+                            x=x, y=y, is_precise=is_precise,
+                            record_mode=record_mode, target_id=target_id,
+                            effective_dw_session=effective_dw_session,
+                            session_tags=session_tags,
                         )
                         con.commit()
                         print(f"✅ Entry saved for session {session_id}")
@@ -5057,6 +5113,9 @@ def sesh():
                                    targets_list=targets_list,
                                    selected_target_id=session.get('target_id'),
                                    target_locked=target_locked,
+                                   is_tournament=bool(session.get('tournament_round_key')
+                                                      or session.get('match_id')),
+                                   current_quiver_size=session.get('current_quiver_size') or 0,
                                    target_config=target_config)
 
     record_mode = session.get('record_mode', 0)
@@ -5114,6 +5173,9 @@ def sesh():
                            targets_list=targets_list,
                            selected_target_id=session.get('target_id'),
                            target_locked=target_locked,
+                           is_tournament=bool(session.get('tournament_round_key')
+                                              or session.get('match_id')),
+                           current_quiver_size=get_current_qs,
                            target_config=target_config)
 
 
@@ -5224,6 +5286,169 @@ def recall_arrow():
             session['tournament_segment_idx'] = new_idx
 
     return jsonify(ok=True)
+
+
+@app.route('/api/sync_shots', methods=['POST'])
+@login_required
+def sync_shots():
+    """Batch-insert shots captured offline by the PWA shot queue.
+
+    The client (static/apollo-offline.js) records shots into an IndexedDB
+    queue while ``navigator.onLine`` is false, tracking the quiver state
+    machine locally. When the connection returns it POSTs the whole queue
+    here as JSON ``{"shots": [ {...}, ... ]}`` and, on a 2xx + ``ok``,
+    clears the synced rows.
+
+    CSRF: Flask-WTF's CSRFProtect honours the ``X-CSRFToken`` header, which
+    the client sends with the page's csrf_token — so this endpoint stays
+    protected with no exemption.
+
+    Each shot carries the values the live /sesh POST would have computed
+    client-side: coords, equipment selections, the *pre-decrement*
+    ``arrows_remaining`` and locked ``quiver_size`` (so get_past_shots /
+    recall stay correct), and a real on-device ``ts``. Equipment config is
+    snapshotted server-side via the shared _insert_shot() helper, so a
+    synced shot is byte-for-byte equivalent to one saved live — except its
+    timestamp reflects when the arrow was actually shot, not sync time.
+
+    Scope (v1): practice sessions only. The session must already exist
+    (its session_times row was created by the online GET /sesh that
+    started the round); an unknown session_id rejects the whole batch so
+    the client keeps the queue rather than silently dropping shots.
+    """
+    user_id = current_user_id()
+    payload = request.get_json(silent=True) or {}
+    shots = payload.get('shots')
+    if not isinstance(shots, list):
+        return jsonify(ok=False, msg='Expected {"shots": [...]}.'), 400
+    if not shots:
+        return jsonify(ok=True, inserted=0)
+    # Defensive cap: a legitimate range trip is hundreds of arrows, not
+    # tens of thousands. Anything larger is almost certainly a bug or abuse.
+    if len(shots) > 5000:
+        return jsonify(ok=False, msg='Too many shots in one batch.'), 413
+
+    def _client_ts(raw):
+        # Parse the client's ISO shot time into a naive-UTC datetime that
+        # matches the shape _app_now() writes. Fall back to now() on any
+        # malformed value so a bad clock never strands the queue.
+        if not raw:
+            return _app_now()
+        try:
+            dt = datetime.fromisoformat(str(raw).strip().replace('Z', '+00:00'))
+        except (ValueError, TypeError):
+            return _app_now()
+        if dt.tzinfo is not None:
+            dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+        return dt.replace(microsecond=0)
+
+    # Validate every referenced session belongs to this user *before*
+    # inserting anything — reject the batch as a unit so a half-synced
+    # queue can't happen.
+    try:
+        wanted = {int(s.get('session_id')) for s in shots
+                  if str(s.get('session_id', '')).strip() != ''}
+    except (TypeError, ValueError):
+        return jsonify(ok=False, msg='Bad session_id in batch.'), 400
+    if not wanted:
+        return jsonify(ok=False, msg='No session_id in batch.'), 400
+    with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
+        rows = cur.execute(
+            "SELECT session_id FROM session_times WHERE user_id = %s",
+            (user_id,)
+        ).fetchall()
+        owned = {int(r[0]) for r in rows} if rows else set()
+    missing = wanted - owned
+    if missing:
+        return jsonify(ok=False,
+                       msg='Unknown session(s) for this user; not synced.',
+                       missing=sorted(missing)), 409
+
+    # Cache target-ownership lookups across the batch (a session is locked
+    # to one target, so this is usually a single id).
+    target_ok = {}
+
+    def _coerce_target(raw):
+        if raw is None or str(raw).strip() == '':
+            return None
+        try:
+            tid = int(raw)
+        except (TypeError, ValueError):
+            return None
+        if tid not in target_ok:
+            target_ok[tid] = get_target(tid, user_id) is not None
+        return tid if target_ok[tid] else None
+
+    inserted = 0
+    try:
+        with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
+            for s in shots:
+                session_id = int(s.get('session_id'))
+                try:
+                    quiver_size = int(s.get('quiver_size'))
+                except (TypeError, ValueError):
+                    quiver_size = 0
+                # Mirror the live path's guard: a non-positive quiver size
+                # would corrupt the counters, so skip rather than insert.
+                if quiver_size <= 0:
+                    continue
+                try:
+                    arrows_remaining = int(s.get('arrows_remaining'))
+                except (TypeError, ValueError):
+                    arrows_remaining = quiver_size
+
+                effective_dw_raw = (str(s.get('effective_draw_weight') or '')).strip()
+                effective_dw_session = effective_dw_raw if effective_dw_raw else None
+                if effective_dw_session is not None and _parse_float(effective_dw_session) is None:
+                    effective_dw_session = None
+
+                _insert_shot(
+                    cur,
+                    user_id=user_id, session_id=session_id,
+                    timestamp=_client_ts(s.get('ts')),
+                    bow=s.get('bow', '') or '',
+                    arrow_type=s.get('arrow_type', '') or '',
+                    quiver_size=quiver_size,
+                    arrows_remaining=arrows_remaining,
+                    distance=s.get('distance', '') or '',
+                    session_notes=s.get('session_notes', '') or '',
+                    x=s.get('x_coord', ''), y=s.get('y_coord', ''),
+                    is_precise=int(s.get('is_precise', 1) or 0),
+                    record_mode=int(s.get('record_mode', 1) or 0),
+                    target_id=_coerce_target(s.get('target_id')),
+                    effective_dw_session=effective_dw_session,
+                    session_tags=_normalize_tags(s.get('session_tags', '') or ''),
+                )
+                inserted += 1
+            con.commit()
+    except SQLAlchemyError as e:
+        print(f"❌ sync_shots error: {e}")
+        return jsonify(ok=False, msg='Database error during sync.'), 500
+
+    # Reconcile the live cookie counters. The /sesh POST tracks quiver
+    # state (arrows_remaining / quivers_completed / current_quiver_size) in
+    # the Flask session cookie, *not* the posted form fields — so after
+    # offline shots land, the cookie is frozen at its pre-offline value. If
+    # the user then takes a shot online without this fix, the server would
+    # re-use a stale arrows_remaining and write a duplicate counter. The
+    # client (which ran the same state machine offline) reports its final
+    # counters in ``active``; adopt them, but only when they belong to the
+    # session that's still active in this cookie — a synced batch for an
+    # older, since-replaced session must not clobber the new one's state.
+    reconciled = False
+    active = payload.get('active') or {}
+    try:
+        if active and int(active.get('session_id')) == int(session.get('session_id') or 0):
+            session['arrows_remaining'] = int(active.get('arrows_remaining'))
+            session['quivers_completed'] = int(active.get('quivers_completed'))
+            cqs = active.get('current_quiver_size')
+            session['current_quiver_size'] = int(cqs) if cqs else None
+            reconciled = True
+    except (TypeError, ValueError):
+        pass
+
+    print(f"✅ Offline sync: inserted {inserted} shot(s) for user {user_id}")
+    return jsonify(ok=True, inserted=inserted, reconciled=reconciled)
 
 
 # ── Tournament mode routes ──────────────────────────────────────────────

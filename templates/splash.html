@@ -7,7 +7,18 @@
     <link rel="stylesheet" type="text/css" href="{{ url_for('static', filename='style.css') }}">
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#1a3a5c">
+    <link rel="manifest" href="/manifest.webmanifest">
     <title>Apollo::splash</title>
+    <script>
+        // Installable + offline shell. Registered here too so the app can be
+        // added to the home screen from the landing page.
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register('/sw.js').catch(() => {});
+            });
+        }
+    </script>
     <style>
         .splash-row {
             display: flex;

@@ -29,15 +29,32 @@
         }
     </style>
     <script>
-        window.APOLLO         = {{ target_config | tojson }};
-        window.FACE_RENDER    = window.APOLLO ? (window.APOLLO.face_render || null) : null;
-        window.PAST_SHOTS     = {{ past_shots | tojson }};
-        window.ARROW_SHAFT_MM = {{ arrow_shaft_diameters | tojson }};
+        window.APOLLO            = {{ target_config | tojson }};
+        window.FACE_RENDER       = window.APOLLO ? (window.APOLLO.face_render || null) : null;
+        window.PAST_SHOTS        = {{ past_shots | tojson }};
+        window.ARROW_SHAFT_MM    = {{ arrow_shaft_diameters | tojson }};
+        // Offline-capture context (see static/apollo-offline.js).
+        window.APOLLO_SESSION_ID   = {{ session_id | tojson }};
+        window.APOLLO_IS_TOURNAMENT = {{ is_tournament | default(false) | tojson }};
+        window.APOLLO_CURRENT_QS   = {{ current_quiver_size | default(0) | tojson }};
     </script>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#1a3a5c">
+    <link rel="manifest" href="/manifest.webmanifest">
     <title>Apollo::session</title>
+    <script>
+        // Register the service worker so the app is installable and /sesh
+        // opens offline. Scope '/' requires the SW to be served from root
+        // (Flask route /sw.js), not /static/.
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register('/sw.js').catch(() => {});
+            });
+        }
+    </script>
     <script defer src="{{ url_for('static', filename='apollo-nav.js') }}"></script>
+    <script defer src="{{ url_for('static', filename='apollo-offline.js') }}"></script>
     <script defer src="{{ url_for('static', filename='apollo-tags.js') }}"></script>
 </head>
 <body>
@@ -237,13 +254,13 @@
 
             <span class="form-label">Remaining arrows in quiver</span>
             <br>
-            <pre>{{ arrows_remaining }}</pre>
+            <pre id="arrows-remaining-display">{{ arrows_remaining }}</pre>
             <input type="hidden" id="arrows_remaining" name="arrows_remaining" value="{{ arrows_remaining }}">
 
 
             <span class="form-label">Quivers completed</span>
             <br>
-            <pre>{{ quivers_completed }}</pre>
+            <pre id="quivers-completed-display">{{ quivers_completed }}</pre>
             <input type="hidden" id="quivers_completed" name="quivers_completed" value="{{ quivers_completed }}">
 
             <span class="form-label" id="distance-label">Distance to target (meters)</span>
@@ -1032,6 +1049,16 @@ if (recallBtn) {
     recallBtn.addEventListener('click', async () => {
         recallBtn.disabled = true;
         try {
+            // Offline: recall the most recent *queued* shot locally (no
+            // network). Older shots already synced/saved on the server can't
+            // be recalled until the connection returns.
+            if (window.ApolloOffline && window.ApolloOffline.isOffline()) {
+                const handled = await window.ApolloOffline.recallOffline();
+                readout.innerHTML = handled
+                    ? '<span style="color:#1a3a5c;font-weight:700;">ARROW RECALLED — re-enter the shot</span>'
+                    : '<span style="color:#c97a4a;font-weight:700;">No offline shot to recall.</span>';
+                return;
+            }
             const fd = new FormData();
             fd.append('csrf_token', document.querySelector('input[name="csrf_token"]').value);
             const res = await fetch('/recall_arrow', { method: 'POST', body: fd });
@@ -1184,12 +1211,25 @@ document.addEventListener('keydown', evt => {
         if (needsQuiverSize()) {
             evt.preventDefault();
             openModal();
+            return;
+        }
+        // Offline: never let a native POST hit the network — queue locally.
+        if (window.ApolloOffline && window.ApolloOffline.isOffline()) {
+            evt.preventDefault();
+            window.ApolloOffline.recordShot();
         }
     });
     const nativeSubmit = form.submit.bind(form);
     form.submit = function () {
         if (needsQuiverSize()) {
             openModal();
+            return;
+        }
+        // Every JS-driven shot submit (tap, hold-release, confirm, miss,
+        // quiver-size modal) funnels through here. When offline, capture to
+        // the IndexedDB queue instead of POSTing; sync happens on reconnect.
+        if (window.ApolloOffline && window.ApolloOffline.isOffline()) {
+            window.ApolloOffline.recordShot();
             return;
         }
         nativeSubmit();
