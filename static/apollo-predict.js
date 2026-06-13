@@ -5,9 +5,10 @@
  * Chart.js histogram + stats panel between batches.
  *
  * Distance extrapolation: the server fits a 2D Gaussian in milliradians
- * over historical hit offsets divided by their distance. Sampling at a
- * new distance D' multiplies the sampled mrad offset by D' * 1000 to
- * get linear mm — i.e. the angular dispersion scales linearly with range.
+ * over historical hit offsets divided by their distance (mrad = mm / m).
+ * Sampling at a new distance D' multiplies the sampled mrad offset by D'
+ * in metres to get linear mm (1 mrad at 1 m = 1 mm) — i.e. the angular
+ * dispersion scales linearly with range.
  *
  * Scoring mirrors apollo.py:_classify_shot (line-cutter rule with a
  * default 6 mm shaft when the historical data doesn't specify).
@@ -27,7 +28,10 @@
   }
 
   const DEFAULT_SHAFT_MM = 6.0;
-  const SHAFT_RADIUS = DEFAULT_SHAFT_MM / 2.0;
+  // Shaft radius for the line-cutter rule. The server reports the mean real
+  // diameter of the fitted shots in `dist.shaft_mm`; we fall back to the
+  // default shaft only when none of those shots defined a diameter.
+  let SHAFT_RADIUS = DEFAULT_SHAFT_MM / 2.0;
 
   // Box-Muller. Returns one standard normal per call; we draw two per
   // arrow so the pair-handling overhead isn't worth caching the spare.
@@ -74,6 +78,11 @@
   const nRuns = payload.n_runs;
   const scoreTarget = payload.score_target;
   const endpointMax = payload.endpoint_max | 0;
+
+  const shaftMm = Number(dist.shaft_mm);
+  if (Number.isFinite(shaftMm) && shaftMm > 0) {
+    SHAFT_RADIUS = shaftMm / 2.0;
+  }
 
   const chol = cholesky2(dist.cov_mrad);
   const meanMrad = dist.mean_mrad;

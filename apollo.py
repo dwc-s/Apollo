@@ -13054,7 +13054,8 @@ def _fit_shot_distribution(user_id, bows=None, arrows=None, tags=None,
         with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
             rows = cur.execute(
                 "SELECT x_coord, y_coord, distance, bow, arrow_type, "
-                "       session_tags, is_precise, timestamp "
+                "       session_tags, is_precise, timestamp, "
+                "       arrow_shaft_diameter "
                 "FROM apollo WHERE user_id = %s",
                 (user_id,)
             ).fetchall()
@@ -13073,6 +13074,7 @@ def _fit_shot_distribution(user_id, bows=None, arrows=None, tags=None,
     xs_mrad = []
     ys_mrad = []
     distances = set()
+    shaft_mms = []   # defined (positive) shaft diameters among fitted hits
     n_hits = 0
     n_misses = 0
     for r in rows:
@@ -13119,6 +13121,16 @@ def _fit_shot_distribution(user_id, bows=None, arrows=None, tags=None,
         xs_mrad.append(x_mm / dist_m)
         ys_mrad.append(y_mm / dist_m)
         distances.add(round(dist_m, 2))
+        # Track the arrow's real shaft diameter when this shot defines one;
+        # an undefined / blank / non-positive value contributes nothing, so
+        # the client falls back to the default shaft only if *no* fitted shot
+        # carries a real diameter.
+        try:
+            d_mm = float(str(_row_get(r, 'arrow_shaft_diameter') or '').strip())
+            if d_mm > 0:
+                shaft_mms.append(d_mm)
+        except (TypeError, ValueError):
+            pass
         n_hits += 1
 
     if n_hits < _PREDICT_MIN_HITS:
@@ -13138,6 +13150,12 @@ def _fit_shot_distribution(user_id, bows=None, arrows=None, tags=None,
     total = n_hits + n_misses
     miss_rate = n_misses / total if total > 0 else 0.0
 
+    # Shaft diameter for the simulator's line-cutter rule: the mean of the
+    # real diameters the fitted shots define, or the default shaft only when
+    # none of them do.
+    shaft_mm = (sum(shaft_mms) / len(shaft_mms)
+                if shaft_mms else DEFAULT_SHAFT_DIAMETER_MM)
+
     return {
         'ok':         True,
         'mean_mrad':  [mx, my],
@@ -13146,6 +13164,7 @@ def _fit_shot_distribution(user_id, bows=None, arrows=None, tags=None,
         'n_hits':     n_hits,
         'n_misses':   n_misses,
         'distances_m': sorted(distances),
+        'shaft_mm':   shaft_mm,
     }
 
 
