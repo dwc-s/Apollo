@@ -83,19 +83,21 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 # Chosen to be far outside any plausible mm-from-center value.
 MISS_SENTINEL = '100000'
 
-# Bundled NASP 40cm target — seeded for every new user as their default
-# so /sesh works out of the box without forcing them through the upload
-# wizard first. Calibration values match the bundled image exactly
-# (40cm physical edge, 1197 px cropped square).
-DEFAULT_TARGET_NAME    = '40cm NASP target'
-DEFAULT_TARGET_IMAGE   = 'targets/nasp_40cm.jpg'
-DEFAULT_TARGET_SIZE_MM = 400.0
-DEFAULT_TARGET_SIZE_PX = 1197
-
-# Concentric scoring rings for the bundled NASP target, in mm of radius
-# from the calibrated center. Outer edge of each zone — inner edge is
-# implied by the next-smaller ring (innermost ring is a filled disc).
-DEFAULT_TARGET_ZONE_RADII_MM = (20, 40, 60, 80, 100, 120, 140, 160, 180, 200)
+# Bundled default target — seeded for every new user as their default so
+# /sesh works out of the box without the upload wizard. It renders as a
+# vector WA-style 40cm 10-ring face: the same geometry as the WA 122cm
+# face scaled to a 40cm edge, drawn client-side from the canonical
+# ``wa_40`` ring spec. The image_filename is only a sizing placeholder —
+# the colored rings paint over it, so the user never sees a raster face.
+# The legacy NASP raster default is archived in favor of this on
+# register/login (see _seed_user_default_target). Calibration matches the
+# placeholder image exactly (40cm physical edge, 1197 px cropped square).
+DEFAULT_TARGET_NAME     = 'WA 40cm 10-ring'
+DEFAULT_TARGET_FACE_KEY = 'wa_40'                  # key into TOURNAMENT_FACES
+LEGACY_NASP_TARGET_NAME = '40cm NASP target'       # archived on migration
+DEFAULT_TARGET_IMAGE    = 'targets/nasp_40cm.jpg'  # placeholder; covered by rings
+DEFAULT_TARGET_SIZE_MM  = 400.0
+DEFAULT_TARGET_SIZE_PX  = 1197
 
 # Line-cutter scoring assumes a finite shaft thickness: if any part of the
 # shaft crosses (or touches) a ring boundary the shot scores the higher
@@ -3048,10 +3050,15 @@ def get_default_target(user_id):
         return None
     try:
         with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
+            # Tournament faces also carry is_default=1, so prefer a
+            # non-tournament default (the seeded WA 40cm face) deterministically
+            # — otherwise a migrated user whose WA-40 row has a higher id than
+            # their tournament rows would get a tournament face preselected.
             row = cur.execute(
                 "SELECT id AS rowid, name, image_filename, physical_size_mm, image_size_px "
-                "FROM targets WHERE is_default = 1 AND is_active = 1 AND user_id = %s LIMIT 1",
-                (user_id,)
+                "FROM targets WHERE is_default = 1 AND is_active = 1 AND user_id = %s "
+                "ORDER BY CASE WHEN name LIKE %s THEN 1 ELSE 0 END, id LIMIT 1",
+                (user_id, TOURNAMENT_TARGET_NAME_PREFIX + '%')
             ).fetchone()
             if row is None:
                 row = cur.execute(
@@ -3084,26 +3091,43 @@ def get_target(target_id, user_id):
 
 
 def _seed_user_default_target(user_id):
-    """Insert the bundled NASP target + scoring zones for a brand-new user.
+    """Ensure the user's default target is the WA 40cm 10-ring vector face.
 
-    Every new account gets their own targets row pointing at the bundled
-    NASP 40cm image, plus the 10 concentric scoring rings calibrated
-    against that image. The image file itself is a shared read-only
-    static asset; only the DB rows are per-user. Marked default so new
-    sessions have a target preselected without forcing the user through
-    the upload wizard first.
+    Idempotent — safe to call on every register and login:
+      * Archives the legacy NASP raster default if the user still has it
+        (sets is_active=0, is_default=0). The row and any shot history that
+        references it by id are left intact, just hidden and de-defaulted.
+      * Seeds the WA 40cm 10-ring target + its scoring zones if missing, and
+        marks it the active default. Geometry/zones come straight from the
+        canonical ``wa_40`` face spec (WA 122cm 10-ring scaled to a 40cm
+        edge) so scoring and the client-drawn ring overlay agree exactly.
 
-    Skipped when the user already owns at least one target row — happens
-    on the first-ever registration after _claim_orphan_data() has just
-    re-parented a pre-multi-user target row to this user. Avoids
-    duplicate seed rows.
+    The image_filename is only a sizing placeholder; the colored rings are
+    painted over it client-side (see _render_face_key_for_target_name).
     """
+    if user_id is None:
+        return
     try:
         with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
+            # Archive the legacy NASP raster default. Shots reference the
+            # target by id, so they remain valid against the hidden row.
+            cur.execute(
+                "UPDATE targets SET is_active = 0, is_default = 0 "
+                "WHERE user_id = %s AND name = %s",
+                (user_id, LEGACY_NASP_TARGET_NAME)
+            )
             existing = cur.execute(
-                "SELECT 1 FROM targets WHERE user_id = %s LIMIT 1", (user_id,)
+                "SELECT id FROM targets WHERE user_id = %s AND name = %s LIMIT 1",
+                (user_id, DEFAULT_TARGET_NAME)
             ).fetchone()
             if existing is not None:
+                # Already migrated — just guarantee it's the active default.
+                cur.execute(
+                    "UPDATE targets SET is_active = 1, is_default = 1 "
+                    "WHERE id = %s AND user_id = %s",
+                    (int(existing[0]), user_id)
+                )
+                con.commit()
                 return
             cur.execute(
                 "INSERT INTO targets "
@@ -3119,22 +3143,21 @@ def _seed_user_default_target(user_id):
             ).fetchone()
             if target_row is not None:
                 target_id = int(target_row[0])
-                # Highest point value is the innermost ring; radii list
-                # is in ascending order, so points = len - index.
-                radii = DEFAULT_TARGET_ZONE_RADII_MM
-                for idx, radius_mm in enumerate(radii):
-                    points = len(radii) - idx
+                # Zones from the canonical face spec, innermost-out — the
+                # same rows _seed_tournament_faces writes for the WA faces.
+                for idx, (pv, radius_mm, _color) in enumerate(
+                        TOURNAMENT_FACES[DEFAULT_TARGET_FACE_KEY]['zones']):
                     cur.execute(
                         "INSERT INTO target_zones "
                         "(user_id, target_id, name, point_value, shape_type, "
                         "radius_mm, display_order) "
                         "VALUES (%s, %s, %s, %s, 'circle', %s, %s)",
-                        (user_id, target_id, f"{points} points", points,
+                        (user_id, target_id, f"{pv} pts", pv,
                          float(radius_mm), idx)
                     )
             con.commit()
     except SQLAlchemyError as e:
-        print(f"⚠️ Failed to seed default target for user {user_id}: {e}")
+        print(f"⚠️ Failed to seed/migrate default target for user {user_id}: {e}")
 
 
 def _tournament_face_key_for_target_name(name):
@@ -3156,6 +3179,31 @@ def _tournament_face_key_for_target_name(name):
     return None
 
 
+# Non-tournament targets that still render with a canonical vector face.
+# Maps the exact target row name → TOURNAMENT_FACES key. The seeded default
+# ('WA 40cm 10-ring') reuses the wa_40 ring spec so it draws as colored WA
+# rings instead of showing its placeholder image.
+_NONTOURNAMENT_RENDER_FACE_BY_NAME = {
+    DEFAULT_TARGET_NAME: DEFAULT_TARGET_FACE_KEY,
+}
+
+
+def _render_face_key_for_target_name(name):
+    """face_key whose ring spec the client should draw over this target.
+
+    Covers tournament rows (matched by prefix) plus any non-tournament
+    target that opts into a canonical vector face — currently the seeded
+    default. Visual only: scoring always comes from the target's own
+    target_zones, never from this lookup.
+    """
+    fk = _tournament_face_key_for_target_name(name)
+    if fk:
+        return fk
+    if name and isinstance(name, str):
+        return _NONTOURNAMENT_RENDER_FACE_BY_NAME.get(name)
+    return None
+
+
 def target_to_config(row):
     """Shape a target DB row into the dict templates/JS expect.
 
@@ -3168,7 +3216,7 @@ def target_to_config(row):
     """
     if row is None:
         return None
-    face_key = _tournament_face_key_for_target_name(row['name'])
+    face_key = _render_face_key_for_target_name(row['name'])
     face_render = (_tournament_face_render_payload(face_key)
                    if face_key else None)
     # Targets are square — width and height are both physical_size_mm /
@@ -4161,6 +4209,9 @@ def login():
     # Backfill tournament faces for pre-existing users: the seeder is
     # idempotent — no-op if the rows already exist with the right flags.
     _seed_tournament_faces(int(user_row['id']))
+    # Migrate pre-existing users off the legacy NASP raster default onto the
+    # WA 40cm 10-ring vector face. Idempotent — no-op once migrated.
+    _seed_user_default_target(int(user_row['id']))
     return redirect(next_url or url_for('index'))
 
 
@@ -4892,6 +4943,29 @@ def _current_session_effective_dw(user_id, session_id):
     return row[0] or ''
 
 
+def _last_session_bow_arrow(user_id, session_id):
+    """Return ``(bow, arrow_type)`` from the latest shot in this session so a
+    mid-session GET reload repopulates the bow/arrow dropdowns instead of
+    snapping them back to the first option. Unlike distance/quiver-size (which
+    the client hydrates from localStorage), these are session-scoped, so the
+    server has to restore them. Returns ('', '') for a fresh session."""
+    if user_id is None or session_id is None:
+        return ('', '')
+    try:
+        with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
+            row = cur.execute(
+                "SELECT bow, arrow_type FROM apollo "
+                "WHERE user_id = %s AND session_id = %s "
+                "ORDER BY id DESC LIMIT 1",
+                (user_id, session_id)
+            ).fetchone()
+    except SQLAlchemyError:
+        return ('', '')
+    if not row:
+        return ('', '')
+    return (row[0] or '', row[1] or '')
+
+
 def _insert_shot(cur, *, user_id, session_id, timestamp, bow, arrow_type,
                  quiver_size, arrows_remaining, distance, session_notes,
                  x, y, is_precise, record_mode, target_id,
@@ -5324,14 +5398,19 @@ def sesh():
     get_past_shots_list = get_past_shots(
         session['session_id'], get_current_qs, get_arrows_remaining, user_id
     ) if get_current_qs > 0 else []
+    # Restore the bow/arrow picked earlier in this session so a mid-session
+    # GET reload (Recall arrow redirect, PWA/browser refresh, SW re-fetch)
+    # doesn't snap the dropdowns back to their first option.
+    get_bow, get_arrow_type = _last_session_bow_arrow(
+        user_id, session['session_id'])
     return render_template('session.html',
                            session_id=session['session_id'],
-                           arrow_type='',
+                           arrow_type=get_arrow_type,
                            quiver_size=get_quiver_size_display,
                            quiver_size_locked=get_quiver_size_locked,
                            quivers_completed=session.get('quivers_completed', 0),
                            arrows_remaining=get_arrows_remaining,
-                           bow='',
+                           bow=get_bow,
                            bows=bow_models,
                            effective_draw_weight=_current_session_effective_dw(
                                user_id, session['session_id']),
@@ -9697,8 +9776,10 @@ def _report_hits_by_boundaries(user_id):
             'target_image_url': url_for('static',
                                          filename=target_cfg['target_image']),
             'target_width_mm': target_cfg['target_width_mm'],
-            'img_width': target_cfg['img_width'],
             'target_name': target_name,
+            # Vector ring spec (None for raster-only targets) so the replay
+            # renders crisp SVG rings instead of the placeholder image.
+            'face_render': target_cfg.get('face_render'),
         }
 
         panels.append({
@@ -11600,11 +11681,16 @@ def _report_accuracy_precision_traces(user_id, date_from=None, date_to=None,
     fig, ax = plt.subplots(figsize=(10, 5.4))
 
     # Visual encoding. Single combined subject keeps the classic look:
-    # blue = accuracy, amber = precision, line style by granularity. Split
-    # mode uses color = subject; marker = metric; line style = granularity.
+    # blue = accuracy, green = precision, line style by granularity. Each
+    # granularity gets its own shade so overlapping traces of the same
+    # metric stay distinguishable beyond line style alone. Split mode uses
+    # color = subject; marker = metric; line style = granularity.
     GRAN_LS = {'session': '-', 'quiver': ':', 'alltime': '--'}
     METRIC_MARKER = {'acc': 'o', 'prec': 's'}
-    ACC_COLOR, PREC_COLOR = '#1a3a5c', '#c79b5a'
+    # Accuracy → shades of blue; precision → shades of #667867 (green),
+    # darkest for per-session, lightest for all-time rolling.
+    ACC_SHADES = {'session': '#13314f', 'quiver': '#2e6ca3', 'alltime': '#7aaad6'}
+    PREC_SHADES = {'session': '#3f4d40', 'quiver': '#667867', 'alltime': '#9cb29d'}
     SUBJECT_COLORS = ['#1a3a5c', '#c0392b', '#27ae60', '#8e44ad',
                       '#d68910', '#16a085', '#2c3e50', '#e74c3c']
 
@@ -11619,7 +11705,7 @@ def _report_accuracy_precision_traces(user_id, date_from=None, date_to=None,
                 continue
             yvals = mpis if metric == 'acc' else r95s
             color = subj_color if split else (
-                ACC_COLOR if metric == 'acc' else PREC_COLOR)
+                ACC_SHADES[gran] if metric == 'acc' else PREC_SHADES[gran])
             label = f"{subj['name']} — {base_label}" if split else base_label
             ax.plot(dates, yvals, color=color,
                     marker=METRIC_MARKER[metric], markersize=4,
@@ -11644,10 +11730,11 @@ def _report_accuracy_precision_traces(user_id, date_from=None, date_to=None,
             'dashed).')
     else:
         overlay = (
-            ' Blue traces are accuracy (MPI); amber traces are precision '
-            '(R95); line style is the granularity (session solid, quiver '
-            'dotted, all-time dashed). Pick bows, arrows, or tags to overlay '
-            'them head-to-head.')
+            ' Blue traces are accuracy (MPI); green traces are precision '
+            '(R95) — each granularity is a distinct shade. Line style also '
+            'tracks the granularity (session solid, quiver dotted, all-time '
+            'dashed). Pick bows, arrows, or tags to overlay them '
+            'head-to-head.')
     intro = Markup(
         '<p class="report-intro">'
         '<strong>What this answers:</strong> are you getting more '

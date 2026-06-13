@@ -451,11 +451,23 @@
         .replay-block {
             text-align: center;
         }
+        /* Square host via the padding-box ratio trick — works on every
+           browser (no reliance on CSS aspect-ratio, which older iOS lacks).
+           ::before reserves a square; the SVG is layered over it. */
         .replay-block .shot-replay {
+            position: relative;
             display: block;
+            width: 280px;
+            max-width: 100%;
+            margin: 0 auto;
             border-radius: 50%;
+            overflow: hidden;
             box-shadow: 0 0 0 2px #1e2d40, 0 0 16px rgba(28,90,160,0.35);
             background: #000;
+        }
+        .replay-block .shot-replay::before { content: ''; display: block; padding-top: 100%; }
+        .replay-block .shot-replay > svg {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
         }
         .replay-label {
             font-family: 'Quantico', sans-serif;
@@ -890,13 +902,12 @@
             {% endif %}
             {% if p.replay %}
             <div class="replay-block">
-                <canvas class="shot-replay"
-                        width="280" height="280"
+                <div class="shot-replay"
                         data-shots='{{ p.replay.shots | tojson }}'
                         data-record-mode="{{ p.replay.record_mode }}"
+                        data-face-render='{{ p.replay.face_render | tojson }}'
                         data-target-image="{{ p.replay.target_image_url }}"
-                        data-target-width-mm="{{ p.replay.target_width_mm }}"
-                        data-img-width="{{ p.replay.img_width }}"></canvas>
+                        data-target-width-mm="{{ p.replay.target_width_mm }}"></div>
                 <div class="replay-label">
                     {% if p.replay.target_name %}{{ p.replay.target_name }}{% endif %}
                 </div>

@@ -337,6 +337,25 @@ function mmToUnit(mmX, mmY) {
 }
 
 // ── Ring overlay rendering ───────────────────────────────────────────────
+// Insert a freshly-built overlay layer immediately above the named lower
+// layers (first existing match wins) so the opaque vector face — the
+// rings-layer paints a solid face_bg rect over the whole image — never
+// hides the crosshair, past shots, or the active marker. When none of the
+// lower layers exist yet the node is prepended (it sits at the bottom for
+// now; a rings-layer added later via prepend slots in beneath it). The
+// active shot marker and precision cursor keep appending to the end so they
+// always stay on top.
+function stackAbove(node, lowerIds) {
+    for (const id of lowerIds) {
+        const ref = document.getElementById(id);
+        if (ref && ref.parentNode === svg) {
+            svg.insertBefore(node, ref.nextSibling);
+            return;
+        }
+    }
+    svg.prepend(node);
+}
+
 // Tournament faces share a single placeholder image — the canonical
 // rings come from window.FACE_RENDER and are painted as SVG circles on
 // top of the image so the user always sees the right face layout. Non-
@@ -448,7 +467,8 @@ function drawCrosshair() {
         mk('line',{x1:w/2, y1:0,   x2:w/2, y2:h,   stroke:'rgba(0,0,0,0.15)', 'stroke-width':'1'}),
         mk('circle',{cx:w/2, cy:h/2, r:5, fill:'none', stroke:'rgba(0,0,0,0.25)', 'stroke-width':'1.5'})
     );
-    svg.prepend(g);
+    // Above the face rings, below past shots / the active marker.
+    stackAbove(g, ['rings-layer']);
 }
 
 img.addEventListener('load', () => { drawRings(); drawCrosshair(); });
@@ -516,11 +536,11 @@ function drawPastShots() {
         layer.appendChild(g);
     });
 
-    // Insert past-shot layer just after the first child (the crosshair)
-    // when present; otherwise just append. Guards against the load-order
-    // case where the overlay isn't drawn yet.
-    const anchor = svg.firstChild ? svg.firstChild.nextSibling : null;
-    svg.insertBefore(layer, anchor);
+    // Above the crosshair (and the opaque face rings beneath it), below the
+    // active shot marker. Robust to draw order: the rings layer is now the
+    // SVG's first child, so the old "insert after firstChild" logic buried
+    // past shots underneath it.
+    stackAbove(layer, ['crosshair', 'rings-layer']);
 }
 
 // ── Restore marker on page load ──────────────────────────────────────────

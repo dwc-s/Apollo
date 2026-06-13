@@ -14,11 +14,22 @@
             background: #d6e4f0;
             border-left: 1px solid #b6c8df;
         }
+        /* Square host via the padding-box ratio trick — works on every
+           browser (no reliance on CSS aspect-ratio, which older iOS lacks).
+           ::before reserves a square; the SVG is layered over it. */
         .shot-replay {
+            position: relative;
             display: block;
+            width: 220px;
+            max-width: 100%;
             border-radius: 50%;
+            overflow: hidden;
             box-shadow: 0 0 0 2px #95abcf, 0 0 12px rgba(149,171,207,0.45);
             background: #d6e4f0;
+        }
+        .shot-replay::before { content: ''; display: block; padding-top: 100%; }
+        .shot-replay > svg {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
         }
         .replay-label {
             font-family: 'Quantico', sans-serif;
@@ -215,13 +226,8 @@
             border-color: #1a3a5c;
             box-shadow: 0 0 0 1px #1a3a5c, 0 0 12px rgba(26,58,92,0.25);
         }
-        .quiver-thumb canvas.shot-replay {
-            display: block;
+        .quiver-thumb .shot-replay {
             margin: 0 auto;
-            border-radius: 50%;
-            background: #d6e4f0;
-            max-width: 100%;
-            height: auto;
         }
         .quiver-thumb .quiver-thumb-label {
             font-family: 'Quantico', sans-serif;
@@ -541,15 +547,14 @@
                 <div class="quiver-thumb"
                      data-session-id="{{ session_id }}"
                      data-quiver-num="{{ quiver_num }}">
-                  <canvas
+                  <div
                     class="shot-replay"
-                    width="220" height="220"
                     data-shots='{{ quiver_shots | tojson }}'
                     data-record-mode="{{ stats['record_mode'] }}"
+                    data-face-render='{{ replay_target['face_render'] | tojson if replay_target else "null" }}'
                     data-target-image="{{ url_for('static', filename=replay_target['target_image']) if replay_target else '' }}"
                     data-target-width-mm="{{ replay_target['target_width_mm'] if replay_target else 0 }}"
-                    data-img-width="{{ replay_target['img_width'] if replay_target else 0 }}"
-                  ></canvas>
+                  ></div>
                   <div class="quiver-thumb-label">
                     <strong>Quiver #{{ quiver_num }}</strong>
                     &nbsp;&middot;&nbsp; {{ quiver_rows[0]['bow'] }} &middot; {{ quiver_rows[0]['arrow_type'] }}
@@ -569,15 +574,14 @@
               <div class="quiver-thumb"
                    data-session-id="{{ session_id }}"
                    data-quiver-num="1">
-                <canvas
+                <div
                   class="shot-replay"
-                  width="220" height="220"
                   data-shots='{{ data["replay_shots"] | tojson }}'
                   data-record-mode="{{ stats['record_mode'] }}"
+                  data-face-render='{{ replay_target['face_render'] | tojson if replay_target else "null" }}'
                   data-target-image="{{ url_for('static', filename=replay_target['target_image']) if replay_target else '' }}"
                   data-target-width-mm="{{ replay_target['target_width_mm'] if replay_target else 0 }}"
-                  data-img-width="{{ replay_target['img_width'] if replay_target else 0 }}"
-                ></canvas>
+                ></div>
                 <div class="quiver-thumb-label">
                   <strong>All shots</strong>
                   &nbsp;&middot;&nbsp; {{ rows[0]['bow'] }} &middot; {{ rows[0]['arrow_type'] }}
@@ -618,13 +622,13 @@ function mmScalarToUnit(mm) {
     return Math.round(cm * 10) / 10;
 }
 
-// Pull raw mm shot coordinates from a thumb's canvas data-shots JSON.
+// Pull raw mm shot coordinates from a thumb's replay data-shots JSON.
 // Returns parallel x[] / y[] arrays of hits plus a separate miss count.
 function readShots(thumb) {
-    const canvas = thumb.querySelector('canvas.shot-replay');
-    if (!canvas) return { xs: [], ys: [], misses: 0 };
+    const host = thumb.querySelector('.shot-replay');
+    if (!host) return { xs: [], ys: [], misses: 0 };
     let shots;
-    try { shots = JSON.parse(canvas.dataset.shots || '[]'); }
+    try { shots = JSON.parse(host.dataset.shots || '[]'); }
     catch (e) { return { xs: [], ys: [], misses: 0 }; }
     const xs = [], ys = [];
     let misses = 0;
