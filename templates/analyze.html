@@ -1,14 +1,14 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Bungee+Shade&family=Quantico:ital,wght@0,400;0,700;1,400;1,700&family=Rubik+Iso&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/fonts/apollo-fonts.css">
     <link rel="stylesheet" type="text/css" href="{{ url_for('static', filename='style.css') }}">
 
-    <!-- lightGallery (CDN) — gallery used to zoom report charts. -->
+    <!-- lightGallery (self-hosted) — gallery used to zoom report charts.
+         Vendored under /static/vendor so the lightbox works reliably and
+         offline, with no dependency on a third-party CDN. -->
     <link rel="stylesheet"
-          href="https://cdn.jsdelivr.net/npm/lightgallery@2.7.2/css/lightgallery-bundle.min.css">
+          href="/static/vendor/lightgallery/css/lightgallery-bundle.min.css">
 
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -473,22 +473,6 @@
         }
         .panel-text > .report-table-wrapper { margin-top: 0; }
 
-        /* Plotly heatmap container — left column on the interactive
-           accuracy-over-time panel. Plotly fills the host element, so
-           give it a deterministic min-height. */
-        .plotly-heatmap {
-            width: 100%;
-            min-height: 460px;
-            background: #fff;
-            border: 1px solid #95abcf;
-            border-radius: 8px;
-            padding: 6px;
-        }
-        .interactive-row {
-            display: block;
-            margin-bottom: 16px;
-        }
-
         /* Short report-level explainer, rendered between the h3 title
            and the chart/table panels. Used by reports that define
            accuracy vs precision in plain English. */
@@ -874,34 +858,6 @@
 </details>
 
 {% macro render_panel(p, title) %}
-    {% if p.is_interactive %}
-    {# Interactive Plotly panel — takes the full row. If the panel
-       carries its own table it renders below the chart; otherwise the
-       sibling panels can be the source of tabular data. #}
-    <div class="interactive-row">
-        <div class="plotly-heatmap"
-             data-frames='{{ p.plotly_frames | tojson }}'
-             data-layout='{{ p.plotly_layout | tojson }}'></div>
-    </div>
-    {% if p.columns %}
-    <div class="report-table-wrapper">
-        <table class="report-table">
-            <thead>
-                <tr>
-                    {% for c in p.columns %}<th>{{ c }}</th>{% endfor %}
-                </tr>
-            </thead>
-            <tbody>
-                {% for row in p.rows %}
-                <tr>
-                    {% for cell in row %}<td>{{ cell }}</td>{% endfor %}
-                </tr>
-                {% endfor %}
-            </tbody>
-        </table>
-    </div>
-    {% endif %}
-    {% else %}
     <div class="panel-row" data-lg-gallery="true">
         <div class="panel-text">
             <div class="report-table-wrapper">
@@ -948,7 +904,6 @@
             {% endif %}
         </div>
     </div>
-    {% endif %}
 {% endmacro %}
 
 {% if results %}
@@ -1035,10 +990,9 @@
     {% endfor %}
 </div>
 
-<script src="https://cdn.jsdelivr.net/npm/lightgallery@2.7.2/lightgallery.umd.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/lightgallery@2.7.2/plugins/zoom/lg-zoom.umd.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/lightgallery@2.7.2/plugins/thumbnail/lg-thumbnail.umd.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/plotly.js-dist-min@2.35.2/plotly.min.js"></script>
+<script src="/static/vendor/lightgallery/lightgallery.umd.min.js"></script>
+<script src="/static/vendor/lightgallery/lg-zoom.umd.min.js"></script>
+<script src="/static/vendor/lightgallery/lg-thumbnail.umd.min.js"></script>
 <script>
     document.querySelectorAll('[data-lg-gallery]').forEach(el => {
         if (typeof lightGallery !== 'function') return;
@@ -1056,76 +1010,6 @@
             addClass: 'lg-chart-fullaxis',
             plugins: [window.lgZoom, window.lgThumbnail].filter(Boolean),
         });
-    });
-
-    // Plotly heatmap + time slider. Each .plotly-heatmap node carries
-    // pre-aggregated per-bucket z grids in data-frames; the slider
-    // animates between them. We render the first bucket as the base
-    // trace so the heatmap is populated before the user touches the
-    // slider.
-    document.querySelectorAll('.plotly-heatmap').forEach(el => {
-        if (typeof Plotly === 'undefined') return;
-        let frames, layoutHints;
-        try {
-            frames = JSON.parse(el.dataset.frames || '[]');
-            layoutHints = JSON.parse(el.dataset.layout || '{}');
-        } catch (e) {
-            console.error('Plotly heatmap: bad data-frames JSON', e);
-            return;
-        }
-        if (!frames.length) return;
-
-        const xs = layoutHints.xs || [];
-        const ys = layoutHints.ys || [];
-        const baseTrace = {
-            type: 'heatmap',
-            x: xs,
-            y: ys,
-            z: frames[0].z,
-            colorscale: 'YlOrRd',
-            zmin: 0,
-            zmax: layoutHints.zmax || undefined,
-            colorbar: { title: 'Shots' },
-            hovertemplate:
-                'x: %{x:.2f}<br>y: %{y:.2f}<br>shots: %{z}<extra></extra>',
-        };
-        const sliderSteps = frames.map((f, i) => ({
-            method: 'animate',
-            label: f.label,
-            args: [[f.name], {
-                mode: 'immediate',
-                frame: { duration: 0, redraw: true },
-                transition: { duration: 0 },
-            }],
-        }));
-        const layout = {
-            title: layoutHints.title || 'Shot density',
-            xaxis: {
-                title: 'X (normalized)',
-                range: [-1.2, 1.2],
-                zeroline: true,
-                scaleanchor: 'y',
-                scaleratio: 1,
-            },
-            yaxis: {
-                title: 'Y (normalized)',
-                range: [-1.2, 1.2],
-                zeroline: true,
-            },
-            margin: { l: 60, r: 20, t: 50, b: 60 },
-            sliders: [{
-                active: 0,
-                pad: { t: 40 },
-                currentvalue: { prefix: 'Bucket: ', xanchor: 'left' },
-                steps: sliderSteps,
-            }],
-        };
-        const plotlyFrames = frames.map(f => ({
-            name: f.name,
-            data: [{ z: f.z }],
-        }));
-        Plotly.newPlot(el, [baseTrace], layout, { displayModeBar: false })
-            .then(() => Plotly.addFrames(el, plotlyFrames));
     });
 </script>
 {% endif %}

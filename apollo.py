@@ -3441,21 +3441,19 @@ def _set_security_headers(response):
     # (no click-jacking), and form-action 'self' (no off-site form posts).
     #
     # Allowlisted third parties:
-    #   fonts.googleapis.com / fonts.gstatic.com — every template links the
-    #     Bungee Shade / Quantico / Rubik Iso webfonts; without these in
-    #     style-src + font-src the browser falls back to a default sans-
-    #     serif and the look-and-feel breaks.
-    #   cdn.jsdelivr.net — analyze.html uses lightgallery's CSS + JS.
-    #   cdnjs.buymeacoffee.com — splash.html embeds the BMC widget.
+    #   cdnjs.buymeacoffee.com — splash.html embeds the BMC widget. This is
+    #     now the only third-party script origin: the webfonts, lightGallery
+    #     and Chart.js are all self-hosted under /static, and the analyze
+    #     heatmap is a server-rendered matplotlib SVG — so Google Fonts,
+    #     jsdelivr (lightGallery / Plotly / Chart.js) are no longer referenced
+    #     and everything else works fully same-origin (and offline).
     response.headers.setdefault(
         'Content-Security-Policy',
         "default-src 'self'; "
-        "script-src 'self' 'unsafe-inline' "
-            "https://cdnjs.buymeacoffee.com https://cdn.jsdelivr.net; "
-        "style-src 'self' 'unsafe-inline' "
-            "https://fonts.googleapis.com https://cdn.jsdelivr.net; "
+        "script-src 'self' 'unsafe-inline' https://cdnjs.buymeacoffee.com; "
+        "style-src 'self' 'unsafe-inline'; "
         "img-src 'self' data: blob: https:; "
-        "font-src 'self' data: https://fonts.gstatic.com; "
+        "font-src 'self' data:; "
         "connect-src 'self'; "
         "frame-ancestors 'none'; "
         "base-uri 'self'; "
