@@ -287,6 +287,7 @@
         <form method="POST" class="round-start-form">
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <input type="hidden" name="round_key" value="{{ r.key }}">
+            {% if r.equipment_class == 'any' %}
             <label style="display:inline-flex;align-items:center;gap:6px;font-family:'Quantico',sans-serif;font-size:0.8rem;margin-bottom:6px;"
                    title="Bowstyle for this round — sets your Archery GB classification category. Defaults to your profile.">
                 Bowstyle:
@@ -296,6 +297,7 @@
                     {% endfor %}
                 </select>
             </label>
+            {% endif %}
             <button type="submit" formaction="/tournament/start"
                     title="Tap the target after every arrow on this device. Best for solo practice or a friendly shoot where one person tracks the group.">
                 Practice

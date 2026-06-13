@@ -1205,6 +1205,20 @@ def _archer_category(session_tags=None):
     return classifications.Category(bowstyle, gender, age_group)
 
 
+def _round_bowstyle(round_def):
+    """The classification bowstyle a round dictates, or ``None`` if it is
+    open to any bowstyle.
+
+    WA/USAA rounds whose ``equipment_class`` names a bowstyle (e.g. "WA 720
+    (Recurve)") ARE that bowstyle's round — the face and distance only make
+    sense for it — so the round itself fixes the classification category,
+    not the archer's profile or a per-round picker. ``'any'`` rounds (NFAA,
+    WA Field, WA Indoor 25m, JOAD, …) leave the choice open.
+    """
+    cls = (round_def or {}).get('equipment_class')
+    return cls if cls in classifications.data.AGB_BOWSTYLES else None
+
+
 def _session_handicap_awards(round_key, total_score, session_tags=None):
     """Return ``{'handicap': int|None, 'awards': [...]}`` for a finished round."""
     hc_val = _session_handicap(round_key, total_score)
@@ -6241,13 +6255,19 @@ def tournament_start():
     session['tournament_round_key'] = round_key
     session['tournament_segment_idx'] = 0
     session['target_id'] = _tournament_face_target_id(user_id, round_def['face_key'])
-    # Optional per-round bowstyle override (defaults to the profile bowstyle
-    # when blank). Only stored when it names a known AGB bowstyle.
-    bs = (request.form.get('bowstyle') or '').strip().lower()
-    if bs in classifications.data.AGB_BOWSTYLES:
-        session['tournament_bowstyle'] = bs
+    # Bowstyle for AGB classification. A round that names a bowstyle (e.g.
+    # "WA 720 (Recurve)") fixes it — its face/distance only make sense for
+    # that style. Only 'any' rounds honour the per-round picker, falling
+    # back to the profile bowstyle when blank.
+    forced_bs = _round_bowstyle(round_def)
+    if forced_bs:
+        session['tournament_bowstyle'] = forced_bs
     else:
-        session.pop('tournament_bowstyle', None)
+        bs = (request.form.get('bowstyle') or '').strip().lower()
+        if bs in classifications.data.AGB_BOWSTYLES:
+            session['tournament_bowstyle'] = bs
+        else:
+            session.pop('tournament_bowstyle', None)
     return redirect(url_for('tournament'))
 
 
@@ -6398,6 +6418,13 @@ def tournament_match_start():
     session['tournament_segment_idx'] = 0
     session['arrows_remaining'] = 0
     session['quivers_completed'] = 0
+    # A bowstyle-specific round (e.g. "WA 720 (Recurve)") fixes the AGB
+    # classification category; clear any stale override otherwise.
+    forced_bs = _round_bowstyle(round_def)
+    if forced_bs:
+        session['tournament_bowstyle'] = forced_bs
+    else:
+        session.pop('tournament_bowstyle', None)
     session['target_id'] = _tournament_face_target_id(user_id, round_def['face_key'])
     return redirect(url_for('tournament'))
 
@@ -6722,6 +6749,11 @@ def tournament_score_sheet_submit():
                        f'participant:{p["name"]}')
                 if p['email']:
                     tag += f', email:{p["email"]}'
+                # A bowstyle-specific round fixes the AGB classification
+                # category for every participant's scorecard.
+                forced_bs = _round_bowstyle(round_def)
+                if forced_bs:
+                    tag += f', bowstyle:{forced_bs}'
                 # Competition-level meta — stored on every shot row so
                 # the results page and report generators can recover it
                 # without a new table. URL-encode the values so commas in
