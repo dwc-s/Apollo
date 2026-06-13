@@ -1252,3 +1252,33 @@ h4 {
         padding: 0 0 24px;
     }
 }
+
+/* ═══════════════════════════════════════════════════
+   Tablet title fix (e.g. iPad in Chrome)
+   ═══════════════════════════════════════════════════
+   iPads report viewport widths between the phone breakpoint and
+   desktop (~810–1024px portrait), so they miss the mobile rules
+   above and inherit the desktop .title: 96px, white-space: nowrap,
+   overflow: hidden. Long titles ("Previous sessions", "Tournament
+   setup", "Zones — …") overflow that width and get clipped. The
+   per-template fitTitle() JS can't rescue them because the desktop
+   96px is !important. Here we let the title scale with the viewport
+   and wrap instead of clip — phones are unaffected (handled above)
+   and true desktop widths (>1024px) keep the locked 96px. */
+@media (min-width: 769px) and (max-width: 1024px) {
+    .title {
+        font-size: clamp(40px, 9vw, 96px) !important;
+        width: 100%;
+        white-space: normal;
+        overflow: visible;
+        line-height: 1.05;
+    }
+    /* Splash "Apollo" has no width cap or scaling on desktop, so at
+       152px it spills past the iPad content column — which is only
+       (viewport − 240px) wide because the fixed side-nav is still
+       shown at these widths. Size it against the real content width,
+       not the full viewport, so it never runs off the right edge. */
+    .title-splash {
+        font-size: clamp(60px, calc((100vw - 240px) / 5.2), 152px);
+    }
+}
