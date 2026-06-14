@@ -338,18 +338,6 @@
     <p class="tool-note">KE (ft·lb) = mass × velocity² ÷ 450,240. Momentum (slug·ft/s) = mass × velocity ÷ 225,400.</p>
 </details>
 
-<!-- ── Slope ──────────────────────────────────────────────────────────── -->
-<details class="tool-panel" id="tool-slope">
-    <summary><h3>Slope compensator</h3></summary>
-    <p class="tool-desc">Rifleman's rule for arrows: gravity only pulls along the horizontal component of the shot, so aim as if the target were at its horizontal distance, not the slant range.</p>
-    <div class="tool-row">
-        <label>Slant distance<input type="number" id="slope-dist" value="40" min="1" step="any"></label>
-        <label>Angle (°)<input type="number" id="slope-angle" value="20" min="-89" max="89" step="1"></label>
-    </div>
-    <div class="tool-result" id="slope-result">—</div>
-    <p class="tool-note">Positive angle = uphill, negative = downhill. Effective distance is identical for either direction.</p>
-</details>
-
 <script>
 (function () {
     'use strict';
@@ -711,26 +699,6 @@
     ['ke-weight', 'ke-speed']
         .forEach(id => $(id).addEventListener('input', recalcKe));
     recalcKe();
-
-    // ── Slope ────────────────────────────────────────────────────────
-    function recalcSlope() {
-        const d = parseFloat($('slope-dist').value);
-        const a = parseFloat($('slope-angle').value);
-        const out = $('slope-result');
-        if (!(d > 0) || !Number.isFinite(a)) {
-            out.textContent = '—';
-            return;
-        }
-        const horiz = d * Math.cos(a * Math.PI / 180);
-        const diff = d - horiz;
-        out.innerHTML =
-            '<div class="result-line"><strong>Aim for:</strong> ' + fmt(horiz, 2) + '</div>' +
-            '<div class="result-sub">Slant range ' + fmt(d, 2) + ' · ' +
-                'hold ' + fmt(diff, 2) + ' less than the rangefinder reads</div>';
-    }
-    ['slope-dist', 'slope-angle']
-        .forEach(id => $(id).addEventListener('input', recalcSlope));
-    recalcSlope();
 })();
 </script>
 </body>

@@ -13532,8 +13532,8 @@ def _build_predict_segments(form, user_id):
 def tools():
     """Standalone archery calculators. Pure client-side math — no DB.
 
-    Six tools on one page (wind drift, sight-mark interpolator, spine
-    selector, FOC, kinetic energy, slope compensator). The template does
+    Five tools on one page (wind drift, sight-mark interpolator, spine
+    selector, FOC, kinetic energy). The template does
     all the math in JS so the user gets live updates and we don't burn
     a server round-trip per keystroke."""
     return render_template('tools.html')
