@@ -1,0 +1,72 @@
+{# Bowtype-specific settings group, shared by session.html and tournament.html.
+
+   Renders one block per bowstyle (all fields, static + dynamic). JS reveals the
+   block matching the currently selected bow's type, disables the hidden blocks'
+   inputs so they never post, and prefills each field to its last-used value
+   from the `style_settings_by_bow` map keyed by bow_model:
+       { "<model>": { "type": "compound", "values": {...} } }
+   `values` is the bow's static gear overlaid with its most recent shot, so both
+   static overrides and dynamic tweaks persist across shots in a session.
+
+   Requires in context: bowstyle_settings (schema), style_settings_by_bow (data).
+#}
+<div id="bow-style-settings">
+{% for bs, fields in (bowstyle_settings or {}).items() %}
+    <div class="bow-style-fields" data-bow-style="{{ bs }}" style="display:none;">
+        {% for f in fields %}
+        <span class="form-label{% if f.help %} has-tooltip{% endif %}"
+              {% if f.help %}data-tooltip="{{ f.help }}"{% endif %}>{{ f.label }}</span>
+        {% if f.kind == 'select' %}
+        <select name="style_{{ f.key }}" data-style-key="{{ f.key }}"
+                data-style-scope="{{ f.scope }}" disabled>
+            <option value="">— not set —</option>
+            {% for opt in f.options %}<option value="{{ opt }}">{{ opt }}</option>{% endfor %}
+        </select>
+        {% else %}
+        <input type="text" name="style_{{ f.key }}" data-style-key="{{ f.key }}"
+               data-style-scope="{{ f.scope }}" disabled
+               {% if f.kind == 'number' %}inputmode="decimal"{% endif %}>
+        {% endif %}
+        {% endfor %}
+    </div>
+{% endfor %}
+</div>
+<script id="style-settings-by-bow" type="application/json">{{ (style_settings_by_bow or {}) | tojson }}</script>
+<script>
+// Show the gear block for the selected bow's type, disable hidden blocks'
+// inputs, and prefill from the bow's saved static settings + last dynamic
+// values. Runs once on load and on every bow change.
+(function bowStyleSettingsInit() {
+    const bowSel = document.getElementById('bow');
+    const dataEl = document.getElementById('style-settings-by-bow');
+    const blocks = Array.from(document.querySelectorAll('#bow-style-settings .bow-style-fields'));
+    if (!bowSel || !dataEl || !blocks.length) return;
+
+    let byBow = {};
+    try { byBow = JSON.parse(dataEl.textContent) || {}; } catch (e) { byBow = {}; }
+
+    function fillBlock(block, info) {
+        const vals = (info && info.values) || {};
+        block.querySelectorAll('[data-style-key]').forEach(el => {
+            const key = el.dataset.styleKey;
+            // Only prefill empty fields so a user's in-progress edit isn't
+            // clobbered when they tweak the bow selector back and forth.
+            if (el.value === '' && vals[key] != null) el.value = vals[key];
+        });
+    }
+
+    function sync() {
+        const info = byBow[bowSel.value] || null;
+        const want = info ? info.type : null;
+        blocks.forEach(block => {
+            const show = block.dataset.bowStyle === want;
+            block.style.display = show ? '' : 'none';
+            block.querySelectorAll('input, select').forEach(el => { el.disabled = !show; });
+            if (show) fillBlock(block, info);
+        });
+    }
+
+    bowSel.addEventListener('change', sync);
+    sync();
+})();
+</script>

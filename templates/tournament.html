@@ -565,6 +565,8 @@
             </select>
             <div class="links-row"><a href="/add_bow">+ add bow</a></div>
 
+            {% include '_bow_style_settings.html' %}
+
             <span class="form-label has-tooltip"
                   data-tooltip="Actual draw weight as opposed to rated draw weight. Re-measure whenever the string is put back on the bow.">Effective draw weight (lbs, optional)</span>
             <input type="text" id="effective_draw_weight" name="effective_draw_weight"

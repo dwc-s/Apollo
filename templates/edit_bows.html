@@ -101,6 +101,24 @@
             <span class="form-label">Nock height (mm)</span>
             <input type="text" name="nock_height" value="{{ bow_data[i][0]['nock_height'] or '' }}" inputmode="decimal">
 
+            {# Static, bowtype-specific gear for this bow's (immutable) type,
+               prefilled from the saved style_settings JSON. #}
+            {% set _bs = bow_data[i][0]['bow_type'] %}
+            {% set _saved = bow_data[i][0]['style_settings'] | fromjson %}
+            {% for f in bowstyle_settings.get(_bs, []) if f.scope == 'static' %}
+            <span class="form-label{% if f.help %} has-tooltip{% endif %}"
+                  {% if f.help %}data-tooltip="{{ f.help }}"{% endif %}>{{ f.label }}</span>
+            {% if f.kind == 'select' %}
+            <select name="style_{{ f.key }}">
+                <option value="">— not set —</option>
+                {% for opt in f.options %}<option value="{{ opt }}" {% if _saved.get(f.key) == opt %}selected{% endif %}>{{ opt }}</option>{% endfor %}
+            </select>
+            {% else %}
+            <input type="text" name="style_{{ f.key }}" value="{{ _saved.get(f.key, '') }}"
+                   {% if f.kind == 'number' %}inputmode="decimal"{% endif %}>
+            {% endif %}
+            {% endfor %}
+
         <div class="submit-row">
         <input type="submit" value="Delete bow" name="delete" class="button" formnovalidate>
           <input type="submit" value="Submit Edit">
