@@ -10,6 +10,12 @@
  * in metres to get linear mm (1 mrad at 1 m = 1 mm) — i.e. the angular
  * dispersion scales linearly with range.
  *
+ * When the server also returns a fitted distance trend (`dist.trend.ok`),
+ * the flat fit is replaced per segment: bias is affine in mm
+ * (μ_mm = a + b·D'), and the angular covariance grows with range as
+ * cov(D') = exp(k·(D'−d_ref))² · cov_ref (the AGB e^(k·d) form). Falls
+ * back to the flat angular fit when no trend was fit.
+ *
  * Scoring mirrors apollo.py:_classify_shot (line-cutter rule with a
  * default 6 mm shaft when the historical data doesn't specify).
  */
@@ -84,9 +90,32 @@
     SHAFT_RADIUS = shaftMm / 2.0;
   }
 
-  const chol = cholesky2(dist.cov_mrad);
-  const meanMrad = dist.mean_mrad;
   const missRate = dist.miss_rate || 0;
+
+  // Per-segment-distance simulation parameters. With a fitted distance
+  // trend, bias is affine in mm and the covariance grows as e^(k·d); the
+  // Cholesky is recomputed per distance (cached — few distinct distances).
+  // Without one, every distance shares the flat fit's mean/covariance.
+  const trend = dist.trend && dist.trend.ok ? dist.trend : null;
+  const flatChol = cholesky2(dist.cov_mrad);
+  const cholCache = new Map();
+  function segParams(d) {
+    if (!trend) {
+      return { muX: dist.mean_mrad[0] * d, muY: dist.mean_mrad[1] * d,
+               chol: flatChol };
+    }
+    let chol = cholCache.get(d);
+    if (!chol) {
+      const s = Math.exp(trend.growth_k * (d - trend.d_ref));
+      const s2 = s * s;
+      const c = trend.cov_ref_mrad;
+      chol = cholesky2([[c[0][0] * s2, c[0][1] * s2],
+                        [c[1][0] * s2, c[1][1] * s2]]);
+      cholCache.set(d, chol);
+    }
+    const m = trend.mean_mm;
+    return { muX: m.ax + m.bx * d, muY: m.ay + m.by * d, chol: chol };
+  }
 
   // Histogram bins: derive the bin width from the endpoint max — aim
   // for ~40 bins across the plausible range, but never below 1.
@@ -202,19 +231,19 @@
     for (let si = 0; si < segments.length; si++) {
       const seg = segments[si];
       const distMmPerMrad = seg.distance_m; // (1 mrad at 1 m = 1 mm)
-      const muX = meanMrad[0] * distMmPerMrad;
-      const muY = meanMrad[1] * distMmPerMrad;
+      const p = segParams(seg.distance_m);
+      const chol = p.chol;
       const shots = seg.ends * seg.arrows_per_end;
       for (let a = 0; a < shots; a++) {
         if (missRate > 0 && Math.random() < missRate) continue;
         const z1 = randn();
         const z2 = randn();
         // Cholesky-correlated 2D Gaussian in mrad, scaled to mm at this
-        // segment's distance.
+        // segment's distance; mean offset is already in mm.
         const ex = chol.l11 * z1;
         const ey = chol.l21 * z1 + chol.l22 * z2;
-        const xMm = muX + ex * distMmPerMrad;
-        const yMm = muY + ey * distMmPerMrad;
+        const xMm = p.muX + ex * distMmPerMrad;
+        const yMm = p.muY + ey * distMmPerMrad;
         total += scoreShot(xMm, yMm, seg.zones);
       }
     }

@@ -242,6 +242,33 @@
             font-size: 0.85rem;
             margin-top: 6px;
         }
+        .trend-panel {
+            font-family: "Quantico", sans-serif;
+            color: #1a3a5c;
+            background: #eef3fa;
+            border: 1px solid #c9d3e3;
+            border-radius: 6px;
+            padding: 10px 14px;
+            margin-top: 12px;
+            font-size: 0.85rem;
+        }
+        .trend-panel h4 { margin: 0 0 4px 0; font-size: 0.95rem; }
+        .trend-panel .trend-lead { color: #2c4a6b; margin: 0 0 8px 0; }
+        .trend-panel table {
+            border-collapse: collapse;
+            width: 100%;
+            font-size: 0.8rem;
+        }
+        .trend-panel th, .trend-panel td {
+            text-align: right;
+            padding: 3px 8px;
+            border-bottom: 1px solid #d7dfec;
+        }
+        .trend-panel th:first-child, .trend-panel td:first-child {
+            text-align: left;
+        }
+        .trend-panel th { color: #4a6080; font-weight: 700; }
+        .trend-panel .sig { color: #6e1f17; font-weight: 700; }
     </style>
 
     <script defer src="{{ url_for('static', filename='apollo-nav.js') }}"></script>
@@ -515,6 +542,48 @@
         {% endif %}
     </div>
 
+    {% set trend = payload.dist.trend %}
+    <div class="trend-panel">
+        <h4>Distance trend</h4>
+        {% if trend and trend.ok %}
+        <p class="trend-lead">
+            Fit across {{ trend.n_distances }} distances. Angular spread grows as
+            <strong>e^({{ '%.5f' % trend.growth_k }}·d)</strong> per metre
+            (typical archer ≈ {{ '%.5f' % trend.growth_prior }}); the prediction
+            uses this instead of assuming flat angular dispersion.
+        </p>
+        {% else %}
+        <p class="trend-lead">
+            No distance trend fit — {{ trend.reason if trend else 'using the flat angular model.' }}
+            Prediction uses the flat angular model (spread scales linearly with range).
+        </p>
+        {% endif %}
+        {% if payload.dist.per_distance | length > 1 %}
+        <table>
+            <thead>
+                <tr><th>Distance</th><th>Hits</th><th>σ (mrad)</th>
+                    <th>vs. overall</th><th>Bias p</th><th>Spread p</th></tr>
+            </thead>
+            <tbody>
+                {% for pd in payload.dist.per_distance %}
+                <tr>
+                    <td>{{ '%g' % pd.d }} m</td>
+                    <td>{{ pd.n }}</td>
+                    <td>{{ ('%.3f' % pd.s_mrad) if pd.s_mrad is not none else '—' }}</td>
+                    <td>{{ ('%+.0f%%' % ((pd.spread_ratio - 1) * 100)) if pd.spread_ratio is not none else '—' }}</td>
+                    <td class="{{ 'sig' if pd.bias_p is not none and pd.bias_p < 0.05 else '' }}">{{ ('%.3f' % pd.bias_p) if pd.bias_p is not none else '—' }}</td>
+                    <td class="{{ 'sig' if pd.spread_p is not none and pd.spread_p < 0.05 else '' }}">{{ ('%.3f' % pd.spread_p) if pd.spread_p is not none else '—' }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        <p class="trend-lead" style="margin-top:6px;font-size:0.75rem;">
+            “vs. overall” = how much wider/tighter that distance’s group is than the whole slice.
+            p &lt; 0.05 (red) means the difference is unlikely to be chance.
+        </p>
+        {% endif %}
+    </div>
+
     <details class="fit-details">
         <summary>Fitted distribution (advanced)</summary>
 <pre>μ (mrad)         : x={{ '%.3f' % payload.dist.mean_mrad[0] }}, y={{ '%.3f' % payload.dist.mean_mrad[1] }}
@@ -524,7 +593,10 @@ cov xy (mrad²)   : {{ '%.4f' % payload.dist.cov_mrad[0][1] }}
 miss rate        : {{ '%.2f%%' % (payload.dist.miss_rate * 100) }}
 hits used        : {{ payload.dist.n_hits }}
 misses observed  : {{ payload.dist.n_misses }}
-distances (m)    : {{ payload.dist.distances_m | join(', ') }}</pre>
+distances (m)    : {{ payload.dist.distances_m | join(', ') }}
+{% if trend and trend.ok %}trend bias mm    : x={{ '%.2f' % trend.mean_mm.ax }}+{{ '%.4f' % trend.mean_mm.bx }}·d, y={{ '%.2f' % trend.mean_mm.ay }}+{{ '%.4f' % trend.mean_mm.by }}·d
+trend growth k   : {{ '%.5f' % trend.growth_k }} (raw {{ '%.5f' % trend.growth_k_raw }}, prior {{ '%.5f' % trend.growth_prior }})
+trend d_ref (m)  : {{ '%.2f' % trend.d_ref }}{% endif %}</pre>
     </details>
 
     <script id="predict-payload" type="application/json">{{ payload | tojson }}</script>

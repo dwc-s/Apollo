@@ -12987,6 +12987,18 @@ REPORTS = {
 # Below this the sample covariance is too noisy to be worth simulating.
 _PREDICT_MIN_HITS = 30
 
+# Distance-trend fit tunables. The trend (bias + dispersion growth vs.
+# distance) is only fit when the slice spans at least this many distinct
+# distances, each carrying at least this many hits — below that the
+# per-distance covariance is too noisy to regress against, and the model
+# falls back to the flat angular fit.
+_PREDICT_TREND_MIN_DISTANCES = 2
+_PREDICT_TREND_MIN_PER_DIST = 15
+# James-Stein-style shrinkage softness: a departure from the prior with
+# |t| = sqrt(c) earns half weight. Larger c → more conservative (the trend
+# stays nearer its prior unless the data strongly says otherwise).
+_PREDICT_TREND_SHRINK_C = 4.0
+
 
 def _predict_user_bows(user_id):
     """List of distinct bow_model names the user has registered."""
@@ -13061,12 +13073,233 @@ def _predict_session_matches_practice(tags_raw, mode):
     return True
 
 
+def _wls_centered(pts):
+    """Weighted least squares for ``y = α + β·(x − x_c)``, centered at the
+    inverse-variance weighted mean ``x_c`` so that ``α`` (the fitted value at
+    ``x_c``) and ``β`` (the slope) are *uncorrelated*. That lets each be shrunk
+    toward its own prior independently without the intercept/slope coupling a
+    raw ``y = a + b·x`` fit suffers from (an unstable intercept extrapolated
+    far off the data drags the slope with it).
+
+    ``pts`` is ``(x, y, var)`` with ``var`` the measurement variance of ``y``.
+    Returns ``(x_c, α, β, var_α, var_β)``, or ``None`` when singular.
+    """
+    sw = swx = 0.0
+    valid = []
+    for x, y, var in pts:
+        if var is None or var <= 0:
+            continue
+        w = 1.0 / var
+        sw += w
+        swx += w * x
+        valid.append((x, y, w))
+    if sw <= 0 or len(valid) < 2:
+        return None
+    x_c = swx / sw
+    swy = sxx = sxy = 0.0
+    for x, y, w in valid:
+        dx = x - x_c
+        swy += w * y
+        sxx += w * dx * dx
+        sxy += w * dx * y
+    if sxx <= 0:
+        return None
+    return x_c, swy / sw, sxy / sxx, 1.0 / sw, 1.0 / sxx
+
+
+def _shrink_weight(estimate, prior, var):
+    """James-Stein-style weight ``w = t²/(t² + c)`` for shrinking
+    ``estimate`` toward ``prior``, with ``t = (estimate − prior)/√var``.
+
+    Returns ``w`` in [0, 1): ``w→0`` when the departure from the prior sits
+    within its own noise (use the prior), ``w→1`` when it's well-resolved
+    (trust the data).
+    """
+    if var is None or var <= 0:
+        return 0.0
+    t2 = (estimate - prior) ** 2 / var
+    return t2 / (t2 + _PREDICT_TREND_SHRINK_C)
+
+
+def _fit_angular_trend(samples):
+    """Angular-dispersion fit (flat fit + distance trend) over hit samples.
+
+    ``samples`` is a list of ``(x_mm, y_mm, dist_m)`` for *hits* only
+    (``dist_m > 0``, at least ``_PREDICT_MIN_HITS`` of them). Pure math — no
+    DB, no Flask — so it unit-tests like ``handicap.py``.
+
+    Returns::
+
+        {'mean_mrad', 'cov_mrad', 'n_hits', 'distances_m',
+         'trend': {...}, 'per_distance': [...]}
+
+    The flat ``mean_mrad``/``cov_mrad`` reproduce the legacy pooled fit
+    exactly; ``trend`` and ``per_distance`` are additive. ``trend`` is
+    ``{'ok': False, 'reason': str}`` when the slice can't support one.
+
+    The trend models bias as per-axis affine in mm, ``μ_mm(d) = a + b·d``,
+    and dispersion as ``σ_mrad(d) ∝ e^{k·d}`` (the AGB form in
+    ``handicap.sigma_t``). Departures from today's flat model are shrunk
+    toward their priors: the bias intercept ``a`` toward 0 (no population
+    prior for an aim offset) and the growth ``k`` toward ``handicap.KD``
+    (AGB's population-fitted angular growth), so the low-data fallback is
+    "grows like a typical archer," not a known-wrong flat line.
+    """
+    xs_mrad = [x / d for (x, y, d) in samples]
+    ys_mrad = [y / d for (x, y, d) in samples]
+    n = len(samples)
+
+    mx = sum(xs_mrad) / n
+    my = sum(ys_mrad) / n
+    vxx = sum((x - mx) ** 2 for x in xs_mrad) / (n - 1)
+    vyy = sum((y - my) ** 2 for y in ys_mrad) / (n - 1)
+    vxy = sum((x - mx) * (y - my)
+              for x, y in zip(xs_mrad, ys_mrad)) / (n - 1)
+    s_global = math.sqrt(max(0.0, 0.5 * (vxx + vyy)))
+
+    # Group angular offsets by distance.
+    by_dist = {}
+    for (x, y, d) in samples:
+        by_dist.setdefault(round(d, 2), []).append((x / d, y / d))
+    distances = sorted(by_dist)
+
+    # Per-distance estimates (n_d, angular mean, scalar angular size).
+    grp = {}
+    for d, pts in by_dist.items():
+        nd = len(pts)
+        mxd = sum(p[0] for p in pts) / nd
+        myd = sum(p[1] for p in pts) / nd
+        if nd >= 2:
+            cxx = sum((p[0] - mxd) ** 2 for p in pts) / (nd - 1)
+            cyy = sum((p[1] - myd) ** 2 for p in pts) / (nd - 1)
+            sd = math.sqrt(max(0.0, 0.5 * (cxx + cyy)))
+        else:
+            cxx = cyy = sd = None
+        grp[d] = {'n': nd, 'mx': mxd, 'my': myd, 's': sd,
+                  'cxx': cxx, 'cyy': cyy}
+
+    # Per-distance diagnostic: each distance vs. the rest of the slice.
+    # Bias via Hotelling's T² on the mrad offsets; spread via Brown-Forsythe
+    # on the per-axis deviations. This is the "feedback, made visible".
+    per_distance = []
+    for d in distances:
+        g = grp[d]
+        this_pts = by_dist[d]
+        other_pts = [p for od in distances if od != d for p in by_dist[od]]
+        bias_p = spread_p = None
+        # Need ≥3 shots at this distance for a meaningful test: fewer makes
+        # the within-group deviation collapse to ~0 and the spread test fire
+        # spuriously (a single shot is "infinitely tight").
+        if other_pts and g['n'] >= 3:
+            bias_p = _hotelling_t2(this_pts, other_pts)[4]
+            this_dev = ([p[0] - g['mx'] for p in this_pts]
+                        + [p[1] - g['my'] for p in this_pts])
+            omx = sum(p[0] for p in other_pts) / len(other_pts)
+            omy = sum(p[1] for p in other_pts) / len(other_pts)
+            other_dev = ([p[0] - omx for p in other_pts]
+                         + [p[1] - omy for p in other_pts])
+            spread_p = _brown_forsythe(this_dev, other_dev)[3]
+        per_distance.append({
+            'd': d,
+            'n': g['n'],
+            's_mrad': g['s'],
+            'mean_mrad': [g['mx'], g['my']],
+            'bias_p': bias_p,
+            'spread_ratio': (g['s'] / s_global
+                             if g['s'] and s_global > 0 else None),
+            'spread_p': spread_p,
+        })
+
+    out = {
+        'mean_mrad':  [mx, my],
+        'cov_mrad':   [[vxx, vxy], [vxy, vyy]],
+        'n_hits':     n,
+        'distances_m': distances,
+        'per_distance': per_distance,
+    }
+
+    # --- Distance trend --------------------------------------------------
+    qual = [d for d in distances
+            if grp[d]['n'] >= _PREDICT_TREND_MIN_PER_DIST
+            and grp[d]['s'] is not None and grp[d]['s'] > 0]
+    if len(qual) < _PREDICT_TREND_MIN_DISTANCES:
+        out['trend'] = {
+            'ok': False,
+            'reason': (f'Need ≥{_PREDICT_TREND_MIN_DISTANCES} distances '
+                       f'with ≥{_PREDICT_TREND_MIN_PER_DIST} hits each to '
+                       f'fit a distance trend; this slice qualifies at '
+                       f'{len(qual)}.'),
+        }
+        return out
+
+    # Bias: per axis, regress the per-distance mean offset (mm) on distance,
+    # centered so the value-at-centroid (α) and slope (β) are uncorrelated and
+    # shrink cleanly toward the flat model. The flat bias is μ_mm = mean_mrad·d,
+    # so α shrinks toward mean_mrad·d_c and β toward mean_mrad; with no signal
+    # the line collapses *exactly* to flat. Each point's measurement variance
+    # is Var(mean) = σ²_ang · d² / n_d.
+    def _bias_axis(key_m, key_v, mean_ang):
+        pts = []
+        for d in qual:
+            g = grp[d]
+            var_mm = g[key_v] * d * d / g['n'] if g[key_v] > 0 else None
+            pts.append((d, g[key_m] * d, var_mm))
+        fit = _wls_centered(pts)
+        if fit is None:
+            return None
+        d_c, alpha, beta, va, vb = fit
+        w_a = _shrink_weight(alpha, mean_ang * d_c, va)
+        alpha = w_a * alpha + (1.0 - w_a) * (mean_ang * d_c)
+        w_b = _shrink_weight(beta, mean_ang, vb)
+        beta = w_b * beta + (1.0 - w_b) * mean_ang
+        # Back to intercept/slope form (a + b·d) for the payload.
+        return alpha - beta * d_c, beta
+
+    bx = _bias_axis('mx', 'cxx', mx)
+    by = _bias_axis('my', 'cyy', my)
+
+    # Growth: regress ln σ_mrad on distance, centered. Var(ln σ) ≈ 1/(2ν) with
+    # ν ≈ 2·(n_d − 1) (the two axes pooled). The slope k shrinks toward the
+    # handicap population prior; the centroid (d_ref, lns_ref) the line pivots
+    # through pins σ at d_ref.
+    g_pts = [(d, math.log(grp[d]['s']), 1.0 / (4.0 * max(1, grp[d]['n'] - 1)))
+             for d in qual]
+    growth = _wls_centered(g_pts)
+
+    if bx is None or by is None or growth is None:
+        out['trend'] = {'ok': False,
+                        'reason': 'Distance-trend regression was singular.'}
+        return out
+
+    a_x, b_x = bx
+    a_y, b_y = by
+    d_ref, lns_ref, k_fit, _va, vk = growth
+    w_k = _shrink_weight(k_fit, handicap.KD, vk)
+    k_used = w_k * k_fit + (1.0 - w_k) * handicap.KD
+
+    # cov_ref keeps the pooled global shape, rescaled to σ_mrad at d_ref.
+    f = math.exp(lns_ref) / s_global if s_global > 0 else 1.0
+    f2 = f * f
+    out['trend'] = {
+        'ok':           True,
+        'mean_mm':      {'ax': a_x, 'bx': b_x, 'ay': a_y, 'by': b_y},
+        'growth_k':     k_used,
+        'growth_k_raw': k_fit,
+        'growth_prior': handicap.KD,
+        'd_ref':        d_ref,
+        'cov_ref_mrad': [[vxx * f2, vxy * f2], [vxy * f2, vyy * f2]],
+        'n_distances':  len(qual),
+    }
+    return out
+
+
 def _fit_shot_distribution(user_id, bows=None, arrows=None, tags=None,
                             date_from=None, date_to=None,
                             practice_mode='all'):
     """Return a 2D-Gaussian angular dispersion fit over the filtered shots.
 
-    Output shape::
+    Handles the DB query + filtering, then delegates the math to
+    ``_fit_angular_trend``. Output shape::
 
         {'ok': True,
          'mean_mrad': [mx, my],
@@ -13074,7 +13307,9 @@ def _fit_shot_distribution(user_id, bows=None, arrows=None, tags=None,
          'miss_rate': float,
          'n_hits': int,
          'n_misses': int,
-         'distances_m': [d1, d2, ...]}
+         'distances_m': [d1, d2, ...],
+         'shaft_mm': float,
+         'trend': {...}, 'per_distance': [...]}   # see _fit_angular_trend
 
     or ``{'ok': False, 'reason': str}`` when the slice is too small.
     """
@@ -13103,11 +13338,8 @@ def _fit_shot_distribution(user_id, bows=None, arrows=None, tags=None,
     df = (date_from or '').strip() or None
     dt = (date_to or '').strip() or None
 
-    xs_mrad = []
-    ys_mrad = []
-    distances = set()
+    samples = []     # (x_mm, y_mm, dist_m) per fitted hit
     shaft_mms = []   # defined (positive) shaft diameters among fitted hits
-    n_hits = 0
     n_misses = 0
     for r in rows:
         # Equipment / tag / date filters
@@ -13147,12 +13379,11 @@ def _fit_shot_distribution(user_id, bows=None, arrows=None, tags=None,
             continue
         if dist_m <= 0:
             continue
-        # 1 mm at 1 m ≈ 1 mrad. The small-angle approximation is exact at
-        # the magnitudes we care about (the worst-case offset is a few mm
-        # at tens of metres → tens of mrad, well within the linear regime).
-        xs_mrad.append(x_mm / dist_m)
-        ys_mrad.append(y_mm / dist_m)
-        distances.add(round(dist_m, 2))
+        # The fit works in milliradians (1 mm at 1 m ≈ 1 mrad); the angular
+        # conversion + grouping happens in _fit_angular_trend. The small-angle
+        # approximation is exact at the magnitudes we care about (a few mm at
+        # tens of metres → tens of mrad, well within the linear regime).
+        samples.append((x_mm, y_mm, dist_m))
         # Track the arrow's real shaft diameter when this shot defines one;
         # an undefined / blank / non-positive value contributes nothing, so
         # the client falls back to the default shaft only if *no* fitted shot
@@ -13163,41 +13394,26 @@ def _fit_shot_distribution(user_id, bows=None, arrows=None, tags=None,
                 shaft_mms.append(d_mm)
         except (TypeError, ValueError):
             pass
-        n_hits += 1
 
+    n_hits = len(samples)
     if n_hits < _PREDICT_MIN_HITS:
         return {'ok': False,
                 'reason': (f'Need at least {_PREDICT_MIN_HITS} hits to fit '
                            f'a distribution; only found {n_hits} with the '
                            f'current filters.')}
 
-    mx = sum(xs_mrad) / n_hits
-    my = sum(ys_mrad) / n_hits
-    # Sample covariance (Bessel-corrected).
-    vxx = sum((x - mx) ** 2 for x in xs_mrad) / (n_hits - 1)
-    vyy = sum((y - my) ** 2 for y in ys_mrad) / (n_hits - 1)
-    vxy = sum((x - mx) * (y - my)
-              for x, y in zip(xs_mrad, ys_mrad)) / (n_hits - 1)
+    fit = _fit_angular_trend(samples)
 
     total = n_hits + n_misses
-    miss_rate = n_misses / total if total > 0 else 0.0
-
+    fit['miss_rate'] = n_misses / total if total > 0 else 0.0
+    fit['n_misses'] = n_misses
     # Shaft diameter for the simulator's line-cutter rule: the mean of the
     # real diameters the fitted shots define, or the default shaft only when
     # none of them do.
-    shaft_mm = (sum(shaft_mms) / len(shaft_mms)
-                if shaft_mms else DEFAULT_SHAFT_DIAMETER_MM)
-
-    return {
-        'ok':         True,
-        'mean_mrad':  [mx, my],
-        'cov_mrad':   [[vxx, vxy], [vxy, vyy]],
-        'miss_rate':  miss_rate,
-        'n_hits':     n_hits,
-        'n_misses':   n_misses,
-        'distances_m': sorted(distances),
-        'shaft_mm':   shaft_mm,
-    }
+    fit['shaft_mm'] = (sum(shaft_mms) / len(shaft_mms)
+                       if shaft_mms else DEFAULT_SHAFT_DIAMETER_MM)
+    fit['ok'] = True
+    return fit
 
 
 def _predict_zones_for_face(face_key):
