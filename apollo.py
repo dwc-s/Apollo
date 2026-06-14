@@ -12496,6 +12496,229 @@ def _report_calendar_heatmap(user_id):
     }
 
 
+# ---------------------------------------------------------------------------
+# Handicap trend
+# ---------------------------------------------------------------------------
+# Apollo computes an Archery GB 2023 handicap for every completed AGB-target
+# round (see ``_session_handicap``), but only ever as a per-round footnote.
+# This report aggregates those per-round handicaps into a trend over time and
+# the three headline figures archers actually care about.
+
+
+def _handicap_summary(points):
+    """Headline handicap figures from a list of completed-round handicaps.
+
+    Pure (no DB / Flask) so it unit-tests like ``handicap.py``. ``points`` is
+    a list of ``{'date': datetime, 'handicap': int, ...}`` sorted ascending by
+    date (lower handicap = better). Returns a dict with three figures, each an
+    int or ``None`` when there isn't enough data:
+
+    * ``latest`` — the most recent round's handicap.
+    * ``best_recent`` — the best (lowest) single handicap in the 12 months up
+      to the most recent round. A recent personal best.
+    * ``agb`` — Archery GB's official figure: the **average of the best three
+      handicaps, rounded down** (the 2023 scheme rounds averages down, not up).
+      Taken from the current season (the calendar year of the latest round); if
+      that season has fewer than three rounds it falls back to the trailing 12
+      months, then to all rounds, and ``agb_basis`` records which was used.
+
+    Practice and record rounds are treated alike — Apollo has no notion of an
+    "official shoot", so every completed AGB-target round is eligible. The
+    figure is therefore a personal tracking number, not a club-submitted one.
+    """
+    if not points:
+        return {'latest': None, 'best_recent': None,
+                'agb': None, 'agb_basis': None}
+
+    latest = points[-1]['handicap']
+    ref = points[-1]['date']
+    trailing_12mo = [p['handicap'] for p in points
+                     if (ref - p['date']).days <= 365]
+    best_recent = min(trailing_12mo) if trailing_12mo else latest
+
+    # AGB official: best three, averaged, rounded down. Prefer the current
+    # season (calendar year of the latest round); degrade to wider pools when
+    # the season is too thin, flagging the result as provisional.
+    season = sorted(p['handicap'] for p in points if p['date'].year == ref.year)
+    if len(season) >= 3:
+        pool, basis = season, f'season {ref.year}'
+    elif len(trailing_12mo) >= 3:
+        pool, basis = sorted(trailing_12mo), 'last 12 months (provisional)'
+    else:
+        pool, basis = sorted(p['handicap'] for p in points), 'all rounds (provisional)'
+    if len(pool) >= 3:
+        agb = math.floor(sum(pool[:3]) / 3)
+    else:
+        agb, basis = None, None
+
+    return {'latest': latest, 'best_recent': best_recent,
+            'agb': agb, 'agb_basis': basis}
+
+
+def _report_handicap_trend(user_id):
+    """Archery GB handicap for every completed AGB-target round, over time."""
+    with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
+        rows = cur.execute(
+            "SELECT st.session_id, st.session_begin_time, "
+            "       (SELECT a.session_tags FROM apollo a "
+            "          WHERE a.session_id = st.session_id "
+            "            AND a.user_id = st.user_id "
+            "          ORDER BY a.id LIMIT 1) AS tags "
+            "FROM session_times st "
+            "WHERE st.user_id = %s AND st.session_begin_time IS NOT NULL "
+            "ORDER BY st.session_begin_time ASC",
+            (user_id,)
+        ).fetchall()
+
+    points = []
+    for r in rows:
+        round_key = _round_key_from_tags(r['tags'])
+        # Cheap filter first: skip non-tournament and non-AGB rounds before
+        # paying for a per-session progress recompute.
+        if not round_key or round_key not in classifications.data.AGB_TARGET_ROUNDS:
+            continue
+        round_def = _tournament_round_def(round_key)
+        if not round_def:
+            continue
+        prog = _compute_tournament_progress(r['session_id'], user_id, round_def)
+        if not prog.get('is_complete'):
+            continue
+        hc = _session_handicap(round_key, prog.get('total_score'))
+        if hc is None:
+            continue
+        begin_dt = _utc_to_user(r['session_begin_time'])
+        if begin_dt is None:
+            continue
+        begin_dt = begin_dt.replace(tzinfo=None)
+        points.append({
+            'date': begin_dt,
+            'handicap': hc,
+            'round_name': round_def.get('name', round_key),
+            'score': prog.get('total_score'),
+        })
+
+    if not points:
+        return {
+            'key': 'handicap_trend',
+            'title': 'Handicap over time',
+            'empty': True,
+            'empty_reason': 'No completed Archery GB target rounds yet. '
+                            'Shoot a recognised AGB round to completion and '
+                            'its handicap will appear here.',
+        }
+
+    summary = _handicap_summary(points)
+
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    import matplotlib.dates as mdates
+
+    fig, ax = plt.subplots(figsize=(9, 4.5))
+    xs = [p['date'] for p in points]
+    ys = [p['handicap'] for p in points]
+    ax.plot(xs, ys, '-', color='#9bb0d0', linewidth=1.0, zorder=1)
+    ax.scatter(xs, ys, s=36, color='#4d6da6', edgecolor='#1a3a5c',
+               zorder=3, label='Completed round')
+
+    # Least-squares trend line (improvement direction). Fit on ordinal days so
+    # the slope is handicap-points per day; only meaningful with ≥2 rounds.
+    if len(points) >= 2:
+        import numpy as np
+        t0 = xs[0]
+        days = np.array([(x - t0).total_seconds() / 86400.0 for x in xs])
+        slope, intercept = np.polyfit(days, np.array(ys, dtype=float), 1)
+        ax.plot(xs, intercept + slope * days, '--', color='#c0504d',
+                linewidth=1.4, zorder=2,
+                label=f'Trend ({slope * 365.0:+.1f} / yr)')
+
+    # AGB official figure as a reference line.
+    if summary['agb'] is not None:
+        ax.axhline(summary['agb'], color='#3f7d3f', linewidth=1.2,
+                   linestyle=':', zorder=2,
+                   label=f"AGB handicap {summary['agb']}")
+
+    # Lower is better → invert so improvement reads as "up".
+    ax.invert_yaxis()
+    ax.set_xlabel('Date')
+    ax.set_ylabel('Handicap (lower is better)')
+    ax.set_title('Archery GB handicap over time')
+    ax.grid(True, axis='y', linestyle='--', alpha=0.4)
+    ax.legend(loc='best', fontsize=9)
+    locator = mdates.AutoDateLocator()
+    ax.xaxis.set_major_locator(locator)
+    ax.xaxis.set_major_formatter(mdates.ConciseDateFormatter(locator))
+    fig.autofmt_xdate()
+    svg_b64 = _render_matplotlib_svg(fig)
+
+    def _fig(v):
+        return '—' if v is None else str(v)
+
+    agb_cell = _fig(summary['agb'])
+    if summary['agb'] is not None and summary['agb_basis']:
+        agb_cell = f"{summary['agb']} ({summary['agb_basis']})"
+
+    intro = Markup(
+        '<p class="report-intro">'
+        '<strong>What this shows:</strong> the Archery GB 2023 handicap for '
+        'every recognised AGB target round you have completed, plotted over '
+        'time (the y-axis is inverted, so a rising line means you are '
+        'improving). Three headline figures sit below.'
+        '</p>'
+        '<div class="handicap-headlines" style="display:flex;flex-wrap:wrap;'
+        'gap:14px;margin:6px 0 4px 0;">'
+        + ''.join(
+            f'<div style="flex:1 1 150px;min-width:150px;padding:10px 12px;'
+            f'border:1px solid #d6deeb;border-radius:8px;background:#f6f9fd;">'
+            f'<div style="font-size:0.78em;text-transform:uppercase;'
+            f'letter-spacing:0.04em;color:#5a6a82;">{label}</div>'
+            f'<div style="font-size:1.6em;font-weight:700;color:#1a3a5c;">'
+            f'{value}</div>'
+            f'<div style="font-size:0.74em;color:#7a879c;">{sub}</div>'
+            f'</div>'
+            for label, value, sub in (
+                ('Latest', _fig(summary['latest']),
+                 'most recent round'),
+                ('Best (recent)', _fig(summary['best_recent']),
+                 'lowest in last 12 months'),
+                ('AGB handicap', _fig(summary['agb']),
+                 summary['agb_basis'] or 'needs 3 rounds'),
+            )
+        )
+        + '</div>'
+        '<p class="report-intro" style="font-size:0.82em;color:#7a879c;">'
+        'The AGB figure is the average of your best three handicaps, rounded '
+        'down (per the 2023 scheme). Every completed round counts — Apollo '
+        'does not distinguish practice from record shoots — so treat it as a '
+        'personal tracking number.'
+        '</p>'
+    )
+
+    columns = ['Date', 'Round', 'Score', 'Handicap']
+    rows_out = [
+        [p['date'].strftime('%Y-%m-%d'), p['round_name'], p['score'],
+         p['handicap']]
+        for p in reversed(points)  # newest first in the table
+    ]
+    # Summary rows up top so the table mirrors the headline cards.
+    rows_out = [
+        [Markup('<em>— Headline —</em>'), '', '', ''],
+        ['Latest', '', '', _fig(summary['latest'])],
+        ['Best (last 12 months)', '', '', _fig(summary['best_recent'])],
+        ['AGB handicap', agb_cell, '', _fig(summary['agb'])],
+        [Markup('<em>— Per round (newest first) —</em>'), '', '', ''],
+    ] + rows_out
+
+    return {
+        'key': 'handicap_trend',
+        'title': 'Handicap over time',
+        'intro_html': intro,
+        'svg_b64': svg_b64,
+        'columns': columns,
+        'rows': rows_out,
+    }
+
+
 def _report_quiver_spread(user_id, date_from=None, date_to=None,
                           tag_filter=None, categories=None,
                           bow_filter=None, arrow_filter=None):
@@ -12965,6 +13188,15 @@ REPORTS = {
         'description': 'GitHub-style year-grid of shots per calendar day. '
                        'Streaks and gaps are visible at a glance.',
         'fn': _report_calendar_heatmap,
+    },
+    'handicap_trend': {
+        'label': 'Handicap over time',
+        'description': 'Your Archery GB 2023 handicap for every completed '
+                       'AGB target round, plotted over time with a trend '
+                       'line. Headline figures: latest, best of the last 12 '
+                       'months, and the official AGB number (average of your '
+                       'best three, rounded down).',
+        'fn': _report_handicap_trend,
     },
 }
 
