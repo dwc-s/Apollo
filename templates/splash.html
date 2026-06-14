@@ -39,6 +39,51 @@
             max-height: 60vh;
             flex-shrink: 0;
         }
+        details.splash-section {
+            background-color: #b3c6e3;
+            border-radius: 25px;
+            padding: 14px 28px;
+            max-width: 820px;
+            margin: 0 auto 12px auto;
+            font-family: "Quantico", sans-serif;
+            color: #1a3a5c;
+        }
+        details.splash-section[open] {
+            padding: 18px 28px 22px;
+        }
+        details.splash-section summary {
+            list-style: none;
+            cursor: pointer;
+            user-select: none;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        details.splash-section summary::-webkit-details-marker { display: none; }
+        details.splash-section summary::before {
+            content: '\25B8'; /* ▸ */
+            display: inline-block;
+            width: 1em;
+            text-align: center;
+            transition: transform 0.15s;
+            font-size: 1.1rem;
+        }
+        details.splash-section[open] summary::before {
+            transform: rotate(90deg);
+        }
+        details.splash-section summary h3 {
+            display: inline;
+            margin: 0;
+            font-weight: 700;
+            font-size: 1.05rem;
+            letter-spacing: 0.04em;
+        }
+        details.splash-section[open] summary {
+            margin-bottom: 6px;
+        }
+        details.splash-section ul {
+            margin: 0;
+        }
     </style>
     <script defer src="{{ url_for('static', filename='apollo-nav.js') }}"></script>
 </head>
@@ -92,98 +137,115 @@
 </nav>
 <h1 class="title-splash">Apollo</h1>
 
-    <h2 class="quantico_light">Apollo is an application for logging the data of shooting sessions and analyzing performance.</h2>
+    <h2 class="quantico_light">Apollo is an archery application for logging the data of shooting sessions and analyzing performance.</h2>
 
-    <h3 class="quantico_light">Sessions &amp; shot logging</h3>
-    <ul class="quantico_light">
-        <li>Tap or click a target image to record each shot's exact location</li>
-        <li>Your arrow's true diameter is always shown on the target, so line-cutters score the way they should</li>
-        <li>Log misses, add notes and tags, and override session distance and length</li>
-        <li>Touch-friendly confirmation step for phones and tablets</li>
-        <li>See your in-progress quiver overlaid on the target as you go</li>
-    </ul>
+    <details class="splash-section">
+        <summary><h3 class="quantico_light">Sessions &amp; shot logging</h3></summary>
+        <ul class="quantico_light">
+            <li>Tap or click a target image to record each shot's exact location</li>
+            <li>Your arrow's true diameter is always shown on the target, so line-cutters score the way they should</li>
+            <li>Log misses, add notes and tags, and override session distance and length</li>
+            <li>Touch-friendly confirmation step for phones and tablets</li>
+            <li>See your in-progress quiver overlaid on the target as you go</li>
+        </ul>
+    </details>
 
-    <h3 class="quantico_light">Tournament mode</h3>
-    <ul class="quantico_light">
-        <li>Run formal World Archery, NFAA, and USA Archery rounds end-by-end</li>
-        <li>Apollo enforces end size, target face, and scoring rule for each round</li>
-        <li>Per-end and round totals, X-count (inner-10), and recurve vs. compound scoring</li>
-        <li>Live match play: 2–4 archers take turns on one device, with set-play or cumulative scoring</li>
-        <li>Final scorecard saved as a tagged session you can revisit any time</li>
-    </ul>
+    <details class="splash-section">
+        <summary><h3 class="quantico_light">Tournament mode</h3></summary>
+        <ul class="quantico_light">
+            <li>Run formal World Archery, NFAA, and USA Archery rounds end-by-end</li>
+            <li>Apollo enforces end size, target face, and scoring rule for each round</li>
+            <li>Per-end and round totals, X-count (inner-10), and recurve vs. compound scoring</li>
+            <li>Live match play: 2–4 archers take turns on one device, with set-play or cumulative scoring</li>
+            <li>Final scorecard saved as a tagged session you can revisit any time</li>
+        </ul>
+    </details>
 
-    <h3 class="quantico_light">Targets &amp; scoring zones</h3>
-    <ul class="quantico_light">
-        <li>Upload your own target images and calibrate real-world dimensions</li>
-        <li>Draw custom scoring zones (name, color, point value, radius)</li>
-        <li>Built-in WA, NFAA, and USA Archery target faces ready to use</li>
-        <li>Edit, replace, or delete targets at any time</li>
-    </ul>
+    <details class="splash-section">
+        <summary><h3 class="quantico_light">Targets &amp; scoring zones</h3></summary>
+        <ul class="quantico_light">
+            <li>Upload your own target images and calibrate real-world dimensions</li>
+            <li>Draw custom scoring zones (name, color, point value, radius)</li>
+            <li>Built-in WA, NFAA, and USA Archery target faces ready to use</li>
+            <li>Edit, replace, or delete targets at any time</li>
+        </ul>
+    </details>
 
-    <h3 class="quantico_light">Equipment</h3>
-    <ul class="quantico_light">
-        <li>Track multiple bows (brand, type, draw weight, effective draw weight, AMO, nock height)</li>
-        <li>Track multiple arrow types (length, spine, shaft weight, diameter, material, nock and tip weight, tip)</li>
-        <li>Pick the active bow and arrow for each session — Apollo snapshots the full spec on every shot</li>
-    </ul>
+    <details class="splash-section">
+        <summary><h3 class="quantico_light">Equipment</h3></summary>
+        <ul class="quantico_light">
+            <li>Track multiple bows (brand, type, draw weight, effective draw weight, AMO, nock height)</li>
+            <li>Track multiple arrow types (length, spine, shaft weight, diameter, material, nock and tip weight, tip)</li>
+            <li>Pick the active bow and arrow for each session — Apollo snapshots the full spec on every shot</li>
+        </ul>
+    </details>
 
-    <h3 class="quantico_light">Sessions history</h3>
-    <ul class="quantico_light">
-        <li>Browse past sessions, filter by date, bow, arrow, target, or tag</li>
-        <li>Per-quiver stats panel: shot/miss count, MPI, σ from center, σ from MPI, group radius, best and worst shot</li>
-        <li>Replay every shot of a session laid over the target</li>
-        <li>Edit, delete, or revisit any past session</li>
-    </ul>
+    <details class="splash-section">
+        <summary><h3 class="quantico_light">Sessions history</h3></summary>
+        <ul class="quantico_light">
+            <li>Browse past sessions, filter by date, bow, arrow, target, or tag</li>
+            <li>Per-quiver stats panel: shot/miss count, MPI, σ from center, σ from MPI, group radius, best and worst shot</li>
+            <li>Replay every shot of a session laid over the target</li>
+            <li>Edit, delete, or revisit any past session</li>
+        </ul>
+    </details>
 
-    <h3 class="quantico_light">Analytics</h3>
-    <ul class="quantico_light">
-        <li>Every report splits the two error modes apart: accuracy (where your group sits) vs. precision (how tight it is)</li>
-        <li>A full report suite — hits by zone, arrows over time, accuracy &amp; precision trends, within-session drift, cold-bore vs. warmed-up, draw-weight tuning, shot-density and calendar heatmaps, and expected-score projection</li>
-        <li>Head-to-head equipment and tag comparisons with proper statistics: Hotelling's T² (accuracy), Brown-Forsythe (precision), and Mann-Whitney U with Cliff's δ (total error), Holm-Bonferroni corrected and target-size-normalized</li>
-        <li>SVG charts plus full data tables, with CSV and Excel download</li>
-        <li>Animated shot replays for any target</li>
-    </ul>
+    <details class="splash-section">
+        <summary><h3 class="quantico_light">Analytics</h3></summary>
+        <ul class="quantico_light">
+            <li>Every report splits the two error modes apart: accuracy (where your group sits) vs. precision (how tight it is)</li>
+            <li>A full report suite — hits by zone, arrows over time, accuracy &amp; precision trends, within-session drift, cold-bore vs. warmed-up, draw-weight tuning, shot-density and calendar heatmaps, and expected-score projection</li>
+            <li>Head-to-head equipment and tag comparisons with proper statistics: Hotelling's T² (accuracy), Brown-Forsythe (precision), and Mann-Whitney U with Cliff's δ (total error), Holm-Bonferroni corrected and target-size-normalized</li>
+            <li>SVG charts plus full data tables, with CSV and Excel download</li>
+            <li>Animated shot replays for any target</li>
+        </ul>
+    </details>
 
-    <h3 class="quantico_light">Predict performance</h3>
-    <ul class="quantico_light">
-        <li>Forecast hit rate, group geometry, and expected score from your historical shots</li>
-        <li>Filter the fit on date range, bow, arrow, target, or tag</li>
-        <li>Project against any target face and distance you choose</li>
-    </ul>
+    <details class="splash-section">
+        <summary><h3 class="quantico_light">Predict performance</h3></summary>
+        <ul class="quantico_light">
+            <li>Forecast hit rate, group geometry, and expected score from your historical shots</li>
+            <li>Filter the fit on date range, bow, arrow, target, or tag</li>
+            <li>Project against any target face and distance you choose</li>
+        </ul>
+    </details>
 
-    <h3 class="quantico_light">Notes</h3>
-    <ul class="quantico_light">
-        <li>Per-user scratchpad for setup tweaks, ideas, and reminders</li>
-        <li>One click from the side nav — pops up over whatever page you're on</li>
-    </ul>
+    <details class="splash-section">
+        <summary><h3 class="quantico_light">Notes</h3></summary>
+        <ul class="quantico_light">
+            <li>Per-user scratchpad for setup tweaks, ideas, and reminders</li>
+            <li>One click from the side nav — pops up over whatever page you're on</li>
+        </ul>
+    </details>
 
-    <h3 class="quantico_light">Multi-user accounts</h3>
-    <ul class="quantico_light">
-        <li>Register and sign in — each account's sessions, equipment, and targets stay private</li>
-        <li>Forgot-password flow with one-shot, short-lived email links (powered by Resend)</li>
-        <li>Per-user timezone for clean display of all timestamps</li>
-        <li>Optional root admin for the hosted instance (browse/delete users, reset passwords or emails)</li>
-    </ul>
+    <details class="splash-section">
+        <summary><h3 class="quantico_light">Multi-user accounts</h3></summary>
+        <ul class="quantico_light">
+            <li>Register and sign in — each account's sessions, equipment, and targets stay private</li>
+            <li>Forgot-password flow with one-shot, short-lived email links (powered by Resend)</li>
+            <li>Per-user timezone for clean display of all timestamps</li>
+            <li>Optional root admin for the hosted instance (browse/delete users, reset passwords or emails)</li>
+        </ul>
+    </details>
 
-    <h3 class="quantico_light">Your data, your way</h3>
-    <ul class="quantico_light">
-        <li>Export all your data as a single archive</li>
-        <li>Import a previous export to restore or migrate</li>
-        <li>Toggle the whole app between metric and imperial units</li>
-    </ul>
+    <details class="splash-section">
+        <summary><h3 class="quantico_light">Your data, your way</h3></summary>
+        <ul class="quantico_light">
+            <li>Export all your data as a single archive</li>
+            <li>Import a previous export to restore or migrate</li>
+            <li>Toggle the whole app between metric and imperial units</li>
+        </ul>
+    </details>
 
-    <h3 class="quantico_light">Built for any device</h3>
-    <ul class="quantico_light">
-        <li>Responsive layout for desktop, tablet, and phone</li>
-        <li>Touch-optimized controls and scaling target panel</li>
-    </ul>
+    <details class="splash-section">
+        <summary><h3 class="quantico_light">Built for any device</h3></summary>
+        <ul class="quantico_light">
+            <li>Responsive layout for desktop, tablet, and phone</li>
+            <li>Touch-optimized controls and scaling target panel</li>
+        </ul>
+    </details>
 
-    <h3 class="quantico_light">Free and open source</h3>
-    <ul class="quantico_light">
-        <li>Always free and <a href="https://github.com/dwc-s/Apollo">open source on GitHub</a></li>
-        <li>Self-hostable (SQLite locally, MySQL on a server) or use the hosted version</li>
-    </ul>
-    <h3 class="quantico_light">Apollo will always be free and <a href="https://github.com/dwc-s/Apollo">open source</a>, but it costs money to operate and develop. Please consider putting a dollar or two in the hat. Email me (Dave) <a href="mailto:dwcs@apolloshoots.org">here</a> or <a href="https://github.com/dwc-s/Apollo/issues">report issues on GitHub</a>.</h3>
+    <h3 class="quantico_light">Apollo will always be free and <a href="https://github.com/dwc-s/Apollo">open source</a>, but it costs money to operate and develop. Please consider <a href="https://buymeacoffee.com/apolloshoots">putting a dollar or two in the hat</a>. Email me (Dave) <a href="mailto:dwcs@apolloshoots.org">here</a> or <a href="https://github.com/dwc-s/Apollo/issues">report issues on GitHub</a>.</h3>
     <h3 class="quantico_light">
         {% if not current_user %}
         <br><br>
