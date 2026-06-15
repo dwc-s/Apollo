@@ -53,11 +53,17 @@ apollo/
 ├── install_help.txt     ← detailed install / deploy reference
 ├── apollo.py            ← the Flask app + schema
 ├── apollo.db            ← local SQLite DB (created on first launch)
+├── handicap.py          ← Archery GB 2023 handicap engine (pure, no Flask/DB)
+├── handicap_data.py     ← AGB class / award constant tables
+├── classifications.py   ← AGB / WA / USAA classification resolvers
 ├── static/              ← target images, CSS, JS, logos
 │   └── targets/         ← user-uploaded target images
 ├── templates/           ← Jinja templates
 └── documentation/
-    └── tournament/      ← rule/scoring/target reference for /tournament
+    ├── FORMULAS.md      ← every scoring / stats / predictive formula + its source fn
+    ├── build_docs.py    ← regenerates the styled HTML build from the Markdown
+    ├── tournament/      ← rule/scoring/target reference for /tournament
+    └── html/            ← styled HTML build of all docs (linked from the side nav)
 ```
 
 ---
@@ -123,12 +129,12 @@ DBs in place.
 
 | Table              | Purpose                                                                  |
 |--------------------|--------------------------------------------------------------------------|
-| `users`            | One row per account (creds, lockout state, `is_root`, timezone).         |
-| `apollo`           | One row per shot (coords, quiver/session metadata, equipment snapshot).  |
+| `users`            | One row per account (creds, lockout state, `is_root`, timezone, archer profile: `gender`, `age_group`, `default_bowstyle`). |
+| `apollo`           | One row per shot (coords, quiver/session metadata, equipment snapshot, and a `bow_style_settings` JSON snapshot of the gear in force when the arrow was loosed). |
 | `session_times`    | Session start/end times, optional manual length override.                |
 | `targets`          | Available target faces (image, physical size, default flag).             |
 | `target_zones`     | User-defined concentric scoring rings per target.                        |
-| `bows`             | Bow inventory (model, type, draw weight, AMO length, nock height).       |
+| `bows`             | Bow inventory (model, type, draw weight, AMO length, nock height) plus a `style_settings` JSON column for bowstyle-specific static gear. |
 | `arrows`           | Arrow inventory (length, spine, weights, shaft, tip).                    |
 | `password_resets`  | One-shot, short-lived reset tokens (stored as sha256, never plaintext).  |
 | `rate_limit_hits`  | Persistent rate-limit counters (login, forgot-password).                 |
@@ -225,6 +231,17 @@ an empirical R95 percentile and the table flags them.
   pool 2 = quivers 2+. Side-by-side bars on MPI / R95 / pool size, then
   independent **Hotelling T²** (accuracy diff) and **Brown-Forsythe**
   (precision diff) tests with per-axis verdicts.
+- **Handicap over time** — plots the Archery GB 2023 handicap of every
+  recognised AGB target round you've completed against the date you shot
+  it, with the y-axis inverted so a *falling* handicap (improvement)
+  reads as a rising line. A least-squares trend line (handicap-points per
+  year) and a reference line for your AGB figure overlay it. Three
+  headline figures: *Latest*, *Best (recent)* (lowest single handicap in
+  the last 12 months), and the official *AGB handicap* (average of your
+  best three, rounded **down**; season → trailing-12-months → all-rounds
+  fallback, labelled provisional below three rounds). Every completed
+  round counts — Apollo has no record-status notion — so it's a personal
+  tracking number, not one to submit to a records officer.
 
 **Equipment comparison**
 
@@ -232,7 +249,9 @@ an empirical R95 percentile and the table flags them.
 
 ### Head-to-head statistical model
 
-For every pair of bows / arrows / session tags with at least 5 shots
+For every pair of bows / arrows / session tags / gear settings (release
+aid, aiming method, tab vs glove, sight type, … drawn from the per-bow
+bowstyle settings) with at least 5 shots
 each — and that have *never been used in the same session* (a pair that
 co-occurs in even one session is dropped, since the head-to-head only
 tells you something meaningful when the two sides are mutually
@@ -277,13 +296,13 @@ continued-fraction regularized incomplete beta (F-distribution). χ²₂
 quantiles for R95 / CEP use the closed-form `−2·ln(1 − q)`. All paths
 agree to better-than-display precision for the sample sizes /analyze
 sees. Every scoring, statistical, and predictive formula is catalogued
-with its source function in [docs/FORMULAS.md](docs/FORMULAS.md).
+with its source function in [documentation/FORMULAS.md](documentation/FORMULAS.md).
 
 ---
 
 ## Tools (`/tools`)
 
-Seven client-side archery calculators on one page, each in its own
+Six client-side archery calculators on one page, each in its own
 collapsible card (collapsed by default). All math runs in the browser —
 no DB hits, no server round-trips per keystroke.
 
@@ -295,7 +314,10 @@ no DB hits, no server round-trips per keystroke.
 | **FOC** | Standard ATA `((balance − L/2)/L)·100` with low / target / hunting / EFOC band chips. |
 | **Arrow speed (fps)** | Two methods: **bow specs** (energy-storage model `v = √(2·η·k·F_peak·stroke / m)`, works for any bow type from peak weight, draw length, brace height, arrow mass) and **IBO/ATA rating** (compound-only delta-from-rating). |
 | **Kinetic energy & momentum** | `KE = mv²/450,240` (ft·lb), `momentum = mv/225,400` (slug·ft/s). |
-| **Slope compensator** | Rifleman's rule for arrows: aim for `slant × cos(angle)`, displays the hold-off delta. |
+
+(A *Slope compensator* card shipped earlier but was removed in v0.69 —
+the rifleman's-rule approximation fits a bullet better than an arrow's
+loopier trajectory, and was judged more likely to mislead than help.)
 
 The energy-storage FPS model uses bow-type-tuned constants for the
 force-draw-curve area fraction `k` and mechanical efficiency `η`:
@@ -305,12 +327,69 @@ across all three bow types.
 
 ---
 
+## Predict (`/predict`)
+
+A performance-prediction wizard. The server fits a 2D angular-dispersion
+Gaussian (in milliradians) to a filtered slice of your shot history —
+optionally narrowed by bow, arrow, tag, or date range — then hands the
+parameters plus a chosen endpoint (a tournament round, a face, or a
+custom target/distance) to a client-side Monte-Carlo simulator
+(`static/apollo-predict.js`) that grows a score histogram live in the
+browser.
+
+Because the model is angular, it extrapolates to **any** distance: a mrad
+offset scales linearly with range. When the slice spans at least two
+distances with enough hits at each, Apollo also fits a **distance trend** —
+how bias and dispersion grow with range — and **shrinks** that growth
+(James-Stein style) toward the AGB handicap distance coefficient rather
+than trusting a flat fit. Gravity drop and wind aren't modelled; the
+results surface σ in mrad so you can sanity-check.
+
+---
+
+## Handicaps & classifications
+
+Apollo computes an **Archery GB 2023 handicap** for every completed AGB
+target round and resolves the **classification** earned. The math lives
+in three pure, Flask/DB-free modules so it stays unit-testable and
+single-sourced:
+
+| Module | Role |
+|---|---|
+| `handicap.py` | The AGB 2023 handicap engine. Derives an expected arrow/round score from a face's ring geometry + distance (`sigma_t(H,d) = ANG_0·(1+STEP/100)^(H+DATUM)·e^(KD·d)`) and inverts it to the integer handicap for a score. Constants match the MIT-licensed `archeryutils` reference, so numbers agree with published AGB tables and archerycalculator.co.uk. |
+| `handicap_data.py` | Constant tables: AGB class definitions, age/gender steps, WA Star Award and USAA pin milestones, which rounds are AGB-classified / indoor / 1440. |
+| `classifications.py` | Resolvers for **Archery GB** class (handicap-threshold per category), **World Archery** Star Awards (1440 point milestones), and **USA Archery** Performance Award pins. Returns every award earned for a round + score + category. |
+
+The handicap deliberately uses the **scheme-standard arrow** (5.5 mm
+outdoor, 9.3 mm indoor) — not your real shaft — so the figure is
+comparable to published tables and between archers; the raw score it's
+looked up from is still scored with your actual arrow. The archer
+*category* (bowstyle / gender / age group) comes from the **Archer
+profile** block on `/account` and is optional — the handicap is computed
+without it; it only affects which classification you're awarded. NFAA
+classification is deferred (it's a relative multi-score scheme, not a
+single-round lookup).
+
+---
+
 ## Notes
 
 - **Multi-user.** The first account to register inherits any data left
   over from a pre-multi-user install. Subsequent accounts start empty.
   Root (created from `APOLLO_ROOT_*`) can browse/delete users and reset
   passwords or email addresses via `/admin`.
+- **Bowstyle gear settings.** Apollo offers six bowstyles (recurve,
+  compound, barebow, longbow, traditional, flatbow). Selecting a bow type
+  reveals exactly that style's gear fields. Gear splits into two tiers:
+  *static* gear that rarely changes (compound release aid / let-off /
+  peep / scope, recurve clicker / stabilizer / tab, barebow aiming method
+  / riser weights) is set on Add/Edit bow; *dynamic* tuning you tweak
+  between outings (string crawl, brace height, plunger tension) is chosen
+  per session and persists for the rest of it. Each shot snapshots the
+  gear in force as JSON, so later edits never rewrite a past shot's
+  attribution. The whole feature is driven by one schema dict,
+  `BOWSTYLE_SETTINGS`, that templates render from, POST handlers validate
+  against, and `/analyze` buckets head-to-head comparisons by.
 - **CSRF.** Every POST form includes `{{ csrf_token() }}`. Rotating
   `SECRET_KEY` invalidates in-flight tokens — expected.
 - **Password resets.** Tokens are sha256-hashed at rest, one-shot, and

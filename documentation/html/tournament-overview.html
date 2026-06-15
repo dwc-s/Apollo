@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Apollo Docs · Tournament Mode — Overview</title>
+    <link rel="stylesheet" href="/static/fonts/apollo-fonts.css">
+    <link rel="stylesheet" type="text/css" href="/static/style.css">
+    <style>
+.docs-body { padding: 0; padding-left: 240px; }
+.docs-sidebar {
+    position: fixed; top: 0; left: 0; bottom: 0; width: 200px;
+    background-color: #b3c6e3; padding: 22px 16px; box-sizing: border-box;
+    overflow-y: auto; display: flex; flex-direction: column; gap: 6px;
+    box-shadow: 2px 0 8px rgba(99, 106, 128, 0.18); z-index: 500;
+}
+.docs-sidebar-label {
+    font-family: "Quantico", sans-serif; font-weight: 700; font-size: 0.7rem;
+    letter-spacing: 0.12em; text-transform: uppercase; color: #5a6a86;
+    margin: 4px 6px 6px;
+}
+.docs-sidebar .docs-nav-group {
+    font-family: "Quantico", sans-serif; font-weight: 700; font-size: 0.68rem;
+    letter-spacing: 0.1em; text-transform: uppercase; color: #7a89a6;
+    margin: 12px 6px 2px;
+}
+.docs-sidebar a.docs-nav-link {
+    display: block; padding: 6px 8px; border-radius: 6px;
+    font-family: "Quantico", sans-serif; font-weight: 700; font-size: 0.82rem;
+    color: #1a3a5c; text-decoration: none; transition: background-color 0.15s;
+}
+.docs-sidebar a.docs-nav-link:hover { background-color: #95abcf; }
+.docs-sidebar a.docs-nav-link.active { background-color: #95abcf; }
+.docs-sidebar-foot { margin-top: auto; padding-top: 12px; }
+.docs-sidebar a.docs-back {
+    font-family: "Quantico", sans-serif; font-weight: 700; font-size: 0.82rem;
+    color: #5a6a86; text-decoration: none;
+}
+.docs-sidebar a.docs-back:hover { text-decoration: underline; }
+
+.docs-main { max-width: 920px; margin: 0 auto; padding: 28px 24px 60px; }
+.docs-card {
+    background-color: #eaf2fb; border-radius: 16px; padding: 36px 44px;
+    box-shadow: 0 2px 10px rgba(99, 106, 128, 0.18);
+    font-family: "Quantico", sans-serif; color: #243b54; line-height: 1.6;
+}
+.docs-card h1 {
+    font-family: "Bungee Shade", sans-serif; color: #a1d8ed;
+    -webkit-text-stroke: 1.5px #636a80; font-size: 2.5rem; line-height: 1.15;
+    margin: 0 0 22px;
+}
+.docs-card h2 {
+    font-family: "Quantico", sans-serif; font-weight: 700; color: #1a3a5c;
+    font-size: 1.5rem; margin: 34px 0 12px; padding-bottom: 6px;
+    border-bottom: 2px solid #b3c6e3;
+}
+.docs-card h3 {
+    font-family: "Quantico", sans-serif; font-weight: 700; color: #1a3a5c;
+    font-size: 1.15rem; margin: 24px 0 8px;
+}
+.docs-card h4 { color: #1a3a5c; margin: 18px 0 6px; }
+.docs-card p, .docs-card li { font-size: 0.95rem; }
+.docs-card a { color: #3a6ea5; text-decoration: none; }
+.docs-card a:hover { text-decoration: underline; }
+.docs-card code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    background-color: #d6e4f0; color: #1a3a5c; padding: 1px 6px;
+    border-radius: 4px; font-size: 0.86em;
+}
+.docs-card pre {
+    background-color: #1a3a5c; color: #d6e4f0; padding: 16px 18px;
+    border-radius: 10px; overflow-x: auto; line-height: 1.45;
+}
+.docs-card pre code { background: none; color: inherit; padding: 0; }
+.docs-card pre.docs-plaintext {
+    white-space: pre-wrap; word-break: break-word; font-size: 0.82rem;
+}
+.docs-card blockquote {
+    margin: 16px 0; padding: 8px 18px; border-left: 4px solid #95abcf;
+    background-color: #dde9f6; border-radius: 0 8px 8px 0; color: #33506e;
+}
+.docs-card table {
+    border-collapse: collapse; width: 100%; margin: 16px 0; font-size: 0.88rem;
+}
+.docs-card th, .docs-card td {
+    border: 1px solid #b3c6e3; padding: 7px 11px; text-align: left;
+    vertical-align: top;
+}
+.docs-card th { background-color: #b3c6e3; color: #1a3a5c; font-weight: 700; }
+.docs-card tr:nth-child(even) td { background-color: #e1ecf8; }
+.docs-card hr { border: 0; border-top: 1px solid #b3c6e3; margin: 28px 0; }
+.docs-footer {
+    text-align: center; font-family: "Quantico", sans-serif; font-size: 0.78rem;
+    color: #5a6a86; margin-top: 22px;
+}
+
+/* index */
+.docs-index-grid {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap: 18px; margin: 8px 0 6px;
+}
+.docs-index-card {
+    display: block; background-color: #dde9f6; border-radius: 12px;
+    padding: 18px 20px; text-decoration: none; color: #1a3a5c;
+    border: 1px solid #c2d3ea; transition: transform 0.12s, box-shadow 0.12s;
+}
+.docs-index-card:hover {
+    transform: translateY(-2px); box-shadow: 0 4px 12px rgba(99,106,128,0.22);
+    text-decoration: none;
+}
+.docs-index-card .t {
+    font-family: "Quantico", sans-serif; font-weight: 700; font-size: 1.05rem;
+    color: #1a3a5c; display: block; margin-bottom: 6px;
+}
+.docs-index-card .d { font-size: 0.86rem; color: #3f5b78; }
+
+@media (max-width: 760px) {
+    .docs-body { padding-left: 0; }
+    .docs-sidebar {
+        position: static; width: auto; box-shadow: none; flex-direction: row;
+        flex-wrap: wrap; align-items: center;
+    }
+    .docs-sidebar-foot { margin: 0 0 0 auto; }
+    .docs-main { padding: 18px 14px 40px; }
+    .docs-card { padding: 24px 20px; }
+}
+</style>
+</head>
+<body class="docs-body">
+    <aside class="docs-sidebar">
+        <a href="/" class="side-nav-brand">Apollo</a>
+        <div class="docs-sidebar-label">Documentation</div>
+        <a href="index.html" class="docs-nav-link">Home</a>
+        <div class="docs-nav-group">Project</div>
+        <a href="readme.html" class="docs-nav-link">Overview</a>
+        <a href="formulas.html" class="docs-nav-link">Formulas & Math Reference</a>
+        <a href="install.html" class="docs-nav-link">Install & Deploy Guide</a>
+        <div class="docs-nav-group">Tournament</div>
+        <a href="tournament-overview.html" class="docs-nav-link active">Overview</a>
+        <a href="tournament-rules.html" class="docs-nav-link">Tournament Round Reference</a>
+        <a href="tournament-scoring.html" class="docs-nav-link">Internal Scoring Procedures</a>
+        <a href="tournament-targets.html" class="docs-nav-link">Tournament Target Faces</a>
+        <div class="docs-sidebar-foot">
+            <a href="/" class="docs-back">‹ Back to app</a>
+        </div>
+    </aside>
+    <main class="docs-main">
+        <div class="docs-card">
+<h1 id="apollo-tournament-mode-rules-internal-procedures">Apollo Tournament Mode — Rules &amp; Internal Procedures</h1>
+<p>This directory documents how Apollo implements <strong>tournament mode</strong> — a
+structured-session variant of <code>/sesh</code> that mirrors the formats, scoring,
+and target faces of three archery organizations:</p>
+<ul>
+<li><strong>World Archery (WA)</strong> — international federation, Olympic round, FITA.</li>
+<li><strong>NFAA</strong> — National Field Archery Association (USA).</li>
+<li><strong>USAA</strong> — USA Archery, the WA member federation in the United States.</li>
+</ul>
+<p>(NASP was supported in earlier versions; current builds drop it from
+the selector. The <code>nasp_80</code> face row is retained for backward
+compatibility with previously seeded targets.)</p>
+<p>The goal is not to be a digital referee — Apollo is a <em>personal logging</em>
+tool. The goal is to let a user dial in a round (e.g. "WA 720 Recurve"),
+have Apollo enforce the right end size / ends / target face / scoring
+rule, and produce a score at the end that matches what they would have
+written on the paper scorecard.</p>
+<blockquote>
+<p><strong>Warning — verify before competition.</strong> Rules change between rulebook
+editions (typically annually). The specifications captured here are
+drawn from published rulebook conventions current as of mid-2026 and
+should be <strong>re-verified against the current official rulebook PDFs</strong>
+before any score recorded here is treated as authoritative for
+competition purposes. Apollo is a practice tool.</p>
+</blockquote>
+<p>The documents in this directory:</p>
+<ul>
+<li><strong><code>rules.md</code></strong> — round-by-round reference: target face, distance,
+  end size, total arrows, time limit, scoring rule, organization
+  citation.</li>
+<li><strong><code>scoring.md</code></strong> — Apollo's internal scoring procedures: how shots
+  are classified, how the line-cutter rule is implemented, how inner-10
+  (X) is tracked, how compound vs. recurve modes diverge, how end totals
+  and round totals are computed and persisted.</li>
+<li><strong><code>targets.md</code></strong> — target face specifications (ring radii, face size,
+  3-spot layout) and which static image asset under <code>static/targets/</code>
+  represents each face.</li>
+</ul>
+<p>Sources used (canonical rulebook URLs — verify before relying):</p>
+<ul>
+<li>World Archery Rulebook (Books 1–5): https://www.worldarchery.sport/rulebook</li>
+<li>NFAA Constitution &amp; By-Laws / rules: https://www.nfaausa.com/rules</li>
+<li>USA Archery rules &amp; sanctioned events: https://www.usarchery.org/rules</li>
+</ul>
+        </div>
+        <p class="docs-footer">Apollo documentation · generated from the
+        project Markdown by <code>documentation/build_docs.py</code>.</p>
+    </main>
+</body>
+</html>

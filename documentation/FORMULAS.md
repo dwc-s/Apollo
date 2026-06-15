@@ -256,6 +256,23 @@ min/max, and **linearly-interpolated** percentiles
 (`k = (n−1)·p`, interpolate between `⌊k⌋` and `⌈k⌉`) for p10/p50/p90, plus the
 probability of clearing a target score.
 
+### 4.3 Distance-trend fit (server) — `apollo.py` (~13593)
+The flat angular fit assumes dispersion is constant in mrad across range. When
+the slice spans `≥ _PREDICT_TREND_MIN_DISTANCES` (2) distinct distances, each
+with `≥ _PREDICT_TREND_MIN_PER_DIST` (15) hits, Apollo additionally regresses
+how **bias** and **dispersion** grow with distance and returns it as
+`dist.trend` for the client to apply when extrapolating.
+
+A raw least-squares trend on few distances is noisy, so each fitted growth
+slope is **shrunk James-Stein-style toward a prior** rather than used flat. The
+dispersion-growth prior is the AGB handicap distance coefficient
+(`KD = 0.00365 /m`, see §7) — i.e. "absent strong evidence, dispersion grows
+with range the way the handicap model says it does," not "stays flat." The
+shrink weight uses softness `_PREDICT_TREND_SHRINK_C = 4.0`: a departure from
+the prior with `|t| = √c` earns half weight; larger `c` keeps the trend nearer
+its prior unless the data strongly disagrees. Below the data threshold the
+model falls back to the flat angular fit (§4.2).
+
 ---
 
 ## 5. Reports built on the above
@@ -276,6 +293,7 @@ Every `/analyze` report below feeds shot clouds (raw mm or normalized) into
 | Calendar heatmap | `_report_calendar_heatmap` | shots per day → colour intensity. |
 | Expected score | `_report_expected_score` | §4.1. |
 | Equipment head-to-head | `_report_equipment_head_to_head` | §3. |
+| Handicap over time | `_report_handicap_trend` + `_handicap_summary` | per-round AGB handicap (§7) vs date; least-squares trend line; best-three average (§7.4). |
 
 ---
 
@@ -293,5 +311,75 @@ Every `/analyze` report below feeds shot clouds (raw mm or normalized) into
 
 ---
 
-*Generated and verified against the implementation for v0.60. When a formula
-changes in `apollo.py` or `apollo-predict.js`, update the matching section here.*
+## 7. Archery GB handicaps & classifications
+
+The handicap math lives in `handicap.py`; the constant tables in
+`handicap_data.py`; the class/award resolvers in `classifications.py`. All
+three are pure (no Flask/DB) and unit-tested in isolation. `apollo.py` builds
+their inputs from `TOURNAMENT_FACES` / `_round_segments` and exposes them via
+`_round_handicap_passes`, `_session_handicap`, and `_session_handicap_awards`.
+Constants match the MIT-licensed `archeryutils` reference, so figures agree
+with published AGB tables and archerycalculator.co.uk.
+
+### 7.1 Angular spread model (AGB 2023) — `sigma_t`, `sigma_r`
+```
+sigma_t(H, d) = ANG_0 · (1 + STEP/100)^(H + DATUM) · e^(KD · d)      [rad]
+sigma_r(H, d) = d · sigma_t(H, d)                                    [m, group SD]
+```
+Constants: `ANG_0 = 5.0e-4`, `STEP = 3.5` (% per handicap step), `DATUM = 6.0`,
+`KD = 0.00365 /m` (distance growth — also the prior in §4.3). Lower `H` = tighter
+group = better. The scale is searched over integer `H ∈ [HC_MIN, HC_MAX] = [-75, 300]`.
+
+### 7.2 Expected score — `expected_arrow_score`, `expected_round_score`
+Rings are first collapsed to scoring **bands** (`normalize_zones`): equal-value
+rings (e.g. the X and outer-10 both worth 10) merge to the largest radius at
+which that value scores. For an arrow of *scheme-standard* radius `arw_rad`:
+```
+s̄(H,d) = max_v − Σ_k drop_k · exp(−((arw_rad + r_k) / sigma_r)²)
+```
+summed over each band boundary (`r_k` = outer radius in m, `drop_k` = points
+lost to the next band out, 0 outside the last band). A round's expected score is
+`Σ n_arrows · s̄` over its passes; the **predicted** table score is `⌈expected⌉`.
+
+The arrow radius is fixed by the scheme, **not** the archer's real shaft —
+`ARROW_D_OUTDOOR = 5.5 mm`, `ARROW_D_INDOOR = 9.3 mm` (diameters) — so handicaps
+are comparable across archers. The raw score itself is still scored with the
+archer's real arrow (§1.1).
+
+### 7.3 Score → handicap — `handicap_from_score`
+`⌈expected_round_score(H)⌉` is non-increasing in `H`. The assigned handicap is
+the **largest** integer `H` whose predicted (ceil-rounded) score is still `≥` the
+achieved score — a descending scale rounded up. Scores `≤ 0` or `> max_score`
+return `None`; a maximum score lands on the worst `H` that still rounds up to the
+max (handled by the same scan, not a clamp).
+
+### 7.4 Headline figures — `_handicap_summary`
+From the list of completed-round handicaps (ascending by date):
+- **latest** — most recent round's handicap.
+- **best_recent** — lowest single handicap in the 12 months up to the latest round.
+- **agb** — `⌊(sum of the best three handicaps) / 3⌋` (the 2023 scheme rounds the
+  average **down**). Pool preference: current season (calendar year of the latest
+  round) → trailing 12 months → all rounds, flagged provisional below a full
+  season, and `None` with fewer than three rounds. `agb_basis` records which pool was used.
+
+Every completed AGB-target round counts (Apollo has no record-status notion), so
+the figure is a personal tracking number, not a club-submitted one.
+
+### 7.5 Classifications — `classifications.py`
+- **Archery GB** (`agb_classification`): per-category threshold handicaps
+  (`agb_class_thresholds`) computed from a `datum + (i − index_offset)·classStep`
+  ladder plus an age/gender step (`agb_age_gender_step`, including the U16
+  alignment fiddle). Indoor and outdoor use separate datums/steps; the best class
+  met is the first whose threshold the handicap satisfies. Master Bowman is flagged
+  `record_status` (officially record-event only; shown for information).
+- **World Archery** (`wa_star_award`): Star Awards on the 1440 round — fixed
+  point-score milestones (`WA_STAR_AWARDS`), `record_status` at ≥ 1350.
+- **USA Archery** (`usaa_award`): WA Performance Award pins on the 1440 (`USAA_AWARDS`).
+- `resolve_awards` returns every award earned across the three schemes. NFAA is
+  deferred — it's a relative multi-score scheme, not a single-round lookup.
+
+---
+
+*Generated and verified against the implementation for v0.71. When a formula
+changes in `apollo.py`, `apollo-predict.js`, `handicap.py`, or
+`classifications.py`, update the matching section here.*

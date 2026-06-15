@@ -132,6 +132,7 @@
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <button type="submit" class="logout-btn">Sign out</button>
         </form>
+        <a href="/docs/">Documentation</a>
     </div>
     {% endif %}
 </nav>
@@ -245,7 +246,7 @@
         </ul>
     </details>
 
-    <h3 class="quantico_light">Apollo will always be free and <a href="https://github.com/dwc-s/Apollo">open source</a>, but it costs money to operate and develop. Please consider <a href="https://buymeacoffee.com/apolloshoots">putting a dollar or two in the hat</a>. Email me (Dave) <a href="mailto:dwcs@apolloshoots.org">here</a> or <a href="https://github.com/dwc-s/Apollo/issues">report issues on GitHub</a>.</h3>
+    <h3 class="quantico_light">Apollo will always be free and <a href="https://github.com/dwc-s/Apollo">open source</a> (<a href="/docs/">documentation</a>), but it costs money to operate and develop. Please consider <a href="https://buymeacoffee.com/apolloshoots">putting a dollar or two in the hat</a>. Email me (Dave) <a href="mailto:dwcs@apolloshoots.org">here</a> or <a href="https://github.com/dwc-s/Apollo/issues">report issues on GitHub</a>.</h3>
     <h3 class="quantico_light">
         {% if not current_user %}
         <br><br>

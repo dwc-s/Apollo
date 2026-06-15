@@ -7,7 +7,7 @@ end size, face, scoring rule, and total-arrow count to the chosen
 round.
 
 > For the precise formulas behind scoring and the `/analyze` statistics,
-> see [docs/FORMULAS.md](../../docs/FORMULAS.md).
+> see [FORMULAS.md](../FORMULAS.md).
 
 ## Coordinate system
 
@@ -166,6 +166,28 @@ The user's actual bow choice comes from the existing bows table —
 Apollo does not enforce that the selected bow's `bow_type` matches
 the round's `equipment_class`. A warning is shown if it doesn't.
 
+## Live match play (multi-archer)
+
+Match-play rounds (`wa_match_*`) can be run as a **live match** on one
+shared device — 2 to 4 archers taking turns at the canvas. The routes
+are `/tournament/match` (setup form, collects archer names + emails) and
+`/tournament/match/start`:
+
+- **One session per archer.** `tournament_match_start` mints a separate
+  `session_id` for each archer (all owned by the device owner), tags them
+  with a shared match id, and stores the roster + an active-archer
+  pointer in the Flask session cookie.
+- **Turn taking.** The active archer's `session_id` is mirrored into
+  `session['session_id']` so the normal single-archer `/tournament`
+  render path is reused unchanged; the POST handler swaps the active
+  archer at each completed end (AB-CD detail order).
+- **Scoring per round system.** Each archer keeps a separate scorecard.
+  For **cumulative** rounds the higher running total wins; for the
+  **set system** (`wa_match_recurve_set`), `_match_set_scoring` awards 2
+  set points to the higher end total (1 each on a tie), first to 6 set
+  points wins, and a 5–5 tie is flagged for a single-arrow shoot-off
+  (WA 12.1.4.1).
+
 ## What Apollo's tournament mode does NOT do
 
 By design, tournament mode is a personal-tracking layer over /sesh —
@@ -173,10 +195,8 @@ not a sanctioned-event tool. It deliberately leaves out:
 
 - Official judges / arrow-witnessing protocols (rebound arrows,
   hangers, bouncers).
-- Team-round shooting orders (AB-BA-AB alternating shots).
-- Set-system match-play opponent scoring (Apollo tracks the archer's
-  own scores; the opponent's score is what the user enters on a
-  separate match — there is no two-archer mode).
+- Team-round shooting orders (AB-BA-AB alternating team shots).
 - Automated end-clocks and audible signals.
-- Federation-specific tiebreak shoot-offs (Apollo shows the X count
-  and inner-10 count needed to break a tie manually).
+- Automated tiebreak shoot-off arrows (a 5–5 set tie is *flagged*, but
+  the deciding arrow is shot and entered manually; Apollo also shows the
+  X count and inner-10 count needed to break a tie by hand).

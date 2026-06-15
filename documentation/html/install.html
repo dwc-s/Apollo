@@ -1,0 +1,529 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Apollo Docs · Install & Deploy Guide</title>
+    <link rel="stylesheet" href="/static/fonts/apollo-fonts.css">
+    <link rel="stylesheet" type="text/css" href="/static/style.css">
+    <style>
+.docs-body { padding: 0; padding-left: 240px; }
+.docs-sidebar {
+    position: fixed; top: 0; left: 0; bottom: 0; width: 200px;
+    background-color: #b3c6e3; padding: 22px 16px; box-sizing: border-box;
+    overflow-y: auto; display: flex; flex-direction: column; gap: 6px;
+    box-shadow: 2px 0 8px rgba(99, 106, 128, 0.18); z-index: 500;
+}
+.docs-sidebar-label {
+    font-family: "Quantico", sans-serif; font-weight: 700; font-size: 0.7rem;
+    letter-spacing: 0.12em; text-transform: uppercase; color: #5a6a86;
+    margin: 4px 6px 6px;
+}
+.docs-sidebar .docs-nav-group {
+    font-family: "Quantico", sans-serif; font-weight: 700; font-size: 0.68rem;
+    letter-spacing: 0.1em; text-transform: uppercase; color: #7a89a6;
+    margin: 12px 6px 2px;
+}
+.docs-sidebar a.docs-nav-link {
+    display: block; padding: 6px 8px; border-radius: 6px;
+    font-family: "Quantico", sans-serif; font-weight: 700; font-size: 0.82rem;
+    color: #1a3a5c; text-decoration: none; transition: background-color 0.15s;
+}
+.docs-sidebar a.docs-nav-link:hover { background-color: #95abcf; }
+.docs-sidebar a.docs-nav-link.active { background-color: #95abcf; }
+.docs-sidebar-foot { margin-top: auto; padding-top: 12px; }
+.docs-sidebar a.docs-back {
+    font-family: "Quantico", sans-serif; font-weight: 700; font-size: 0.82rem;
+    color: #5a6a86; text-decoration: none;
+}
+.docs-sidebar a.docs-back:hover { text-decoration: underline; }
+
+.docs-main { max-width: 920px; margin: 0 auto; padding: 28px 24px 60px; }
+.docs-card {
+    background-color: #eaf2fb; border-radius: 16px; padding: 36px 44px;
+    box-shadow: 0 2px 10px rgba(99, 106, 128, 0.18);
+    font-family: "Quantico", sans-serif; color: #243b54; line-height: 1.6;
+}
+.docs-card h1 {
+    font-family: "Bungee Shade", sans-serif; color: #a1d8ed;
+    -webkit-text-stroke: 1.5px #636a80; font-size: 2.5rem; line-height: 1.15;
+    margin: 0 0 22px;
+}
+.docs-card h2 {
+    font-family: "Quantico", sans-serif; font-weight: 700; color: #1a3a5c;
+    font-size: 1.5rem; margin: 34px 0 12px; padding-bottom: 6px;
+    border-bottom: 2px solid #b3c6e3;
+}
+.docs-card h3 {
+    font-family: "Quantico", sans-serif; font-weight: 700; color: #1a3a5c;
+    font-size: 1.15rem; margin: 24px 0 8px;
+}
+.docs-card h4 { color: #1a3a5c; margin: 18px 0 6px; }
+.docs-card p, .docs-card li { font-size: 0.95rem; }
+.docs-card a { color: #3a6ea5; text-decoration: none; }
+.docs-card a:hover { text-decoration: underline; }
+.docs-card code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    background-color: #d6e4f0; color: #1a3a5c; padding: 1px 6px;
+    border-radius: 4px; font-size: 0.86em;
+}
+.docs-card pre {
+    background-color: #1a3a5c; color: #d6e4f0; padding: 16px 18px;
+    border-radius: 10px; overflow-x: auto; line-height: 1.45;
+}
+.docs-card pre code { background: none; color: inherit; padding: 0; }
+.docs-card pre.docs-plaintext {
+    white-space: pre-wrap; word-break: break-word; font-size: 0.82rem;
+}
+.docs-card blockquote {
+    margin: 16px 0; padding: 8px 18px; border-left: 4px solid #95abcf;
+    background-color: #dde9f6; border-radius: 0 8px 8px 0; color: #33506e;
+}
+.docs-card table {
+    border-collapse: collapse; width: 100%; margin: 16px 0; font-size: 0.88rem;
+}
+.docs-card th, .docs-card td {
+    border: 1px solid #b3c6e3; padding: 7px 11px; text-align: left;
+    vertical-align: top;
+}
+.docs-card th { background-color: #b3c6e3; color: #1a3a5c; font-weight: 700; }
+.docs-card tr:nth-child(even) td { background-color: #e1ecf8; }
+.docs-card hr { border: 0; border-top: 1px solid #b3c6e3; margin: 28px 0; }
+.docs-footer {
+    text-align: center; font-family: "Quantico", sans-serif; font-size: 0.78rem;
+    color: #5a6a86; margin-top: 22px;
+}
+
+/* index */
+.docs-index-grid {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap: 18px; margin: 8px 0 6px;
+}
+.docs-index-card {
+    display: block; background-color: #dde9f6; border-radius: 12px;
+    padding: 18px 20px; text-decoration: none; color: #1a3a5c;
+    border: 1px solid #c2d3ea; transition: transform 0.12s, box-shadow 0.12s;
+}
+.docs-index-card:hover {
+    transform: translateY(-2px); box-shadow: 0 4px 12px rgba(99,106,128,0.22);
+    text-decoration: none;
+}
+.docs-index-card .t {
+    font-family: "Quantico", sans-serif; font-weight: 700; font-size: 1.05rem;
+    color: #1a3a5c; display: block; margin-bottom: 6px;
+}
+.docs-index-card .d { font-size: 0.86rem; color: #3f5b78; }
+
+@media (max-width: 760px) {
+    .docs-body { padding-left: 0; }
+    .docs-sidebar {
+        position: static; width: auto; box-shadow: none; flex-direction: row;
+        flex-wrap: wrap; align-items: center;
+    }
+    .docs-sidebar-foot { margin: 0 0 0 auto; }
+    .docs-main { padding: 18px 14px 40px; }
+    .docs-card { padding: 24px 20px; }
+}
+</style>
+</head>
+<body class="docs-body">
+    <aside class="docs-sidebar">
+        <a href="/" class="side-nav-brand">Apollo</a>
+        <div class="docs-sidebar-label">Documentation</div>
+        <a href="index.html" class="docs-nav-link">Home</a>
+        <div class="docs-nav-group">Project</div>
+        <a href="readme.html" class="docs-nav-link">Overview</a>
+        <a href="formulas.html" class="docs-nav-link">Formulas & Math Reference</a>
+        <a href="install.html" class="docs-nav-link active">Install & Deploy Guide</a>
+        <div class="docs-nav-group">Tournament</div>
+        <a href="tournament-overview.html" class="docs-nav-link">Overview</a>
+        <a href="tournament-rules.html" class="docs-nav-link">Tournament Round Reference</a>
+        <a href="tournament-scoring.html" class="docs-nav-link">Internal Scoring Procedures</a>
+        <a href="tournament-targets.html" class="docs-nav-link">Tournament Target Faces</a>
+        <div class="docs-sidebar-foot">
+            <a href="/" class="docs-back">‹ Back to app</a>
+        </div>
+    </aside>
+    <main class="docs-main">
+        <div class="docs-card">
+<h1>Install & Deploy Guide</h1>
+<pre class="docs-plaintext">================================================================
+Apollo — Installation Help
+================================================================
+
+This file explains how `install.py` works, what every environment
+variable does, and how to deploy Apollo on a server (with a
+PythonAnywhere-specific walkthrough at the end).
+
+
+----------------------------------------------------------------
+1. What install.py does
+----------------------------------------------------------------
+
+`install.py` is an interactive bootstrap script. Run it once after
+cloning the repo. It walks you through four things:
+
+  1. Picking an environment manager (conda or venv)
+  2. Picking a &quot;flavor&quot; (local vs. server)
+  3. Installing Python packages into that environment
+  4. Collecting environment variables and writing them to a `.env`
+     file next to `install.py`
+
+For the server flavor it also writes `wsgi_snippet.py` — a ready-
+to-paste WSGI configuration file with your real values filled in
+(see the PythonAnywhere section below).
+
+Run it with:
+
+    python install.py
+
+
+----------------------------------------------------------------
+2. The prompts, one by one
+----------------------------------------------------------------
+
+Environment manager? [conda/venv]
+    conda — uses Miniconda/Anaconda (only offered if `conda` is on
+            PATH). Creates a named env, e.g. `apollo`.
+    venv  — uses Python&#x27;s built-in `python -m venv`. Creates an env
+            in a directory you choose.
+
+    On PythonAnywhere there&#x27;s no conda, so pick `venv`.
+
+Which flavor to install? [local/server]
+    local  — SQLite, runs on your laptop, debug mode on.
+             Installs: Flask, Flask-WTF, Pillow, SQLAlchemy,
+             openpyxl, resend, matplotlib
+    server — MySQL, production-mode, debug off.
+             Installs everything above PLUS PyMySQL (so SQLAlchemy
+             can talk to MySQL).
+
+Venv directory  (venv only)
+    Path where the venv will be created. Defaults to `./venv` next
+    to install.py.
+
+    IMPORTANT: enter the path to the venv ITSELF, not a parent
+    directory. On PythonAnywhere, `~/.virtualenvs` is a parent
+    folder that holds many venvs — point install.py at something
+    like `/home/&lt;user&gt;/.virtualenvs/apollo` instead.
+
+    If the path exists but isn&#x27;t a venv (no `bin/python` inside),
+    the script now detects that and offers to create one in an
+    `apollo/` subdirectory.
+
+Conda env name  (conda only)
+    Defaults to `apollo`.
+
+Python version  (conda only)
+    Defaults to 3.11.
+
+Root account prompts  (server flavor only)
+    After the env-var prompts, install.py asks for:
+      - Root username (default: `root`, 3–32 chars, letters /
+        digits / underscore / dot / hyphen)
+      - Root email
+      - Root password (min 8 chars, entered twice, no echo)
+    These get written to .env (and wsgi_snippet.py) as the
+    APOLLO_ROOT_* variables; apollo.py uses them on first boot
+    to create or promote the named account.
+
+
+----------------------------------------------------------------
+3. Environment variables
+----------------------------------------------------------------
+
+These all get written to `.env` (and, for server, also baked into
+`wsgi_snippet.py`). Apollo reads them via `os.environ` at startup
+— there is no dotenv loader, so they must already be set in the
+process environment by the time `apollo.py` is imported.
+
+SECRET_KEY                                            [required]
+    Signs Flask session cookies and CSRF tokens. install.py
+    generates a strong random default (32 bytes, urlsafe) which
+    you can accept by pressing Enter. Paste an existing value
+    only if you are rotating a key or sharing one across multiple
+    app instances.
+
+    In production (FLASK_ENV=production), apollo.py refuses to
+    start without this set.
+
+RESEND_API_KEY                                        [optional]
+    API key from https://resend.com/api-keys . Powers the
+    forgot-password email flow.
+
+    If blank: Apollo falls back to printing reset URLs to the
+    server&#x27;s terminal/log instead of mailing them. Perfectly fine
+    for testing; not fine for real users.
+
+RESEND_FROM                                           [optional]
+    The &quot;From:&quot; address on password-reset emails. Only prompted
+    if you supplied RESEND_API_KEY.
+
+    Default: onboarding@resend.dev — Resend&#x27;s shared sandbox
+    sender. It can ONLY deliver to recipients you&#x27;ve verified in
+    the Resend dashboard. For real users, replace this with an
+    address on a domain you&#x27;ve verified in Resend.
+
+FLASK_ENV                                  [server flavor only]
+    Set to `production` by install.py for the server flavor. Two
+    effects: (a) turns off the Werkzeug debugger, (b) makes
+    SECRET_KEY mandatory.
+
+APOLLO_BACKEND                             [server flavor only]
+    Set to `mysql` by install.py for the server flavor. This is
+    the explicit opt-in that tells apollo.py to read DATABASE_URL.
+    Without it, the app uses local SQLite even if DATABASE_URL is
+    set.
+
+DATABASE_URL                               [server flavor only]
+    SQLAlchemy connection string for your MySQL database.
+    Format:
+        mysql+pymysql://USER:PASSWORD@HOST:PORT/DBNAME
+    Example:
+        mysql+pymysql://apollo:s3cret@db.example.com:3306/apollo
+
+    On PythonAnywhere the host is usually `&lt;username&gt;.mysql.
+    pythonanywhere-services.com` and the DB name is
+    `&lt;username&gt;$&lt;dbname&gt;`.
+
+APOLLO_BASE_URL                            [server flavor only,
+                                                        required]
+    The public origin used in password-reset email links, e.g.
+    `https://apolloshoots.org`. apollo.py refuses to start in
+    production (FLASK_ENV=production) without this set.
+
+    In theory ProxyFix + request.url_root produces the right
+    value automatically. In practice PythonAnywhere&#x27;s free-tier
+    proxy doesn&#x27;t always forward X-Forwarded-Proto cleanly, which
+    can produce http:// links inside HTTPS-only deployments —
+    setting this explicitly avoids that surprise.
+
+APOLLO_ROOT_USERNAME                       [server flavor only]
+    The username for the root (admin) account, collected during
+    install. apollo.py reads this on every boot: if a user with
+    this name exists, it gets `is_root` set (and re-activated if
+    needed); if not, apollo.py creates them using the email and
+    password below.
+
+    Same shape rules as login (3–32 chars, letters / digits /
+    underscore / dot / hyphen).
+
+APOLLO_ROOT_EMAIL                          [server flavor only]
+    The root account&#x27;s email address. Only used when the account
+    doesn&#x27;t exist yet — apollo.py mints it with this email on
+    first boot. After the account exists you can rotate the
+    address via the admin UI; this env var no longer matters.
+
+APOLLO_ROOT_PASSWORD                       [server flavor only]
+    The root account&#x27;s initial password (min 8 chars). Only used
+    when the account doesn&#x27;t exist yet. Once root exists you can
+    safely remove this from .env (and from wsgi_snippet.py /
+    your WSGI file) — apollo.py only consults it on the bootstrap
+    run.
+
+    Stored in plaintext in .env / wsgi_snippet.py (mode 0600). If
+    you&#x27;re uncomfortable with that, delete the line after the
+    first successful boot.
+
+FLASK_DEBUG                                    [not set by installer]
+    Read by apollo.py when launched directly (not via WSGI).
+    Defaults to &quot;1&quot; if unset. Ignored in production
+    (FLASK_ENV=production forces debug off).
+
+
+----------------------------------------------------------------
+4. Files install.py creates
+----------------------------------------------------------------
+
+.env
+    Shell-sourceable file:  export KEY=value
+    Mode 0600 (owner read/write only) because it holds secrets.
+    Use it on machines where you launch Apollo from a shell:
+
+        source .env
+        source &lt;venv&gt;/bin/activate
+        python apollo.py
+
+wsgi_snippet.py            [server flavor only]
+    A complete WSGI configuration file. Sets `os.environ[...]`
+    for every env var, inserts the project directory onto
+    `sys.path`, then imports the Flask app. Mode 0600.
+
+    This file exists because WSGI hosts (PythonAnywhere, Passenger,
+    mod_wsgi, …) do not source `.env`. The worker process is
+    started by the host, so env vars have to be established
+    inside the WSGI file itself, before `apollo` is imported.
+
+
+----------------------------------------------------------------
+5. Local launch (local flavor)
+----------------------------------------------------------------
+
+    source .env
+    source venv/bin/activate          # or: conda activate apollo
+    python apollo.py
+
+Then open http://127.0.0.1:5000/ in a browser. Click
+&quot;Create account&quot; to register the first user. Any data left over
+from a pre-multi-user install gets claimed by that first account
+automatically.
+
+
+----------------------------------------------------------------
+6. Server launch on PythonAnywhere (server flavor)
+----------------------------------------------------------------
+
+PythonAnywhere has no UI on the Web tab for setting environment
+variables. The standard pattern is to set them inside the WSGI
+file directly — which is exactly what `wsgi_snippet.py` is.
+
+Step-by-step:
+
+  1. SSH into your PythonAnywhere account (Consoles → Bash).
+     Clone the repo (or upload it) and `cd` into the project.
+
+  2. Run:
+         python install.py
+     Choose `venv` for the env manager, `server` for the flavor.
+     For the venv path, enter something like
+         /home/&lt;username&gt;/.virtualenvs/apollo
+     (Do not enter `/home/&lt;username&gt;/.virtualenvs` by itself —
+     that&#x27;s the parent folder, not a venv.)
+
+  3. Go to the Web tab. Create a web app if you haven&#x27;t already
+     (Manual configuration, Python 3.11 or matching your venv).
+
+  4. In the Web tab, set:
+         Source code:  /home/&lt;username&gt;/mysite/apollo
+                       (or wherever apollo.py lives — must match
+                       project_home in wsgi_snippet.py)
+         Virtualenv:   /home/&lt;username&gt;/.virtualenvs/apollo
+                       (the path you gave install.py)
+
+  5. Click the &quot;WSGI configuration file&quot; link on the Web tab.
+     REPLACE the entire contents of that file with the contents
+     of `wsgi_snippet.py`. Don&#x27;t merge — the snippet is a
+     complete, standalone WSGI file. Save.
+
+  6. Click the green Reload button.
+
+  7. Visit https://&lt;username&gt;.pythonanywhere.com/ and register
+     your first account.
+
+If something is broken, the first place to look is the Error log
+linked from the Web tab. Common causes:
+  - project_home in the WSGI file doesn&#x27;t match where apollo.py
+    actually lives
+  - The Virtualenv field on the Web tab points somewhere that
+    doesn&#x27;t have the packages installed
+  - DATABASE_URL points at a host the free tier can&#x27;t reach
+    (PythonAnywhere free accounts have a whitelist for outbound
+    connections; the bundled MySQL service is always allowed)
+
+
+----------------------------------------------------------------
+7. Re-running install.py
+----------------------------------------------------------------
+
+Safe to re-run. It will:
+  - Offer to reuse an existing venv/conda env (answer Y).
+  - Re-prompt for every env var (defaults shown match what you
+    entered before only if you re-paste them).
+  - Overwrite `.env` and `wsgi_snippet.py` with the new values.
+
+If you change env vars on a PythonAnywhere deployment, you must
+re-paste the new `wsgi_snippet.py` into the WSGI file and hit
+Reload — editing `.env` alone does nothing for the WSGI worker.
+
+
+----------------------------------------------------------------
+8. Common gotchas (real things that have bitten this install)
+----------------------------------------------------------------
+
+Password-reset emails never arrive (Resend)
+-------------------------------------------
+Symptom: forgot-password flow looks like it works in the UI, but
+no email shows up.
+
+In order of likelihood:
+
+  a. Domain added in Resend but not VERIFIED.
+     Adding the DNS records at your registrar AND pasting them
+     into Resend is not enough — you also have to click &quot;Verify
+     DNS Records&quot; on the Resend Domains page and wait for every
+     record to flip to green. Until the domain status reads
+     &quot;Verified&quot;, Resend silently refuses to deliver mail from
+     senders on it. This is the #1 cause; check it first.
+
+     Quick check from a shell:
+         dig TXT resend._domainkey.&lt;yourdomain&gt; +short
+         dig TXT &lt;yourdomain&gt; +short         # SPF
+         dig MX  send.&lt;yourdomain&gt; +short
+     All three should return the values Resend gave you. If any
+     are empty, DNS hasn&#x27;t propagated yet (or was entered at the
+     wrong subdomain level — some registrars auto-append the
+     domain, producing `send.&lt;domain&gt;.&lt;domain&gt;`).
+
+  b. Still using the sandbox sender (`onboarding@resend.dev`).
+     The sandbox sender only delivers to addresses you&#x27;ve
+     explicitly verified in the Resend dashboard. Switch
+     RESEND_FROM to an address on your own verified domain.
+
+  c. WSGI file edited but green Reload button not clicked.
+     The worker keeps running with the old env vars until you
+     Reload.
+
+  d. `resend` package not installed in the venv the Web tab
+     points at. Activate that exact venv and `pip install resend`,
+     then Reload.
+
+  e. PythonAnywhere free-tier outbound whitelist (rare now —
+     `api.resend.com` is on the list, but check the error log
+     for connection timeouts mentioning resend.com if nothing
+     else fits).
+
+Diagnostic order:
+  1. Resend dashboard → Emails log. If the request appears there,
+     Apollo successfully called Resend; the problem is downstream
+     (delivery, bounce, spam). If it doesn&#x27;t appear, Apollo never
+     reached Resend → check the PA error log.
+  2. PA Web tab → Error log. Apollo prints clear messages:
+       &quot;RESEND_API_KEY is set but the `resend` package is not
+        installed&quot;          → cause (d)
+       &quot;Would send email (RESEND_API_KEY not set)&quot;
+                            → cause (c) or env var missing in WSGI
+       &quot;Failed to send email ... via Resend: &lt;error&gt;&quot;
+                            → Resend rejected it; read the error
+                              (usually cause (a) or (b))
+  3. Resend Domains page → confirm status reads &quot;Verified&quot;, not
+     &quot;Pending&quot;.
+
+
+`.virtualenvs` is a parent directory, not a venv
+-------------------------------------------------
+On PythonAnywhere, `/home/&lt;user&gt;/.virtualenvs` holds many
+virtualenvs but isn&#x27;t one itself. Point install.py (and the Web
+tab&#x27;s Virtualenv field) at a subdirectory like
+`/home/&lt;user&gt;/.virtualenvs/apollo`, not the parent folder.
+
+
+WSGI file changes don&#x27;t take effect
+------------------------------------
+You must click the green &quot;Reload&quot; button on the Web tab after
+every change to the WSGI file. Saving the file alone doesn&#x27;t
+restart the worker.
+
+
+Source code path mismatch
+--------------------------
+The Web tab&#x27;s &quot;Source code&quot; field and the `project_home` value
+inside the WSGI file must both point to the directory containing
+`apollo.py`. If they disagree, you&#x27;ll get import errors in the
+error log.
+</pre>
+        </div>
+        <p class="docs-footer">Apollo documentation · generated from the
+        project Markdown by <code>documentation/build_docs.py</code>.</p>
+    </main>
+</body>
+</html>

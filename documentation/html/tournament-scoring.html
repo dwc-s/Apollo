@@ -1,0 +1,330 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Apollo Docs · Internal Scoring Procedures</title>
+    <link rel="stylesheet" href="/static/fonts/apollo-fonts.css">
+    <link rel="stylesheet" type="text/css" href="/static/style.css">
+    <style>
+.docs-body { padding: 0; padding-left: 240px; }
+.docs-sidebar {
+    position: fixed; top: 0; left: 0; bottom: 0; width: 200px;
+    background-color: #b3c6e3; padding: 22px 16px; box-sizing: border-box;
+    overflow-y: auto; display: flex; flex-direction: column; gap: 6px;
+    box-shadow: 2px 0 8px rgba(99, 106, 128, 0.18); z-index: 500;
+}
+.docs-sidebar-label {
+    font-family: "Quantico", sans-serif; font-weight: 700; font-size: 0.7rem;
+    letter-spacing: 0.12em; text-transform: uppercase; color: #5a6a86;
+    margin: 4px 6px 6px;
+}
+.docs-sidebar .docs-nav-group {
+    font-family: "Quantico", sans-serif; font-weight: 700; font-size: 0.68rem;
+    letter-spacing: 0.1em; text-transform: uppercase; color: #7a89a6;
+    margin: 12px 6px 2px;
+}
+.docs-sidebar a.docs-nav-link {
+    display: block; padding: 6px 8px; border-radius: 6px;
+    font-family: "Quantico", sans-serif; font-weight: 700; font-size: 0.82rem;
+    color: #1a3a5c; text-decoration: none; transition: background-color 0.15s;
+}
+.docs-sidebar a.docs-nav-link:hover { background-color: #95abcf; }
+.docs-sidebar a.docs-nav-link.active { background-color: #95abcf; }
+.docs-sidebar-foot { margin-top: auto; padding-top: 12px; }
+.docs-sidebar a.docs-back {
+    font-family: "Quantico", sans-serif; font-weight: 700; font-size: 0.82rem;
+    color: #5a6a86; text-decoration: none;
+}
+.docs-sidebar a.docs-back:hover { text-decoration: underline; }
+
+.docs-main { max-width: 920px; margin: 0 auto; padding: 28px 24px 60px; }
+.docs-card {
+    background-color: #eaf2fb; border-radius: 16px; padding: 36px 44px;
+    box-shadow: 0 2px 10px rgba(99, 106, 128, 0.18);
+    font-family: "Quantico", sans-serif; color: #243b54; line-height: 1.6;
+}
+.docs-card h1 {
+    font-family: "Bungee Shade", sans-serif; color: #a1d8ed;
+    -webkit-text-stroke: 1.5px #636a80; font-size: 2.5rem; line-height: 1.15;
+    margin: 0 0 22px;
+}
+.docs-card h2 {
+    font-family: "Quantico", sans-serif; font-weight: 700; color: #1a3a5c;
+    font-size: 1.5rem; margin: 34px 0 12px; padding-bottom: 6px;
+    border-bottom: 2px solid #b3c6e3;
+}
+.docs-card h3 {
+    font-family: "Quantico", sans-serif; font-weight: 700; color: #1a3a5c;
+    font-size: 1.15rem; margin: 24px 0 8px;
+}
+.docs-card h4 { color: #1a3a5c; margin: 18px 0 6px; }
+.docs-card p, .docs-card li { font-size: 0.95rem; }
+.docs-card a { color: #3a6ea5; text-decoration: none; }
+.docs-card a:hover { text-decoration: underline; }
+.docs-card code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    background-color: #d6e4f0; color: #1a3a5c; padding: 1px 6px;
+    border-radius: 4px; font-size: 0.86em;
+}
+.docs-card pre {
+    background-color: #1a3a5c; color: #d6e4f0; padding: 16px 18px;
+    border-radius: 10px; overflow-x: auto; line-height: 1.45;
+}
+.docs-card pre code { background: none; color: inherit; padding: 0; }
+.docs-card pre.docs-plaintext {
+    white-space: pre-wrap; word-break: break-word; font-size: 0.82rem;
+}
+.docs-card blockquote {
+    margin: 16px 0; padding: 8px 18px; border-left: 4px solid #95abcf;
+    background-color: #dde9f6; border-radius: 0 8px 8px 0; color: #33506e;
+}
+.docs-card table {
+    border-collapse: collapse; width: 100%; margin: 16px 0; font-size: 0.88rem;
+}
+.docs-card th, .docs-card td {
+    border: 1px solid #b3c6e3; padding: 7px 11px; text-align: left;
+    vertical-align: top;
+}
+.docs-card th { background-color: #b3c6e3; color: #1a3a5c; font-weight: 700; }
+.docs-card tr:nth-child(even) td { background-color: #e1ecf8; }
+.docs-card hr { border: 0; border-top: 1px solid #b3c6e3; margin: 28px 0; }
+.docs-footer {
+    text-align: center; font-family: "Quantico", sans-serif; font-size: 0.78rem;
+    color: #5a6a86; margin-top: 22px;
+}
+
+/* index */
+.docs-index-grid {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap: 18px; margin: 8px 0 6px;
+}
+.docs-index-card {
+    display: block; background-color: #dde9f6; border-radius: 12px;
+    padding: 18px 20px; text-decoration: none; color: #1a3a5c;
+    border: 1px solid #c2d3ea; transition: transform 0.12s, box-shadow 0.12s;
+}
+.docs-index-card:hover {
+    transform: translateY(-2px); box-shadow: 0 4px 12px rgba(99,106,128,0.22);
+    text-decoration: none;
+}
+.docs-index-card .t {
+    font-family: "Quantico", sans-serif; font-weight: 700; font-size: 1.05rem;
+    color: #1a3a5c; display: block; margin-bottom: 6px;
+}
+.docs-index-card .d { font-size: 0.86rem; color: #3f5b78; }
+
+@media (max-width: 760px) {
+    .docs-body { padding-left: 0; }
+    .docs-sidebar {
+        position: static; width: auto; box-shadow: none; flex-direction: row;
+        flex-wrap: wrap; align-items: center;
+    }
+    .docs-sidebar-foot { margin: 0 0 0 auto; }
+    .docs-main { padding: 18px 14px 40px; }
+    .docs-card { padding: 24px 20px; }
+}
+</style>
+</head>
+<body class="docs-body">
+    <aside class="docs-sidebar">
+        <a href="/" class="side-nav-brand">Apollo</a>
+        <div class="docs-sidebar-label">Documentation</div>
+        <a href="index.html" class="docs-nav-link">Home</a>
+        <div class="docs-nav-group">Project</div>
+        <a href="readme.html" class="docs-nav-link">Overview</a>
+        <a href="formulas.html" class="docs-nav-link">Formulas & Math Reference</a>
+        <a href="install.html" class="docs-nav-link">Install & Deploy Guide</a>
+        <div class="docs-nav-group">Tournament</div>
+        <a href="tournament-overview.html" class="docs-nav-link">Overview</a>
+        <a href="tournament-rules.html" class="docs-nav-link">Tournament Round Reference</a>
+        <a href="tournament-scoring.html" class="docs-nav-link active">Internal Scoring Procedures</a>
+        <a href="tournament-targets.html" class="docs-nav-link">Tournament Target Faces</a>
+        <div class="docs-sidebar-foot">
+            <a href="/" class="docs-back">‹ Back to app</a>
+        </div>
+    </aside>
+    <main class="docs-main">
+        <div class="docs-card">
+<h1 id="apollo-internal-scoring-procedures">Apollo Internal Scoring Procedures</h1>
+<p>How Apollo tournament mode classifies and tallies shots. The base
+mechanism reuses Apollo's existing <code>target_zones</code> machinery; what's
+new in tournament mode is the <strong>enforcement layer</strong> that locks the
+end size, face, scoring rule, and total-arrow count to the chosen
+round.</p>
+<blockquote>
+<p>For the precise formulas behind scoring and the <code>/analyze</code> statistics,
+see <a href="formulas.html">FORMULAS.md</a>.</p>
+</blockquote>
+<h2 id="coordinate-system">Coordinate system</h2>
+<p>Every shot is stored as <code>(x_coord, y_coord)</code> in <strong>physical millimetres
+from the calibrated target center</strong>. +X is right, +Y is up. The
+sentinel <code>(100000, 100000)</code> marks a miss. This is the same system the
+<code>/sesh</code> route uses; tournament mode does <strong>not</strong> introduce a new
+coordinate convention.</p>
+<h2 id="line-cutter-rule">Line-cutter rule</h2>
+<p>Apollo implements the World Archery / NFAA / USAA line-cutter convention:</p>
+<blockquote>
+<p>If any portion of the arrow shaft touches the dividing line between
+two scoring zones, the arrow scores the higher value of the two.</p>
+</blockquote>
+<p>This is implemented in <code>_classify_shot()</code> in <code>apollo.py</code>:</p>
+<pre><code class="language-python">shaft_radius = _parse_shaft_diameter_mm(shaft_diameter_mm) / 2.0
+dist = math.sqrt(x*x + y*y) - shaft_radius
+if dist &lt; 0:
+    dist = 0.0
+for i, z in enumerate(zones):  # innermost-out
+    if dist &lt;= float(z['radius_mm']):
+        return i
+return None  # out of all zones — scores 0
+</code></pre>
+<p>The shaft diameter comes from the arrow row when present; the fallback
+is <code>DEFAULT_SHAFT_DIAMETER_MM</code> (6 mm) — a reasonable mid-weight target
+shaft. The Precision-mode cursor on the session page renders a circle
+of the same radius so the archer sees what the scoring code will see.</p>
+<h2 id="zone-definitions-per-round">Zone definitions per round</h2>
+<p>Each round in <code>TOURNAMENT_ROUNDS</code> references a <strong>face key</strong> (e.g.
+<code>wa_122</code>) that maps to a target row in the <code>targets</code> table plus a
+list of <code>target_zones</code> rows. On first visit to <code>/tournament</code>, Apollo
+seeds any missing tournament faces for the current user — same
+mechanism as <code>_seed_user_default_target()</code>. The seeded zones use the
+official WA / NFAA ring radii so the line-cutter calculation produces
+the published score automatically. Tournament face rows are named
+with the ASCII prefix <code>[Tournament]</code> so the seeder can find them
+deterministically and the user sees a distinct group in the targets
+dropdown. (Earlier builds used a 🏆 emoji prefix; the seeder
+auto-renames any leftover rows on first run so the rename is
+transparent.)</p>
+<p>Ring radii are stored in mm; faces are stored at their physical
+diameter (e.g. 122 cm = 1220 mm). The image scale (<code>image_size_px</code>)
+matches the bundled image file — see <code>targets.md</code> for which file is
+used for each face.</p>
+<h3 id="inner-10-x-ring-handling">Inner-10 (X-ring) handling</h3>
+<p>Two scoring modes are encoded:</p>
+<ul>
+<li><strong>Standard</strong> (recurve, all 1440 and outdoor): inner-10 and outer-10
+  both score 10. The X is tracked <strong>separately</strong> for tiebreakers (count
+  of Xs, then count of 10s) — see "Round totals" below.</li>
+<li><strong>Compound-inner-10</strong> (compound on WA Indoor 18m, NFAA Vegas 3-spot):
+  the inner-10 ring is the only zone scoring 10. The "outer 10" scores
+  9. Implemented by inserting an additional zone row whose
+  <code>point_value=9</code> covers the band between the X-ring radius and the
+  classic-10 radius, with the X-ring (<code>point_value=10</code>) inside it.</li>
+</ul>
+<p>The scoring rule for a round is captured by <code>scoring_rule</code> in the
+round config: <code>wa_10_zone</code>, <code>wa_10_zone_compound</code>, <code>wa_6_zone</code>,
+<code>wa_6_zone_compound</code>, <code>nfaa_5_ring</code>, <code>nfaa_5_ring_5spot</code>,
+<code>nfaa_3_ring_field</code>. The rule string selects which set of zone rows
+to seed for that face.</p>
+<h2 id="end-size-enforcement">End size enforcement</h2>
+<p>The existing <code>/sesh</code> route uses a "quiver size" lock: once the first
+arrow of a quiver fires, the size cannot change until the quiver
+completes. Tournament mode reuses that machinery but <strong>fixes the
+quiver size to the round's <code>arrows_per_end</code></strong> — the input is rendered
+read-only and the server rejects any POST with a different value (HTTP
+400). This is what makes the score totals reproducible: every end has
+exactly <code>arrows_per_end</code> arrows, so end indexes line up with the
+official scorecard.</p>
+<h2 id="round-completion">Round completion</h2>
+<p>A tournament session is "complete" when total arrows shot ==
+<code>round.total_arrows</code>. The handler tracks this client-side
+(<code>arrows_shot_count</code>) and server-side (<code>COUNT(*)</code> on the <code>apollo</code>
+table filtered by <code>(user_id, session_id)</code>). When the count reaches
+the limit:</p>
+<ol>
+<li>The shot form disables further submissions and shows a
+   "Round complete" banner.</li>
+<li>The "End round" button appears, routing to <code>/end_session</code> which
+   finalizes timestamps and shows the existing end-of-session stats
+   plus a tournament-specific summary block.</li>
+</ol>
+<p>The user can still end the round early via the regular End-session
+link; the summary just shows partial progress with <code>arrows_shot /
+total_arrows</code> and the partial score.</p>
+<h2 id="round-totals">Round totals</h2>
+<p>For every completed tournament session, Apollo computes:</p>
+<ul>
+<li><strong>Total score</strong> — sum of <code>_score_one_shot()</code> over every arrow in the
+  session.</li>
+<li><strong>X count</strong> — count of arrows whose <code>dist - shaft_radius</code> falls
+  inside the X-ring radius for that face. The X-ring radius is
+  encoded per-face in <code>TOURNAMENT_FACES</code>; on faces with no X ring
+  (NFAA 5-spot uses 5/X like Vegas) the count is the number of arrows
+  in the innermost zone.</li>
+<li><strong>10 count</strong> — analogous, for the 10 ring (or 5 ring on NFAA indoor
+  rounds — the max-value ring).</li>
+<li><strong>Arrows shot / arrows planned</strong> — <code>shots_in_session / round.total_arrows</code>.</li>
+<li><strong>End table</strong> — per-end array of <code>[arrow_scores..., end_total,
+  running_total]</code> for display.</li>
+</ul>
+<p>These are computed on the fly from the <code>apollo</code> table on every
+<code>/tournament</code> GET — no separate <code>tournament_scores</code> table. Storage
+of "is this a tournament round" lives in <code>session_tags</code> (the round
+key is added as a tag prefixed <code>tournament:</code>, e.g.
+<code>tournament:wa_720_recurve</code>), so a tournament session survives
+through the existing previous-sessions list and analytics without
+needing a schema migration. The single source of truth for which
+round a session was is its tag.</p>
+<h2 id="time-limits">Time limits</h2>
+<p>Apollo does <strong>not</strong> auto-stop ends at the timed limit. The session
+page displays the round's time-per-end so the user can use their
+own clock or a club timer. Adding a soft countdown is a future
+enhancement — the route surfaces the limit in seconds in the round
+config so the UI can render a timer ring when it's ready.</p>
+<h2 id="distance-enforcement">Distance enforcement</h2>
+<p>Tournament rounds with multiple distances (1440, NFAA 900, course rounds)
+prompt the user to confirm distance at the start of each new segment.
+Apollo stores the round's currently-active segment in the Flask
+session cookie under <code>tournament_segment_idx</code>; advancing happens when
+the segment's arrow count is hit. The distance field on the shot row
+records what the user confirmed for that arrow's segment.</p>
+<h2 id="equipment-class">Equipment class</h2>
+<p>The round config carries an <code>equipment_class</code> hint (<code>recurve</code>,
+<code>compound</code>, <code>barebow</code>, <code>any</code>) which controls:</p>
+<ul>
+<li>which target face is shown (e.g. compound on WA outdoor → 80 cm
+  6-ring at 50 m)</li>
+<li>which scoring rule applies (compound-inner-10 on 18 m)</li>
+</ul>
+<p>The user's actual bow choice comes from the existing bows table —
+Apollo does not enforce that the selected bow's <code>bow_type</code> matches
+the round's <code>equipment_class</code>. A warning is shown if it doesn't.</p>
+<h2 id="live-match-play-multi-archer">Live match play (multi-archer)</h2>
+<p>Match-play rounds (<code>wa_match_*</code>) can be run as a <strong>live match</strong> on one
+shared device — 2 to 4 archers taking turns at the canvas. The routes
+are <code>/tournament/match</code> (setup form, collects archer names + emails) and
+<code>/tournament/match/start</code>:</p>
+<ul>
+<li><strong>One session per archer.</strong> <code>tournament_match_start</code> mints a separate
+  <code>session_id</code> for each archer (all owned by the device owner), tags them
+  with a shared match id, and stores the roster + an active-archer
+  pointer in the Flask session cookie.</li>
+<li><strong>Turn taking.</strong> The active archer's <code>session_id</code> is mirrored into
+  <code>session['session_id']</code> so the normal single-archer <code>/tournament</code>
+  render path is reused unchanged; the POST handler swaps the active
+  archer at each completed end (AB-CD detail order).</li>
+<li><strong>Scoring per round system.</strong> Each archer keeps a separate scorecard.
+  For <strong>cumulative</strong> rounds the higher running total wins; for the
+  <strong>set system</strong> (<code>wa_match_recurve_set</code>), <code>_match_set_scoring</code> awards 2
+  set points to the higher end total (1 each on a tie), first to 6 set
+  points wins, and a 5–5 tie is flagged for a single-arrow shoot-off
+  (WA 12.1.4.1).</li>
+</ul>
+<h2 id="what-apollos-tournament-mode-does-not-do">What Apollo's tournament mode does NOT do</h2>
+<p>By design, tournament mode is a personal-tracking layer over /sesh —
+not a sanctioned-event tool. It deliberately leaves out:</p>
+<ul>
+<li>Official judges / arrow-witnessing protocols (rebound arrows,
+  hangers, bouncers).</li>
+<li>Team-round shooting orders (AB-BA-AB alternating team shots).</li>
+<li>Automated end-clocks and audible signals.</li>
+<li>Automated tiebreak shoot-off arrows (a 5–5 set tie is <em>flagged</em>, but
+  the deciding arrow is shot and entered manually; Apollo also shows the
+  X count and inner-10 count needed to break a tie by hand).</li>
+</ul>
+        </div>
+        <p class="docs-footer">Apollo documentation · generated from the
+        project Markdown by <code>documentation/build_docs.py</code>.</p>
+    </main>
+</body>
+</html>

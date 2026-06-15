@@ -176,7 +176,7 @@ except ImportError:
     resend = None
 from flask import (
     Flask, render_template, request, redirect, url_for, session, Response, abort, flash,
-    jsonify, g,
+    jsonify, g, send_from_directory,
 )
 from markupsafe import Markup
 from flask_wtf.csrf import CSRFProtect
@@ -14135,11 +14135,38 @@ def _build_predict_segments(form, user_id):
 def tools():
     """Standalone archery calculators. Pure client-side math — no DB.
 
-    Five tools on one page (wind drift, sight-mark interpolator, spine
-    selector, FOC, kinetic energy). The template does
-    all the math in JS so the user gets live updates and we don't burn
-    a server round-trip per keystroke."""
+    Six tools on one page (wind drift, sight-mark interpolator, spine
+    selector, FOC, arrow speed, kinetic energy & momentum). The template
+    does all the math in JS so the user gets live updates and we don't
+    burn a server round-trip per keystroke."""
     return render_template('tools.html')
+
+
+# Pre-built, app-styled HTML documentation lives here (see
+# documentation/build_docs.py). Served read-only and public: it's the
+# open-source project's own docs, linked from both the public splash page
+# and the in-app side nav, so it must work for logged-out visitors too.
+DOCS_HTML_DIR = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), 'documentation', 'html'
+)
+
+
+# Registered WITH a trailing slash on purpose: the index page uses relative
+# links (readme.html, formulas.html, …), which only resolve under /docs/ when
+# the index URL itself ends in a slash. Flask 308-redirects a bare /docs here.
+@app.route('/docs/', methods=['GET'])
+def docs_index():
+    """Documentation home — the generated index page."""
+    return send_from_directory(DOCS_HTML_DIR, 'index.html')
+
+
+@app.route('/docs/<path:page>', methods=['GET'])
+def docs_page(page):
+    """Serve a generated documentation page. Only .html files; the path is
+    constrained by send_from_directory so it can't escape the docs dir."""
+    if not page.endswith('.html'):
+        abort(404)
+    return send_from_directory(DOCS_HTML_DIR, page)
 
 
 @app.route('/predict', methods=['GET', 'POST'])

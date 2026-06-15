@@ -1,0 +1,548 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Apollo Docs · Tournament Round Reference</title>
+    <link rel="stylesheet" href="/static/fonts/apollo-fonts.css">
+    <link rel="stylesheet" type="text/css" href="/static/style.css">
+    <style>
+.docs-body { padding: 0; padding-left: 240px; }
+.docs-sidebar {
+    position: fixed; top: 0; left: 0; bottom: 0; width: 200px;
+    background-color: #b3c6e3; padding: 22px 16px; box-sizing: border-box;
+    overflow-y: auto; display: flex; flex-direction: column; gap: 6px;
+    box-shadow: 2px 0 8px rgba(99, 106, 128, 0.18); z-index: 500;
+}
+.docs-sidebar-label {
+    font-family: "Quantico", sans-serif; font-weight: 700; font-size: 0.7rem;
+    letter-spacing: 0.12em; text-transform: uppercase; color: #5a6a86;
+    margin: 4px 6px 6px;
+}
+.docs-sidebar .docs-nav-group {
+    font-family: "Quantico", sans-serif; font-weight: 700; font-size: 0.68rem;
+    letter-spacing: 0.1em; text-transform: uppercase; color: #7a89a6;
+    margin: 12px 6px 2px;
+}
+.docs-sidebar a.docs-nav-link {
+    display: block; padding: 6px 8px; border-radius: 6px;
+    font-family: "Quantico", sans-serif; font-weight: 700; font-size: 0.82rem;
+    color: #1a3a5c; text-decoration: none; transition: background-color 0.15s;
+}
+.docs-sidebar a.docs-nav-link:hover { background-color: #95abcf; }
+.docs-sidebar a.docs-nav-link.active { background-color: #95abcf; }
+.docs-sidebar-foot { margin-top: auto; padding-top: 12px; }
+.docs-sidebar a.docs-back {
+    font-family: "Quantico", sans-serif; font-weight: 700; font-size: 0.82rem;
+    color: #5a6a86; text-decoration: none;
+}
+.docs-sidebar a.docs-back:hover { text-decoration: underline; }
+
+.docs-main { max-width: 920px; margin: 0 auto; padding: 28px 24px 60px; }
+.docs-card {
+    background-color: #eaf2fb; border-radius: 16px; padding: 36px 44px;
+    box-shadow: 0 2px 10px rgba(99, 106, 128, 0.18);
+    font-family: "Quantico", sans-serif; color: #243b54; line-height: 1.6;
+}
+.docs-card h1 {
+    font-family: "Bungee Shade", sans-serif; color: #a1d8ed;
+    -webkit-text-stroke: 1.5px #636a80; font-size: 2.5rem; line-height: 1.15;
+    margin: 0 0 22px;
+}
+.docs-card h2 {
+    font-family: "Quantico", sans-serif; font-weight: 700; color: #1a3a5c;
+    font-size: 1.5rem; margin: 34px 0 12px; padding-bottom: 6px;
+    border-bottom: 2px solid #b3c6e3;
+}
+.docs-card h3 {
+    font-family: "Quantico", sans-serif; font-weight: 700; color: #1a3a5c;
+    font-size: 1.15rem; margin: 24px 0 8px;
+}
+.docs-card h4 { color: #1a3a5c; margin: 18px 0 6px; }
+.docs-card p, .docs-card li { font-size: 0.95rem; }
+.docs-card a { color: #3a6ea5; text-decoration: none; }
+.docs-card a:hover { text-decoration: underline; }
+.docs-card code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    background-color: #d6e4f0; color: #1a3a5c; padding: 1px 6px;
+    border-radius: 4px; font-size: 0.86em;
+}
+.docs-card pre {
+    background-color: #1a3a5c; color: #d6e4f0; padding: 16px 18px;
+    border-radius: 10px; overflow-x: auto; line-height: 1.45;
+}
+.docs-card pre code { background: none; color: inherit; padding: 0; }
+.docs-card pre.docs-plaintext {
+    white-space: pre-wrap; word-break: break-word; font-size: 0.82rem;
+}
+.docs-card blockquote {
+    margin: 16px 0; padding: 8px 18px; border-left: 4px solid #95abcf;
+    background-color: #dde9f6; border-radius: 0 8px 8px 0; color: #33506e;
+}
+.docs-card table {
+    border-collapse: collapse; width: 100%; margin: 16px 0; font-size: 0.88rem;
+}
+.docs-card th, .docs-card td {
+    border: 1px solid #b3c6e3; padding: 7px 11px; text-align: left;
+    vertical-align: top;
+}
+.docs-card th { background-color: #b3c6e3; color: #1a3a5c; font-weight: 700; }
+.docs-card tr:nth-child(even) td { background-color: #e1ecf8; }
+.docs-card hr { border: 0; border-top: 1px solid #b3c6e3; margin: 28px 0; }
+.docs-footer {
+    text-align: center; font-family: "Quantico", sans-serif; font-size: 0.78rem;
+    color: #5a6a86; margin-top: 22px;
+}
+
+/* index */
+.docs-index-grid {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap: 18px; margin: 8px 0 6px;
+}
+.docs-index-card {
+    display: block; background-color: #dde9f6; border-radius: 12px;
+    padding: 18px 20px; text-decoration: none; color: #1a3a5c;
+    border: 1px solid #c2d3ea; transition: transform 0.12s, box-shadow 0.12s;
+}
+.docs-index-card:hover {
+    transform: translateY(-2px); box-shadow: 0 4px 12px rgba(99,106,128,0.22);
+    text-decoration: none;
+}
+.docs-index-card .t {
+    font-family: "Quantico", sans-serif; font-weight: 700; font-size: 1.05rem;
+    color: #1a3a5c; display: block; margin-bottom: 6px;
+}
+.docs-index-card .d { font-size: 0.86rem; color: #3f5b78; }
+
+@media (max-width: 760px) {
+    .docs-body { padding-left: 0; }
+    .docs-sidebar {
+        position: static; width: auto; box-shadow: none; flex-direction: row;
+        flex-wrap: wrap; align-items: center;
+    }
+    .docs-sidebar-foot { margin: 0 0 0 auto; }
+    .docs-main { padding: 18px 14px 40px; }
+    .docs-card { padding: 24px 20px; }
+}
+</style>
+</head>
+<body class="docs-body">
+    <aside class="docs-sidebar">
+        <a href="/" class="side-nav-brand">Apollo</a>
+        <div class="docs-sidebar-label">Documentation</div>
+        <a href="index.html" class="docs-nav-link">Home</a>
+        <div class="docs-nav-group">Project</div>
+        <a href="readme.html" class="docs-nav-link">Overview</a>
+        <a href="formulas.html" class="docs-nav-link">Formulas & Math Reference</a>
+        <a href="install.html" class="docs-nav-link">Install & Deploy Guide</a>
+        <div class="docs-nav-group">Tournament</div>
+        <a href="tournament-overview.html" class="docs-nav-link">Overview</a>
+        <a href="tournament-rules.html" class="docs-nav-link active">Tournament Round Reference</a>
+        <a href="tournament-scoring.html" class="docs-nav-link">Internal Scoring Procedures</a>
+        <a href="tournament-targets.html" class="docs-nav-link">Tournament Target Faces</a>
+        <div class="docs-sidebar-foot">
+            <a href="/" class="docs-back">‹ Back to app</a>
+        </div>
+    </aside>
+    <main class="docs-main">
+        <div class="docs-card">
+<h1 id="tournament-round-reference">Tournament Round Reference</h1>
+<p>Round-by-round reference for the formats Apollo supports in
+tournament mode. Each round entry below lists the spec that the
+route's <code>TOURNAMENT_ROUNDS</code> dict encodes. The internal <code>round_key</code>
+is the string Apollo uses in URLs and tags.</p>
+<p>Conventions:
+- Distances given in the unit the rule organization publishes them in
+  (m for WA / USAA, yd for NFAA). Apollo stores all shot distances in
+  metres; yards are converted at the round definition.
+- "Arrows / end" is the count shot in one timed end. For multi-spot
+  faces, the rule "one arrow per spot" is documented for the user
+  and not enforced — Apollo records each arrow on whichever spot
+  the user clicks.
+- Ring radii are not repeated here; see <code>targets.md</code>.</p>
+<hr />
+<h2 id="world-archery">World Archery</h2>
+<p>Source: WA Rulebook (worldarchery.sport/rulebook). Book 2 = Events,
+Book 3 = Targets &amp; Equipment, Book 4 = Field &amp; 3D.</p>
+<h3 id="wa_720_recurve-wa-720-recurve"><code>wa_720_recurve</code> — WA 720 (Recurve)</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Face</td>
+<td><strong>122 cm</strong> 10-zone</td>
+</tr>
+<tr>
+<td>Distance</td>
+<td><strong>70 m</strong></td>
+</tr>
+<tr>
+<td>Arrows / end</td>
+<td><strong>6</strong> (commonly shot 2 × 3)</td>
+</tr>
+<tr>
+<td>Ends</td>
+<td><strong>12</strong></td>
+</tr>
+<tr>
+<td>Total arrows</td>
+<td><strong>72</strong></td>
+</tr>
+<tr>
+<td>Max score</td>
+<td><strong>720</strong></td>
+</tr>
+<tr>
+<td>End time</td>
+<td><strong>240 s</strong></td>
+</tr>
+<tr>
+<td>Scoring</td>
+<td>Standard 10-zone, line cutter, X tracked separately</td>
+</tr>
+</tbody>
+</table>
+<h3 id="wa_720_compound-wa-720-compound"><code>wa_720_compound</code> — WA 720 (Compound)</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Face</td>
+<td><strong>80 cm</strong> 6-ring</td>
+</tr>
+<tr>
+<td>Distance</td>
+<td><strong>50 m</strong></td>
+</tr>
+<tr>
+<td>Arrows / end</td>
+<td><strong>6</strong></td>
+</tr>
+<tr>
+<td>Ends</td>
+<td><strong>12</strong></td>
+</tr>
+<tr>
+<td>Total arrows</td>
+<td><strong>72</strong></td>
+</tr>
+<tr>
+<td>Max score</td>
+<td><strong>720</strong></td>
+</tr>
+<tr>
+<td>End time</td>
+<td><strong>240 s</strong></td>
+</tr>
+<tr>
+<td>Scoring</td>
+<td>6-ring face: rings 5–10. Line cutter. X tracked.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="wa_1440_recurve_m-wa_1440_recurve_w-wa-1440-recurve"><code>wa_1440_recurve_m</code> / <code>wa_1440_recurve_w</code> — WA 1440 (Recurve)</h3>
+<p>Two-day "FITA" round, 144 arrows, max 1440. Men shoot 90/70/50/30 m;
+women shoot 70/60/50/30 m. Compound variants use the 80 cm 6-ring
+face at the short distances.</p>
+<table>
+<thead>
+<tr>
+<th>Distance</th>
+<th>Face</th>
+<th>End size</th>
+<th>Ends</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Long 1</td>
+<td>122 cm</td>
+<td>6</td>
+<td>6</td>
+</tr>
+<tr>
+<td>Long 2</td>
+<td>122 cm</td>
+<td>6</td>
+<td>6</td>
+</tr>
+<tr>
+<td>50 m</td>
+<td>80 cm (10-zone for recurve / 6-ring for compound)</td>
+<td>3</td>
+<td>12</td>
+</tr>
+<tr>
+<td>30 m</td>
+<td>80 cm</td>
+<td>3</td>
+<td>12</td>
+</tr>
+</tbody>
+</table>
+<p>Round keys: <code>wa_1440_recurve_m</code>, <code>wa_1440_recurve_w</code>,
+<code>wa_1440_compound_m</code>, <code>wa_1440_compound_w</code>.</p>
+<h3 id="wa_indoor_18_recurve-wa_indoor_18_compound-wa-indoor-18-m"><code>wa_indoor_18_recurve</code> / <code>wa_indoor_18_compound</code> — WA Indoor 18 m</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Face</td>
+<td><strong>40 cm</strong> 10-zone</td>
+</tr>
+<tr>
+<td>Distance</td>
+<td><strong>18 m</strong></td>
+</tr>
+<tr>
+<td>Arrows / end</td>
+<td><strong>3</strong></td>
+</tr>
+<tr>
+<td>Ends</td>
+<td><strong>20</strong></td>
+</tr>
+<tr>
+<td>Total arrows</td>
+<td><strong>60</strong></td>
+</tr>
+<tr>
+<td>Max score</td>
+<td><strong>600</strong></td>
+</tr>
+<tr>
+<td>End time</td>
+<td><strong>120 s</strong></td>
+</tr>
+<tr>
+<td>Compound</td>
+<td>Inner-10 (X) only scores 10; outer 10 ring scores 9</td>
+</tr>
+</tbody>
+</table>
+<h3 id="wa_indoor_25-wa-indoor-25-m"><code>wa_indoor_25</code> — WA Indoor 25 m</h3>
+<p>60 arrows on the 60 cm face at 25 m. Standard 10-zone scoring; no
+compound inner-10 distinction (the ring is already narrow).</p>
+<h3 id="wa_field_24-wa-field-24-target-marked-round"><code>wa_field_24</code> — WA Field (24-target marked round)</h3>
+<p>24-target course, 3 arrows per target, max 432. Six targets at each
+of the four WA Field face sizes (80 / 60 / 40 / 20 cm) at canonical
+marked distances.</p>
+<h3 id="wa_match_recurve_cum-wa-match-play-recurve-cumulative"><code>wa_match_recurve_cum</code> — WA Match Play — Recurve (cumulative)</h3>
+<p>5 ends × 3 arrows at 70 m on the 122 cm face. Cumulative scoring,
+max 150.</p>
+<h3 id="wa_match_recurve_set-wa-match-play-recurve-set-system"><code>wa_match_recurve_set</code> — WA Match Play — Recurve (set system)</h3>
+<p>5 sets × 3 arrows at 70 m on the 122 cm face. Per set the higher
+total earns 2 set points (1 each on a tie). First to 6 set points
+wins; tie at 5–5 → single-arrow shoot-off. Apollo records per-set
+totals and can run this as a <strong>live match</strong> (2–4 archers on one
+device — see <code>scoring.md</code> § Live match play), computing set points and
+the winner automatically; or you can log one archer and compare against
+an opponent's scorecard manually.</p>
+<h3 id="wa_match_compound-wa-match-play-compound"><code>wa_match_compound</code> — WA Match Play — Compound</h3>
+<p>5 ends × 3 arrows at 50 m on the 80 cm 6-ring face. Cumulative
+scoring, max 150.</p>
+<hr />
+<h2 id="nfaa">NFAA</h2>
+<p>Source: NFAA Constitution &amp; By-Laws (nfaausa.com/rules), 2026/27
+edition. NFAA uses 1–5 scoring on indoor and field rounds.</p>
+<h3 id="nfaa_indoor_blue-nfaa-indoor-single-spot-blue"><code>nfaa_indoor_blue</code> — NFAA Indoor (Single-spot Blue)</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Face</td>
+<td><strong>NFAA 40 cm Indoor Blue</strong> face</td>
+</tr>
+<tr>
+<td>Distance</td>
+<td><strong>20 yards</strong> (~18.29 m)</td>
+</tr>
+<tr>
+<td>Arrows / end</td>
+<td><strong>5</strong></td>
+</tr>
+<tr>
+<td>Ends</td>
+<td><strong>12</strong></td>
+</tr>
+<tr>
+<td>Total arrows</td>
+<td><strong>60</strong></td>
+</tr>
+<tr>
+<td>Max score</td>
+<td><strong>300</strong></td>
+</tr>
+<tr>
+<td>Scoring</td>
+<td>5 (with X inside), 4, 3, 2, 1; line cutter; X = 5, tiebreaker</td>
+</tr>
+</tbody>
+</table>
+<h3 id="nfaa_5spot-nfaa-indoor-5-spot"><code>nfaa_5spot</code> — NFAA Indoor 5-Spot</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Face</td>
+<td><strong>NFAA 5-spot</strong> — 5 small faces with X + 5 ring only</td>
+</tr>
+<tr>
+<td>Distance</td>
+<td><strong>20 yards</strong></td>
+</tr>
+<tr>
+<td>Arrows / end</td>
+<td><strong>5</strong> (one per spot)</td>
+</tr>
+<tr>
+<td>Ends</td>
+<td><strong>12</strong></td>
+</tr>
+<tr>
+<td>Total arrows</td>
+<td><strong>60</strong></td>
+</tr>
+<tr>
+<td>Max score</td>
+<td><strong>300</strong></td>
+</tr>
+</tbody>
+</table>
+<h3 id="nfaa_vegas-vegas-round-nfaa-vegas-shoot"><code>nfaa_vegas</code> — Vegas Round (NFAA Vegas Shoot)</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Face</td>
+<td><strong>40 cm Vegas 3-spot</strong> — 3 faces stacked vertically, rings 6–10</td>
+</tr>
+<tr>
+<td>Distance</td>
+<td><strong>20 yards</strong> (18 m at WA-aligned events)</td>
+</tr>
+<tr>
+<td>Arrows / end</td>
+<td><strong>3</strong> (one per spot)</td>
+</tr>
+<tr>
+<td>Ends</td>
+<td><strong>10</strong></td>
+</tr>
+<tr>
+<td>Total arrows</td>
+<td><strong>30</strong></td>
+</tr>
+<tr>
+<td>Max score</td>
+<td><strong>300</strong></td>
+</tr>
+</tbody>
+</table>
+<h3 id="nfaa_900-nfaa-900-round"><code>nfaa_900</code> — NFAA 900 Round</h3>
+<p>122 cm face at 60 / 50 / 40 yards, 30 arrows at each, total 90,
+max 900. 6 arrows per end, 5 ends per distance.</p>
+<h3 id="nfaa_field_28-nfaa-field-round-28-targets"><code>nfaa_field_28</code> — NFAA Field Round (28 targets)</h3>
+<p>28-target field course; 4 arrows per target; 65 / 50 / 35 / 20 cm
+NFAA field faces (white center). Total 112 arrows, max 560. Adult
+canonical distance schedule encoded in <code>_NFAA_FIELD_28_SCHEDULE_YD</code>.</p>
+<h3 id="nfaa_hunter_28-nfaa-hunter-round-28-targets"><code>nfaa_hunter_28</code> — NFAA Hunter Round (28 targets)</h3>
+<p>Same arrow count and face sizes as Field; hunter face style
+(black face, white spot). Closer distances overall per the
+hunter-round schedule.</p>
+<p>(NFAA Animal Round is omitted — its shoot-until-hit walk-up format
+doesn't fit Apollo's per-shot recording model.)</p>
+<hr />
+<h2 id="usa-archery-usaa">USA Archery (USAA)</h2>
+<p>USAA adopts WA rules for sanctioned events; the rounds below mirror
+the corresponding WA round structurally but carry USAA-branded
+names so they land in the USA Archery section of the selector.</p>
+<table>
+<thead>
+<tr>
+<th>Round key</th>
+<th>Equivalent of</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>usaa_indoor_nationals</code></td>
+<td><code>wa_indoor_18_recurve</code></td>
+</tr>
+<tr>
+<td><code>usaa_outdoor_nationals_recurve</code></td>
+<td><code>wa_720_recurve</code></td>
+</tr>
+<tr>
+<td><code>usaa_outdoor_nationals_compound</code></td>
+<td><code>wa_720_compound</code></td>
+</tr>
+<tr>
+<td><code>usaa_collegiate_indoor</code></td>
+<td><code>wa_indoor_18_recurve</code></td>
+</tr>
+<tr>
+<td><code>usaa_collegiate_outdoor_recurve</code></td>
+<td><code>wa_720_recurve</code></td>
+</tr>
+<tr>
+<td><code>usaa_collegiate_outdoor_compound</code></td>
+<td><code>wa_720_compound</code></td>
+</tr>
+<tr>
+<td><code>usaa_joad_indoor</code></td>
+<td><code>wa_indoor_18_recurve</code></td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="format-families">Format families</h2>
+<p>Internally, every tournament round above is one of three structural
+shapes — see <code>scoring.md</code> for the data model:</p>
+<ol>
+<li><strong>Single-segment timed round</strong> (one distance, one face, N arrows).
+   E.g. WA 720, WA Indoor 18 m, NFAA Indoor Blue, Vegas.</li>
+<li><strong>Multi-segment round</strong> (chained single segments with possibly
+   different faces, distances, and end sizes). E.g. WA 1440, NFAA 900.</li>
+<li><strong>Course round</strong> (24 / 28 targets, per-target arrow groups, no
+   fixed end clock). E.g. WA Field 24, NFAA Field 28, NFAA Hunter 28.</li>
+</ol>
+<p>The active segment's face and distance drive the rendered target and
+the recorded shot distance; the <code>target_id</code> refreshes when the
+segment advances.</p>
+        </div>
+        <p class="docs-footer">Apollo documentation · generated from the
+        project Markdown by <code>documentation/build_docs.py</code>.</p>
+    </main>
+</body>
+</html>

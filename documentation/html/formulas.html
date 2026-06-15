@@ -1,0 +1,570 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Apollo Docs · Formulas & Math Reference</title>
+    <link rel="stylesheet" href="/static/fonts/apollo-fonts.css">
+    <link rel="stylesheet" type="text/css" href="/static/style.css">
+    <style>
+.docs-body { padding: 0; padding-left: 240px; }
+.docs-sidebar {
+    position: fixed; top: 0; left: 0; bottom: 0; width: 200px;
+    background-color: #b3c6e3; padding: 22px 16px; box-sizing: border-box;
+    overflow-y: auto; display: flex; flex-direction: column; gap: 6px;
+    box-shadow: 2px 0 8px rgba(99, 106, 128, 0.18); z-index: 500;
+}
+.docs-sidebar-label {
+    font-family: "Quantico", sans-serif; font-weight: 700; font-size: 0.7rem;
+    letter-spacing: 0.12em; text-transform: uppercase; color: #5a6a86;
+    margin: 4px 6px 6px;
+}
+.docs-sidebar .docs-nav-group {
+    font-family: "Quantico", sans-serif; font-weight: 700; font-size: 0.68rem;
+    letter-spacing: 0.1em; text-transform: uppercase; color: #7a89a6;
+    margin: 12px 6px 2px;
+}
+.docs-sidebar a.docs-nav-link {
+    display: block; padding: 6px 8px; border-radius: 6px;
+    font-family: "Quantico", sans-serif; font-weight: 700; font-size: 0.82rem;
+    color: #1a3a5c; text-decoration: none; transition: background-color 0.15s;
+}
+.docs-sidebar a.docs-nav-link:hover { background-color: #95abcf; }
+.docs-sidebar a.docs-nav-link.active { background-color: #95abcf; }
+.docs-sidebar-foot { margin-top: auto; padding-top: 12px; }
+.docs-sidebar a.docs-back {
+    font-family: "Quantico", sans-serif; font-weight: 700; font-size: 0.82rem;
+    color: #5a6a86; text-decoration: none;
+}
+.docs-sidebar a.docs-back:hover { text-decoration: underline; }
+
+.docs-main { max-width: 920px; margin: 0 auto; padding: 28px 24px 60px; }
+.docs-card {
+    background-color: #eaf2fb; border-radius: 16px; padding: 36px 44px;
+    box-shadow: 0 2px 10px rgba(99, 106, 128, 0.18);
+    font-family: "Quantico", sans-serif; color: #243b54; line-height: 1.6;
+}
+.docs-card h1 {
+    font-family: "Bungee Shade", sans-serif; color: #a1d8ed;
+    -webkit-text-stroke: 1.5px #636a80; font-size: 2.5rem; line-height: 1.15;
+    margin: 0 0 22px;
+}
+.docs-card h2 {
+    font-family: "Quantico", sans-serif; font-weight: 700; color: #1a3a5c;
+    font-size: 1.5rem; margin: 34px 0 12px; padding-bottom: 6px;
+    border-bottom: 2px solid #b3c6e3;
+}
+.docs-card h3 {
+    font-family: "Quantico", sans-serif; font-weight: 700; color: #1a3a5c;
+    font-size: 1.15rem; margin: 24px 0 8px;
+}
+.docs-card h4 { color: #1a3a5c; margin: 18px 0 6px; }
+.docs-card p, .docs-card li { font-size: 0.95rem; }
+.docs-card a { color: #3a6ea5; text-decoration: none; }
+.docs-card a:hover { text-decoration: underline; }
+.docs-card code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    background-color: #d6e4f0; color: #1a3a5c; padding: 1px 6px;
+    border-radius: 4px; font-size: 0.86em;
+}
+.docs-card pre {
+    background-color: #1a3a5c; color: #d6e4f0; padding: 16px 18px;
+    border-radius: 10px; overflow-x: auto; line-height: 1.45;
+}
+.docs-card pre code { background: none; color: inherit; padding: 0; }
+.docs-card pre.docs-plaintext {
+    white-space: pre-wrap; word-break: break-word; font-size: 0.82rem;
+}
+.docs-card blockquote {
+    margin: 16px 0; padding: 8px 18px; border-left: 4px solid #95abcf;
+    background-color: #dde9f6; border-radius: 0 8px 8px 0; color: #33506e;
+}
+.docs-card table {
+    border-collapse: collapse; width: 100%; margin: 16px 0; font-size: 0.88rem;
+}
+.docs-card th, .docs-card td {
+    border: 1px solid #b3c6e3; padding: 7px 11px; text-align: left;
+    vertical-align: top;
+}
+.docs-card th { background-color: #b3c6e3; color: #1a3a5c; font-weight: 700; }
+.docs-card tr:nth-child(even) td { background-color: #e1ecf8; }
+.docs-card hr { border: 0; border-top: 1px solid #b3c6e3; margin: 28px 0; }
+.docs-footer {
+    text-align: center; font-family: "Quantico", sans-serif; font-size: 0.78rem;
+    color: #5a6a86; margin-top: 22px;
+}
+
+/* index */
+.docs-index-grid {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap: 18px; margin: 8px 0 6px;
+}
+.docs-index-card {
+    display: block; background-color: #dde9f6; border-radius: 12px;
+    padding: 18px 20px; text-decoration: none; color: #1a3a5c;
+    border: 1px solid #c2d3ea; transition: transform 0.12s, box-shadow 0.12s;
+}
+.docs-index-card:hover {
+    transform: translateY(-2px); box-shadow: 0 4px 12px rgba(99,106,128,0.22);
+    text-decoration: none;
+}
+.docs-index-card .t {
+    font-family: "Quantico", sans-serif; font-weight: 700; font-size: 1.05rem;
+    color: #1a3a5c; display: block; margin-bottom: 6px;
+}
+.docs-index-card .d { font-size: 0.86rem; color: #3f5b78; }
+
+@media (max-width: 760px) {
+    .docs-body { padding-left: 0; }
+    .docs-sidebar {
+        position: static; width: auto; box-shadow: none; flex-direction: row;
+        flex-wrap: wrap; align-items: center;
+    }
+    .docs-sidebar-foot { margin: 0 0 0 auto; }
+    .docs-main { padding: 18px 14px 40px; }
+    .docs-card { padding: 24px 20px; }
+}
+</style>
+</head>
+<body class="docs-body">
+    <aside class="docs-sidebar">
+        <a href="/" class="side-nav-brand">Apollo</a>
+        <div class="docs-sidebar-label">Documentation</div>
+        <a href="index.html" class="docs-nav-link">Home</a>
+        <div class="docs-nav-group">Project</div>
+        <a href="readme.html" class="docs-nav-link">Overview</a>
+        <a href="formulas.html" class="docs-nav-link active">Formulas & Math Reference</a>
+        <a href="install.html" class="docs-nav-link">Install & Deploy Guide</a>
+        <div class="docs-nav-group">Tournament</div>
+        <a href="tournament-overview.html" class="docs-nav-link">Overview</a>
+        <a href="tournament-rules.html" class="docs-nav-link">Tournament Round Reference</a>
+        <a href="tournament-scoring.html" class="docs-nav-link">Internal Scoring Procedures</a>
+        <a href="tournament-targets.html" class="docs-nav-link">Tournament Target Faces</a>
+        <div class="docs-sidebar-foot">
+            <a href="/" class="docs-back">‹ Back to app</a>
+        </div>
+    </aside>
+    <main class="docs-main">
+        <div class="docs-card">
+<h1 id="apollo-formulas-math-reference">Apollo — Formulas &amp; Math Reference</h1>
+<p>A single catalogue of every scoring, statistical, and predictive formula Apollo
+uses, with the source function and file for each so the document stays traceable.
+Unless noted, coordinates are in <strong>millimetres</strong> with the origin at the centre of
+the target face, and statistics that pool across faces are first <strong>normalized by
+the target half-width</strong> (<code>1.0</code> = the target edge) so 40 cm and 60 cm faces can be
+compared fairly.</p>
+<p>Key shared constants (<code>apollo.py</code>):</p>
+<table>
+<thead>
+<tr>
+<th>Constant</th>
+<th>Value</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>MISS_SENTINEL</code></td>
+<td><code>'100000'</code></td>
+<td><code>x == y == 100000</code> flags a deliberate miss.</td>
+</tr>
+<tr>
+<td><code>DEFAULT_SHAFT_DIAMETER_MM</code></td>
+<td><code>6.0</code></td>
+<td>Fallback shaft Ø when an arrow has none recorded.</td>
+</tr>
+<tr>
+<td><code>_HEAD_TO_HEAD_MIN_SHOTS</code></td>
+<td><code>5</code></td>
+<td>Min shots per piece/tag for a head-to-head comparison.</td>
+</tr>
+<tr>
+<td><code>_CHI2_2DOF_50</code></td>
+<td><code>2·ln 2 ≈ 1.3863</code></td>
+<td>χ²⁻¹(0.50, df=2) — CEP scaling.</td>
+</tr>
+<tr>
+<td><code>_CHI2_2DOF_95</code></td>
+<td><code>2·ln 20 ≈ 5.9915</code></td>
+<td>χ²⁻¹(0.95, df=2) — R95 scaling.</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="1-scoring-geometry">1. Scoring &amp; geometry</h2>
+<h3 id="11-line-cutter-effective-distance">1.1 Line-cutter effective distance</h3>
+<p><code>_classify_shot</code>, <code>_score_one_shot</code>, <code>_shot_is_x</code> (<code>apollo.py</code> ~8218–8400).</p>
+<p>A shot's distance from centre is reduced by the shaft <em>radius</em>, so any part of
+the arrow touching a higher ring scores that ring (the standard line-cutter rule):</p>
+<pre><code>shaft_radius = shaft_diameter_mm / 2          # default 6 mm → 3 mm radius
+d_eff        = max(0, hypot(x, y) − shaft_radius)
+</code></pre>
+<p><code>_classify_shot</code> walks <code>zones</code> innermost-out and returns the first zone whose
+<code>radius_mm ≥ d_eff</code> (index 0 = innermost), or <code>None</code> for a miss or an out-of-zone
+hit. <code>_score_one_shot</code> maps that index to its <code>point_value</code> (0 for <code>None</code>).
+<code>_shot_is_x</code> reuses the same <code>d_eff</code> and tests <code>d_eff ≤ x_ring_radius</code>.</p>
+<h3 id="12-multi-spot-faces-eg-nfaa-5-spot">1.2 Multi-spot faces (e.g. NFAA 5-spot)</h3>
+<p>Same functions, <code>spot_centers_mm</code> branch.</p>
+<p>When a face has multiple identical spots, the shot is scored against the
+<strong>nearest</strong> spot centre:</p>
+<pre><code>d_eff = min over spots of hypot(x − sx, y − sy) − shaft_radius
+</code></pre>
+<p>so a click anywhere on the face lands on the closest scoring spot. Spot centres
+are resolved by <code>_target_multi_spot_centers()</code> (target name → tournament
+<code>face_key</code> → <code>TOURNAMENT_FACES[...]['multi_spot']['centers_mm']</code>).</p>
+<h3 id="13-world-archery-ring-builder">1.3 World Archery ring builder</h3>
+<p><code>_wa_zones_10</code> (and <code>_wa_zones_6</code>, <code>_wa_zones_vegas</code>) (<code>apollo.py</code> ~163).</p>
+<p>For a WA 10-zone face of outer radius <code>R</code>:</p>
+<pre><code>ring_w        = R / 10                  # each scoring ring is 1/10 of the radius
+ring i (0..9): point_value = 10 − i,  outer_radius = (i + 1) · ring_w
+X ring:        point_value = 10,      outer_radius = x_ring_radius_mm
+</code></pre>
+<p>The 6-ring 50 m face keeps the same <code>ring_w = R/10</code> but only prints rings 10..5;
+anything past the 5 ring is a miss.</p>
+<h3 id="14-quiver-end-tournament-aggregation">1.4 Quiver, end &amp; tournament aggregation</h3>
+<p><code>_compute_quiver_score</code>, <code>_compute_tournament_progress</code> (<code>apollo.py</code> ~1471, ~8391).</p>
+<ul>
+<li><strong>Quiver score</strong> = Σ <code>_score_one_shot()</code> over the shots in a quiver.</li>
+<li><strong>Tournament progress</strong> accumulates, per end and as a running total:
+  <code>total_score</code> (Σ points), <code>x_count</code> (Σ <code>_shot_is_x</code>), <code>ten_count</code> (shots equal
+  to the segment's max ring value), and <code>end_total</code> grouped by <code>arrows_per_end</code>.
+  Multi-segment rounds (e.g. WA 1440) resolve each shot's face/end size via
+  <code>_round_segments()</code> / <code>_segment_for_shot()</code>.</li>
+<li><strong>Total arrows in a round</strong> (<code>_round_total_arrows</code>):
+  <code>Σ arrows_per_end · ends</code> over all segments (supersedes any stored count).</li>
+</ul>
+<h3 id="15-set-play-head-to-head-match-points">1.5 Set-play (head-to-head match) points</h3>
+<p>Score-sheet logic (<code>apollo.py</code> ~6055). Per settled end, comparing the two
+archers' end totals (WA 12.1.4.1):</p>
+<pre><code>higher end total → +2 set points;  tie → +1 each.  First to 6 set points wins.
+</code></pre>
+<hr />
+<h2 id="2-shot-cloud-statistics">2. Shot-cloud statistics</h2>
+<p><code>_archery_stats(xs, ys)</code> (<code>apollo.py</code> ~9946) is the workhorse behind most
+<code>/analyze</code> reports. It separates the two archery error modes:</p>
+<p><strong>Accuracy (bias of the group):</strong></p>
+<pre><code>centroid (cx, cy) = (mean x, mean y)
+MPI               = hypot(cx, cy)        # how far the group sits off centre
+bias_xy           = (cx, cy)             # direction to move the sight
+</code></pre>
+<p><strong>Precision (spread about the group's own centroid):</strong></p>
+<pre><code>d_i      = hypot(x_i − cx, y_i − cy)
+MR       = mean(d_i)                                   # mean radius
+var_x    = Σ(x − cx)² / (n − 1)        (n ≥ 2)         # unbiased
+var_y    = Σ(y − cy)² / (n − 1)
+σ_x, σ_y = √var_x, √var_y
+cov_xy   = Σ(x − cx)(y − cy) / (n − 1)
+ρ        = cov_xy / (σ_x · σ_y)                        # 0 if either σ = 0
+σ_r      = √(var_x + var_y)                            # 1σ radius about centroid
+extreme_spread = max pairwise distance (O(n²))
+</code></pre>
+<p><strong>CEP (50%) and R95 (95%) radii</strong> — radius containing that fraction of shots:</p>
+<ul>
+<li><strong>n &lt; 10 — empirical</strong> nearest-rank percentile of the sorted <code>d_i</code>:
+  <code>k = ⌈p·n⌉ − 1</code>, clamped to <code>[0, n−1]</code>.</li>
+<li><strong>n ≥ 10 — fitted.</strong> If the group is near-isotropic
+  (<code>|ρ| &lt; 0.2</code> <strong>and</strong> <code>max σ ≤ 1.2 · min σ</code>), the <strong>Rayleigh</strong> closed form:
+  <code>σ_iso²  = (σ_x² + σ_y²) / 2
+  CEP     = √(_CHI2_2DOF_50 · σ_iso²)   = σ_iso · √(2 ln 2)
+  R95     = √(_CHI2_2DOF_95 · σ_iso²)   = σ_iso · √(2 ln 20)</code>
+  Otherwise (tilted/elongated), use the <strong>covariance eigenvalues</strong>:
+  <code>tr   = σ_x² + σ_y²
+  det  = σ_x²·σ_y² − cov_xy²
+  λ1,2 = tr/2 ± √(tr²/4 − det)
+  geom = √(λ1 · λ2)                     # = √det, the ellipse's equivalent σ²
+  CEP  = √(_CHI2_2DOF_50 · geom),  R95 = √(_CHI2_2DOF_95 · geom)</code></li>
+</ul>
+<p>The general radius identity is <code>R_q = √(χ²⁻¹(q, 2) · σ²)</code>, i.e.
+<code>R_q = σ·√(−2 ln(1 − q))</code> for the isotropic case — see <code>_chi2_ppf_df2</code>.</p>
+<hr />
+<h2 id="3-equipment-tag-head-to-head-tests">3. Equipment / tag head-to-head tests</h2>
+<p><code>_report_equipment_head_to_head</code> (<code>apollo.py</code> ~10362) compares two pieces of kit
+(or two session tags) across <strong>three independent question families</strong>, each with
+its own test and its own Holm-Bonferroni correction. Pairs that ever co-occurred
+in the same session are dropped (<code>_cooccurring_pairs</code>), and each side needs
+≥ <code>_HEAD_TO_HEAD_MIN_SHOTS</code> shots. All inputs are target-half-width normalized.</p>
+<table>
+<thead>
+<tr>
+<th>Question</th>
+<th>Test</th>
+<th>Input</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Accuracy</strong> — do the centroids differ?</td>
+<td>Hotelling's T²</td>
+<td>2D normalized shot vectors</td>
+</tr>
+<tr>
+<td><strong>Precision</strong> — does one group cluster tighter about <em>its own</em> centroid?</td>
+<td>Brown-Forsythe</td>
+<td>distance from each group's own centroid</td>
+</tr>
+<tr>
+<td><strong>Total error</strong> — does one simply land closer to the bull?</td>
+<td>Mann-Whitney U + Cliff's δ</td>
+<td>distance from target centre</td>
+</tr>
+</tbody>
+</table>
+<h3 id="31-mann-whitney-u-total-error-_mann_whitney_u-9696">3.1 Mann-Whitney U (total error) — <code>_mann_whitney_u</code> (~9696)</h3>
+<p>Two-sided; returns the smaller conventional U. Rank-based (so it ignores the
+right-skew and the lower bound at 0 that would trip Welch's t). With scipy it
+calls <code>mannwhitneyu</code>; otherwise the normal approximation with tie + continuity
+correction:</p>
+<pre><code>U1 = R1 − n1(n1+1)/2,   U2 = n1·n2 − U1,   U = min(U1, U2)
+var = (n1·n2/12) · [ (N+1) − Σ t(t²−1) / (N(N−1)) ]      # N = n1+n2, ties t
+z   = (U − n1·n2/2 ∓ 0.5) / √var                         # continuity-corrected
+p   = 2·(1 − Φ(|z|))
+</code></pre>
+<h3 id="32-cliffs-effect-size-_cliffs_delta-9754">3.2 Cliff's δ (effect size) — <code>_cliffs_delta</code> (~9754)</h3>
+<pre><code>δ = (#{a &gt; b} − #{a &lt; b}) / (n1·n2)  ∈ [−1, +1]
+</code></pre>
+<p>For distance-from-centre data, <code>δ &gt; 0</code> means sample <code>a</code> lands farther out (so <code>b</code>
+is the more accurate piece). Paired with the Mann-Whitney p-value.</p>
+<h3 id="33-brown-forsythe-precision-_brown_forsythe-9775">3.3 Brown-Forsythe (precision) — <code>_brown_forsythe</code> (~9775)</h3>
+<p>Median-centered Levene's test. For two groups it reduces to an equal-variance
+t-test on the absolute deviations from each group's median; reported as <code>F = t²</code>:</p>
+<pre><code>z1_i = |a_i − median(a)|,   z2_i = |b_i − median(b)|
+m1, m2 = mean(z1), mean(z2)
+s_pooled = [ Σ(z1−m1)² + Σ(z2−m2)² ] / (n1+n2−2)
+SE = √( s_pooled · (1/n1 + 1/n2) )
+t  = (m1 − m2)/SE,   F = t²,   df = (1, n1+n2−2),   p = _f_sf(F, 1, df2)
+</code></pre>
+<h3 id="34-hotellings-t2-accuracy-_hotelling_t2-9806">3.4 Hotelling's T² (accuracy) — <code>_hotelling_t2</code> (~9806)</h3>
+<p>Two-sample multivariate test on the 2D centroids; needs n ≥ 3 per side and a
+non-singular pooled covariance:</p>
+<pre><code>pooled cov S = [ (n1−1)S1 + (n2−1)S2 ] / (n1+n2−2)
+Δ = (mx1−mx2, my1−my2)
+T² = (n1·n2/(n1+n2)) · Δᵀ S⁻¹ Δ
+F  = T² · df2 / (df1 · (n1+n2−2)),   df1 = 2,  df2 = n1+n2−3
+p  = _f_sf(F, df1, df2)
+</code></pre>
+<h3 id="35-holm-bonferroni-correction-_holm_bonferroni-9853">3.5 Holm-Bonferroni correction — <code>_holm_bonferroni</code> (~9853)</h3>
+<p>Step-down family-wise control, applied <strong>within</strong> each test family. With raw
+p-values sorted ascending and <code>m</code> non-null tests:</p>
+<pre><code>adj_(rank) = min(1, p_(rank) · (m − rank))      # rank = 0 for the smallest p
+</code></pre>
+<p>made monotone (a smaller raw p never yields a larger adjusted p); <code>None</code> entries
+pass through and don't count toward <code>m</code>.</p>
+<h3 id="36-scipy-free-numerics-fallbacks">3.6 Scipy-free numerics (fallbacks)</h3>
+<ul>
+<li><code>_std_normal_cdf(z) = ½(1 + erf(z/√2))</code> — Φ for the U-test p-value.</li>
+<li><code>_regularized_incomplete_beta(x, a, b)</code> — <code>I_x(a, b)</code> via Lentz's continued
+  fraction (~1e-7), the engine for t/F survival functions.</li>
+<li><code>_f_sf(f, df1, df2)</code> — right tail of F; scipy's <code>f.sf</code> when present, else
+  <code>I_x(df2/2, df1/2)</code> with <code>x = df2/(df2 + df1·f)</code>.</li>
+<li><code>_chi2_ppf_df2(q) = −2·ln(1 − q)</code> — closed-form inverse CDF of χ²(df=2).</li>
+</ul>
+<hr />
+<h2 id="4-prediction-monte-carlo">4. Prediction &amp; Monte-Carlo</h2>
+<h3 id="41-expected-score-from-a-fit-server-_report_expected_score-12108">4.1 Expected score from a fit (server) — <code>_report_expected_score</code> (~12108)</h3>
+<p>For each scoring target with ≥ 10 hits:
+1. Fit a 2D Gaussian via <code>_archery_stats</code> → <code>(cx, cy, σ_x, σ_y, ρ)</code>.
+2. Draw <code>N_SAMPLES = 20000</code> correlated samples (Cholesky of the covariance):
+   <code>X = cx + σ_x · z1
+   Y = cy + σ_y · (ρ_clip · z1 + √(1 − ρ_clip²) · z2),    z1,z2 ~ N(0,1)</code>
+   <code>ρ</code> is clamped to <code>±0.999</code>. Each sample is scored with <code>_classify_shot</code>
+   (a typical 6 mm shaft; boundary mis-classification is well inside MC noise).
+3. <strong>Blend in the empirical miss rate</strong> <code>m = n_misses / n_total</code>. Misses are
+   extra outside-mass the Gaussian can't produce:
+   <code>eff_samples = N + ⌊N · m/(1−m)⌋ = N/(1−m)
+   p_ring_i    = ring_hits_i / eff_samples
+   p_outside   = (outside + (eff_samples − N)) / eff_samples
+              = (1 − m)·(gaussian outside fraction) + m        # see note</code>
+   so the per-ring probabilities are scaled down by <code>(1−m)</code> and <code>m</code> is added to
+   the miss probability — exactly an <code>m</code>-vs-<code>(1−m)</code> mixture of "guaranteed miss"
+   and "Gaussian sample."
+4. <code>expected_score = Σ p_ring_i · point_value_i</code>, plus per-end projections at
+   end lengths <code>(3, 6, 10)</code>.</p>
+<h3 id="42-client-monte-carlo-simulator-runonce-in-staticapollo-predictjs-191">4.2 Client Monte-Carlo simulator — <code>runOnce()</code> in <code>static/apollo-predict.js</code> (~191)</h3>
+<p>The server hands the page a mean offset and covariance <strong>in milliradians</strong> plus
+the round's segments; the browser simulates whole tournaments. Angular dispersion
+scales linearly with distance (<code>1 mrad at 1 m = 1 mm</code>), so per segment:</p>
+<pre><code>distMmPerMrad = segment.distance_m
+muX, muY      = meanMrad · distMmPerMrad
+per arrow:  with prob missRate → miss (score 0); else
+            z1, z2 ~ randn()                         # Box-Muller
+            ex = l11·z1                              # precomputed Cholesky
+            ey = l21·z1 + l22·z2
+            xMm = muX + ex·distMmPerMrad,  yMm = muY + ey·distMmPerMrad
+            total += scoreShot(xMm, yMm, zones)      # mirrors line-cutter rule
+</code></pre>
+<p>Across <code>nRuns</code> runs the page computes mean, sample std <code>√(Σ(s−mean)²/(n−1))</code>,
+min/max, and <strong>linearly-interpolated</strong> percentiles
+(<code>k = (n−1)·p</code>, interpolate between <code>⌊k⌋</code> and <code>⌈k⌉</code>) for p10/p50/p90, plus the
+probability of clearing a target score.</p>
+<h3 id="43-distance-trend-fit-server-apollopy-13593">4.3 Distance-trend fit (server) — <code>apollo.py</code> (~13593)</h3>
+<p>The flat angular fit assumes dispersion is constant in mrad across range. When
+the slice spans <code>≥ _PREDICT_TREND_MIN_DISTANCES</code> (2) distinct distances, each
+with <code>≥ _PREDICT_TREND_MIN_PER_DIST</code> (15) hits, Apollo additionally regresses
+how <strong>bias</strong> and <strong>dispersion</strong> grow with distance and returns it as
+<code>dist.trend</code> for the client to apply when extrapolating.</p>
+<p>A raw least-squares trend on few distances is noisy, so each fitted growth
+slope is <strong>shrunk James-Stein-style toward a prior</strong> rather than used flat. The
+dispersion-growth prior is the AGB handicap distance coefficient
+(<code>KD = 0.00365 /m</code>, see §7) — i.e. "absent strong evidence, dispersion grows
+with range the way the handicap model says it does," not "stays flat." The
+shrink weight uses softness <code>_PREDICT_TREND_SHRINK_C = 4.0</code>: a departure from
+the prior with <code>|t| = √c</code> earns half weight; larger <code>c</code> keeps the trend nearer
+its prior unless the data strongly disagrees. Below the data threshold the
+model falls back to the flat angular fit (§4.2).</p>
+<hr />
+<h2 id="5-reports-built-on-the-above">5. Reports built on the above</h2>
+<p>Every <code>/analyze</code> report below feeds shot clouds (raw mm or normalized) into
+<code>_archery_stats</code> and/or the tests in §3; this lists the aggregation each one adds.</p>
+<table>
+<thead>
+<tr>
+<th>Report</th>
+<th>Function</th>
+<th>Aggregation</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Hits by zone</td>
+<td><code>_report_hits_by_boundaries</code></td>
+<td><code>count</code> per zone + miss; <code>pct = count/total·100</code>.</td>
+</tr>
+<tr>
+<td>Arrows over time</td>
+<td><code>_report_arrows_vs_time</code></td>
+<td>arrows per calendar day, zero-filled gaps.</td>
+</tr>
+<tr>
+<td>Accuracy over time</td>
+<td><code>_report_accuracy_over_time</code></td>
+<td><code>_archery_stats</code> per day/week/month bucket → MPI, R95.</td>
+</tr>
+<tr>
+<td>Accuracy/precision traces</td>
+<td><code>_report_accuracy_precision_traces</code></td>
+<td>MPI &amp; R95 per session / per quiver / all-time rolling.</td>
+</tr>
+<tr>
+<td>Within-session drift</td>
+<td><code>_report_within_session_drift</code></td>
+<td>pool shots by quiver index across sessions → MPI, R95.</td>
+</tr>
+<tr>
+<td>Cold bore vs warmed</td>
+<td><code>_report_cold_bore_vs_warmed</code></td>
+<td>first-shot vs rest; Mann-Whitney U on distances.</td>
+</tr>
+<tr>
+<td>Draw-weight traces</td>
+<td><code>_report_draw_weight_traces</code></td>
+<td>MPI/R95 vs draw weight, split rated vs effective.</td>
+</tr>
+<tr>
+<td>Shot-density heatmap</td>
+<td><code>_report_shot_density_heatmap</code></td>
+<td>hexbin (gridsize 22) + quadrant %; needs ≥ 25 hits.</td>
+</tr>
+<tr>
+<td>Calendar heatmap</td>
+<td><code>_report_calendar_heatmap</code></td>
+<td>shots per day → colour intensity.</td>
+</tr>
+<tr>
+<td>Expected score</td>
+<td><code>_report_expected_score</code></td>
+<td>§4.1.</td>
+</tr>
+<tr>
+<td>Equipment head-to-head</td>
+<td><code>_report_equipment_head_to_head</code></td>
+<td>§3.</td>
+</tr>
+<tr>
+<td>Handicap over time</td>
+<td><code>_report_handicap_trend</code> + <code>_handicap_summary</code></td>
+<td>per-round AGB handicap (§7) vs date; least-squares trend line; best-three average (§7.4).</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="6-time-dates-units">6. Time, dates &amp; units</h2>
+<ul>
+<li><strong>UTC ↔ local</strong> (<code>_utc_to_user</code>): DB datetimes are stored UTC-naive; display
+  treats them as UTC and converts to the user's IANA timezone (falls back to UTC
+  if the zone is missing/invalid).</li>
+<li><strong>Session duration</strong> (<code>get_stats</code>): a manual override is <code>minutes · 60</code> seconds;
+  otherwise <code>end − begin</code>, then <code>divmod</code> into days/hours/minutes/seconds.</li>
+<li><strong>Date bucketing</strong> (<code>_accuracy_bucket_period</code>): day / week (week-start) / month
+  granularity auto-selected from the span.</li>
+<li><strong>Hit / miss percentages</strong>: guarded by a non-zero denominator
+  (<code>percent_hit = hit/arrows·100</code>); display-only, never part of a score.</li>
+</ul>
+<hr />
+<h2 id="7-archery-gb-handicaps-classifications">7. Archery GB handicaps &amp; classifications</h2>
+<p>The handicap math lives in <code>handicap.py</code>; the constant tables in
+<code>handicap_data.py</code>; the class/award resolvers in <code>classifications.py</code>. All
+three are pure (no Flask/DB) and unit-tested in isolation. <code>apollo.py</code> builds
+their inputs from <code>TOURNAMENT_FACES</code> / <code>_round_segments</code> and exposes them via
+<code>_round_handicap_passes</code>, <code>_session_handicap</code>, and <code>_session_handicap_awards</code>.
+Constants match the MIT-licensed <code>archeryutils</code> reference, so figures agree
+with published AGB tables and archerycalculator.co.uk.</p>
+<h3 id="71-angular-spread-model-agb-2023-sigma_t-sigma_r">7.1 Angular spread model (AGB 2023) — <code>sigma_t</code>, <code>sigma_r</code></h3>
+<pre><code>sigma_t(H, d) = ANG_0 · (1 + STEP/100)^(H + DATUM) · e^(KD · d)      [rad]
+sigma_r(H, d) = d · sigma_t(H, d)                                    [m, group SD]
+</code></pre>
+<p>Constants: <code>ANG_0 = 5.0e-4</code>, <code>STEP = 3.5</code> (% per handicap step), <code>DATUM = 6.0</code>,
+<code>KD = 0.00365 /m</code> (distance growth — also the prior in §4.3). Lower <code>H</code> = tighter
+group = better. The scale is searched over integer <code>H ∈ [HC_MIN, HC_MAX] = [-75, 300]</code>.</p>
+<h3 id="72-expected-score-expected_arrow_score-expected_round_score">7.2 Expected score — <code>expected_arrow_score</code>, <code>expected_round_score</code></h3>
+<p>Rings are first collapsed to scoring <strong>bands</strong> (<code>normalize_zones</code>): equal-value
+rings (e.g. the X and outer-10 both worth 10) merge to the largest radius at
+which that value scores. For an arrow of <em>scheme-standard</em> radius <code>arw_rad</code>:</p>
+<pre><code>s̄(H,d) = max_v − Σ_k drop_k · exp(−((arw_rad + r_k) / sigma_r)²)
+</code></pre>
+<p>summed over each band boundary (<code>r_k</code> = outer radius in m, <code>drop_k</code> = points
+lost to the next band out, 0 outside the last band). A round's expected score is
+<code>Σ n_arrows · s̄</code> over its passes; the <strong>predicted</strong> table score is <code>⌈expected⌉</code>.</p>
+<p>The arrow radius is fixed by the scheme, <strong>not</strong> the archer's real shaft —
+<code>ARROW_D_OUTDOOR = 5.5 mm</code>, <code>ARROW_D_INDOOR = 9.3 mm</code> (diameters) — so handicaps
+are comparable across archers. The raw score itself is still scored with the
+archer's real arrow (§1.1).</p>
+<h3 id="73-score-handicap-handicap_from_score">7.3 Score → handicap — <code>handicap_from_score</code></h3>
+<p><code>⌈expected_round_score(H)⌉</code> is non-increasing in <code>H</code>. The assigned handicap is
+the <strong>largest</strong> integer <code>H</code> whose predicted (ceil-rounded) score is still <code>≥</code> the
+achieved score — a descending scale rounded up. Scores <code>≤ 0</code> or <code>&gt; max_score</code>
+return <code>None</code>; a maximum score lands on the worst <code>H</code> that still rounds up to the
+max (handled by the same scan, not a clamp).</p>
+<h3 id="74-headline-figures-_handicap_summary">7.4 Headline figures — <code>_handicap_summary</code></h3>
+<p>From the list of completed-round handicaps (ascending by date):
+- <strong>latest</strong> — most recent round's handicap.
+- <strong>best_recent</strong> — lowest single handicap in the 12 months up to the latest round.
+- <strong>agb</strong> — <code>⌊(sum of the best three handicaps) / 3⌋</code> (the 2023 scheme rounds the
+  average <strong>down</strong>). Pool preference: current season (calendar year of the latest
+  round) → trailing 12 months → all rounds, flagged provisional below a full
+  season, and <code>None</code> with fewer than three rounds. <code>agb_basis</code> records which pool was used.</p>
+<p>Every completed AGB-target round counts (Apollo has no record-status notion), so
+the figure is a personal tracking number, not a club-submitted one.</p>
+<h3 id="75-classifications-classificationspy">7.5 Classifications — <code>classifications.py</code></h3>
+<ul>
+<li><strong>Archery GB</strong> (<code>agb_classification</code>): per-category threshold handicaps
+  (<code>agb_class_thresholds</code>) computed from a <code>datum + (i − index_offset)·classStep</code>
+  ladder plus an age/gender step (<code>agb_age_gender_step</code>, including the U16
+  alignment fiddle). Indoor and outdoor use separate datums/steps; the best class
+  met is the first whose threshold the handicap satisfies. Master Bowman is flagged
+  <code>record_status</code> (officially record-event only; shown for information).</li>
+<li><strong>World Archery</strong> (<code>wa_star_award</code>): Star Awards on the 1440 round — fixed
+  point-score milestones (<code>WA_STAR_AWARDS</code>), <code>record_status</code> at ≥ 1350.</li>
+<li><strong>USA Archery</strong> (<code>usaa_award</code>): WA Performance Award pins on the 1440 (<code>USAA_AWARDS</code>).</li>
+<li><code>resolve_awards</code> returns every award earned across the three schemes. NFAA is
+  deferred — it's a relative multi-score scheme, not a single-round lookup.</li>
+</ul>
+<hr />
+<p><em>Generated and verified against the implementation for v0.71. When a formula
+changes in <code>apollo.py</code>, <code>apollo-predict.js</code>, <code>handicap.py</code>, or
+<code>classifications.py</code>, update the matching section here.</em></p>
+        </div>
+        <p class="docs-footer">Apollo documentation · generated from the
+        project Markdown by <code>documentation/build_docs.py</code>.</p>
+    </main>
+</body>
+</html>

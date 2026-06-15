@@ -1,0 +1,691 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Apollo Docs · Apollo — Overview</title>
+    <link rel="stylesheet" href="/static/fonts/apollo-fonts.css">
+    <link rel="stylesheet" type="text/css" href="/static/style.css">
+    <style>
+.docs-body { padding: 0; padding-left: 240px; }
+.docs-sidebar {
+    position: fixed; top: 0; left: 0; bottom: 0; width: 200px;
+    background-color: #b3c6e3; padding: 22px 16px; box-sizing: border-box;
+    overflow-y: auto; display: flex; flex-direction: column; gap: 6px;
+    box-shadow: 2px 0 8px rgba(99, 106, 128, 0.18); z-index: 500;
+}
+.docs-sidebar-label {
+    font-family: "Quantico", sans-serif; font-weight: 700; font-size: 0.7rem;
+    letter-spacing: 0.12em; text-transform: uppercase; color: #5a6a86;
+    margin: 4px 6px 6px;
+}
+.docs-sidebar .docs-nav-group {
+    font-family: "Quantico", sans-serif; font-weight: 700; font-size: 0.68rem;
+    letter-spacing: 0.1em; text-transform: uppercase; color: #7a89a6;
+    margin: 12px 6px 2px;
+}
+.docs-sidebar a.docs-nav-link {
+    display: block; padding: 6px 8px; border-radius: 6px;
+    font-family: "Quantico", sans-serif; font-weight: 700; font-size: 0.82rem;
+    color: #1a3a5c; text-decoration: none; transition: background-color 0.15s;
+}
+.docs-sidebar a.docs-nav-link:hover { background-color: #95abcf; }
+.docs-sidebar a.docs-nav-link.active { background-color: #95abcf; }
+.docs-sidebar-foot { margin-top: auto; padding-top: 12px; }
+.docs-sidebar a.docs-back {
+    font-family: "Quantico", sans-serif; font-weight: 700; font-size: 0.82rem;
+    color: #5a6a86; text-decoration: none;
+}
+.docs-sidebar a.docs-back:hover { text-decoration: underline; }
+
+.docs-main { max-width: 920px; margin: 0 auto; padding: 28px 24px 60px; }
+.docs-card {
+    background-color: #eaf2fb; border-radius: 16px; padding: 36px 44px;
+    box-shadow: 0 2px 10px rgba(99, 106, 128, 0.18);
+    font-family: "Quantico", sans-serif; color: #243b54; line-height: 1.6;
+}
+.docs-card h1 {
+    font-family: "Bungee Shade", sans-serif; color: #a1d8ed;
+    -webkit-text-stroke: 1.5px #636a80; font-size: 2.5rem; line-height: 1.15;
+    margin: 0 0 22px;
+}
+.docs-card h2 {
+    font-family: "Quantico", sans-serif; font-weight: 700; color: #1a3a5c;
+    font-size: 1.5rem; margin: 34px 0 12px; padding-bottom: 6px;
+    border-bottom: 2px solid #b3c6e3;
+}
+.docs-card h3 {
+    font-family: "Quantico", sans-serif; font-weight: 700; color: #1a3a5c;
+    font-size: 1.15rem; margin: 24px 0 8px;
+}
+.docs-card h4 { color: #1a3a5c; margin: 18px 0 6px; }
+.docs-card p, .docs-card li { font-size: 0.95rem; }
+.docs-card a { color: #3a6ea5; text-decoration: none; }
+.docs-card a:hover { text-decoration: underline; }
+.docs-card code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    background-color: #d6e4f0; color: #1a3a5c; padding: 1px 6px;
+    border-radius: 4px; font-size: 0.86em;
+}
+.docs-card pre {
+    background-color: #1a3a5c; color: #d6e4f0; padding: 16px 18px;
+    border-radius: 10px; overflow-x: auto; line-height: 1.45;
+}
+.docs-card pre code { background: none; color: inherit; padding: 0; }
+.docs-card pre.docs-plaintext {
+    white-space: pre-wrap; word-break: break-word; font-size: 0.82rem;
+}
+.docs-card blockquote {
+    margin: 16px 0; padding: 8px 18px; border-left: 4px solid #95abcf;
+    background-color: #dde9f6; border-radius: 0 8px 8px 0; color: #33506e;
+}
+.docs-card table {
+    border-collapse: collapse; width: 100%; margin: 16px 0; font-size: 0.88rem;
+}
+.docs-card th, .docs-card td {
+    border: 1px solid #b3c6e3; padding: 7px 11px; text-align: left;
+    vertical-align: top;
+}
+.docs-card th { background-color: #b3c6e3; color: #1a3a5c; font-weight: 700; }
+.docs-card tr:nth-child(even) td { background-color: #e1ecf8; }
+.docs-card hr { border: 0; border-top: 1px solid #b3c6e3; margin: 28px 0; }
+.docs-footer {
+    text-align: center; font-family: "Quantico", sans-serif; font-size: 0.78rem;
+    color: #5a6a86; margin-top: 22px;
+}
+
+/* index */
+.docs-index-grid {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap: 18px; margin: 8px 0 6px;
+}
+.docs-index-card {
+    display: block; background-color: #dde9f6; border-radius: 12px;
+    padding: 18px 20px; text-decoration: none; color: #1a3a5c;
+    border: 1px solid #c2d3ea; transition: transform 0.12s, box-shadow 0.12s;
+}
+.docs-index-card:hover {
+    transform: translateY(-2px); box-shadow: 0 4px 12px rgba(99,106,128,0.22);
+    text-decoration: none;
+}
+.docs-index-card .t {
+    font-family: "Quantico", sans-serif; font-weight: 700; font-size: 1.05rem;
+    color: #1a3a5c; display: block; margin-bottom: 6px;
+}
+.docs-index-card .d { font-size: 0.86rem; color: #3f5b78; }
+
+@media (max-width: 760px) {
+    .docs-body { padding-left: 0; }
+    .docs-sidebar {
+        position: static; width: auto; box-shadow: none; flex-direction: row;
+        flex-wrap: wrap; align-items: center;
+    }
+    .docs-sidebar-foot { margin: 0 0 0 auto; }
+    .docs-main { padding: 18px 14px 40px; }
+    .docs-card { padding: 24px 20px; }
+}
+</style>
+</head>
+<body class="docs-body">
+    <aside class="docs-sidebar">
+        <a href="/" class="side-nav-brand">Apollo</a>
+        <div class="docs-sidebar-label">Documentation</div>
+        <a href="index.html" class="docs-nav-link">Home</a>
+        <div class="docs-nav-group">Project</div>
+        <a href="readme.html" class="docs-nav-link active">Overview</a>
+        <a href="formulas.html" class="docs-nav-link">Formulas & Math Reference</a>
+        <a href="install.html" class="docs-nav-link">Install & Deploy Guide</a>
+        <div class="docs-nav-group">Tournament</div>
+        <a href="tournament-overview.html" class="docs-nav-link">Overview</a>
+        <a href="tournament-rules.html" class="docs-nav-link">Tournament Round Reference</a>
+        <a href="tournament-scoring.html" class="docs-nav-link">Internal Scoring Procedures</a>
+        <a href="tournament-targets.html" class="docs-nav-link">Tournament Target Faces</a>
+        <div class="docs-sidebar-foot">
+            <a href="/" class="docs-back">‹ Back to app</a>
+        </div>
+    </aside>
+    <main class="docs-main">
+        <div class="docs-card">
+<h1 id="apollo">Apollo</h1>
+<p>Flask web app for logging archery practice and analyzing performance.
+Tap a target image to record each shot, group shots into quivers and
+sessions, run formal tournament rounds, and review hit rate, group
+geometry, and equipment comparisons over time. Supports multiple users,
+bows, arrows, and target faces.</p>
+<p>You can also join and use it at <a href="https://www.apolloshoots.org">https://www.apolloshoots.org</a>.</p>
+<hr />
+<h2 id="quick-start">Quick start</h2>
+<pre><code class="language-bash">python install.py
+</code></pre>
+<p><code>install.py</code> walks you through:</p>
+<ol>
+<li>Picking an environment manager (conda if installed, else venv)</li>
+<li>Picking a flavor — <code>local</code> (SQLite) or <code>server</code> (MySQL)</li>
+<li>Installing the Python packages it needs into that env</li>
+<li>Collecting env vars (<code>SECRET_KEY</code>, <code>RESEND_API_KEY</code>, and — for
+   server — <code>DATABASE_URL</code>, <code>APOLLO_BASE_URL</code>, and the root account)</li>
+<li>Writing those env vars to <code>.env</code> next to <code>apollo.py</code> (chmod 600).
+   For the server flavor it also writes <code>wsgi_snippet.py</code>, a ready-to-
+   paste WSGI configuration file with your real values filled in.</li>
+</ol>
+<p>Then to run locally:</p>
+<pre><code class="language-bash">source .env
+conda activate apollo            # or: source venv/bin/activate
+python apollo.py
+</code></pre>
+<p>The app starts on <code>http://127.0.0.1:5000/</code>. Click <strong>Create account</strong> to
+register the first user — any data left over from a pre-multi-user
+install is claimed by the first account automatically.</p>
+<p>See <a href="install.html">install_help.txt</a> for a full walkthrough of every
+prompt, env var, and the PythonAnywhere deploy procedure.</p>
+<hr />
+<h2 id="project-layout">Project layout</h2>
+<pre><code>apollo/
+├── README.md            ← you are here
+├── install.py           ← interactive bootstrapper
+├── install_help.txt     ← detailed install / deploy reference
+├── apollo.py            ← the Flask app + schema
+├── apollo.db            ← local SQLite DB (created on first launch)
+├── handicap.py          ← Archery GB 2023 handicap engine (pure, no Flask/DB)
+├── handicap_data.py     ← AGB class / award constant tables
+├── classifications.py   ← AGB / WA / USAA classification resolvers
+├── static/              ← target images, CSS, JS, logos
+│   └── targets/         ← user-uploaded target images
+├── templates/           ← Jinja templates
+└── documentation/
+    ├── FORMULAS.md      ← every scoring / stats / predictive formula + its source fn
+    ├── build_docs.py    ← regenerates the styled HTML build from the Markdown
+    ├── tournament/      ← rule/scoring/target reference for /tournament
+    └── html/            ← styled HTML build of all docs (linked from the side nav)
+</code></pre>
+<hr />
+<h2 id="two-backends">Two backends</h2>
+<p>Storage runs through SQLAlchemy Core, so the same code works against
+SQLite or MySQL. The backend is picked at startup from the
+<code>APOLLO_BACKEND</code> env var:</p>
+<table>
+<thead>
+<tr>
+<th><code>APOLLO_BACKEND</code></th>
+<th>Behavior</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>unset / <code>sqlite</code></td>
+<td>Local file-based SQLite (<code>apollo.db</code> next to <code>apollo.py</code>). <code>DATABASE_URL</code> is <strong>ignored</strong> so a stray export can't accidentally point a dev shell at a remote DB.</td>
+</tr>
+<tr>
+<td><code>mysql</code></td>
+<td>Use <code>DATABASE_URL</code>; raise loudly if it isn't set.</td>
+</tr>
+</tbody>
+</table>
+<p><code>install.py</code> sets <code>APOLLO_BACKEND=mysql</code> for you in the server flavor;
+the local flavor leaves it unset.</p>
+<p>At startup the app prints <code>📦 Apollo DB: &lt;redacted-url&gt;</code> so you can
+confirm which backend you actually hit.</p>
+<h3 id="database_url-format"><code>DATABASE_URL</code> format</h3>
+<pre><code># SQLite (file-based — generated automatically; rarely set by hand)
+sqlite:///apollo.db
+
+# MySQL (server flavor — requires PyMySQL, installed by `install.py`)
+mysql+pymysql://user:password@host:port/dbname
+</code></pre>
+<hr />
+<h2 id="environment-variables">Environment variables</h2>
+<p>Apollo reads these from <code>os.environ</code> at startup — there is no dotenv
+loader. <code>install.py</code> writes the <code>export KEY=value</code> form to <code>.env</code>; you
+must <code>source .env</code> (or set them inside your WSGI file) before launching
+the app.</p>
+<table>
+<thead>
+<tr>
+<th>Variable</th>
+<th>Required?</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>SECRET_KEY</code></td>
+<td>Prod: <strong>yes</strong></td>
+<td>Signs Flask sessions + CSRF tokens. Dev generates a random fallback.</td>
+</tr>
+<tr>
+<td><code>APOLLO_BACKEND</code></td>
+<td>Server: <code>mysql</code></td>
+<td>Explicit opt-in for the MySQL path. Unset / <code>sqlite</code> ⇒ local SQLite.</td>
+</tr>
+<tr>
+<td><code>DATABASE_URL</code></td>
+<td><code>APOLLO_BACKEND=mysql</code>: yes</td>
+<td>SQLAlchemy URL.</td>
+</tr>
+<tr>
+<td><code>APOLLO_BASE_URL</code></td>
+<td>Prod: <strong>yes</strong></td>
+<td>Public origin used in password-reset email links (e.g. <code>https://apolloshoots.org</code>).</td>
+</tr>
+<tr>
+<td><code>APOLLO_ROOT_USERNAME</code></td>
+<td>Server: yes</td>
+<td>Bootstraps / re-affirms the root admin account on every boot.</td>
+</tr>
+<tr>
+<td><code>APOLLO_ROOT_EMAIL</code></td>
+<td>Server bootstrap</td>
+<td>Used only when the root account doesn't exist yet.</td>
+</tr>
+<tr>
+<td><code>APOLLO_ROOT_PASSWORD</code></td>
+<td>Server bootstrap</td>
+<td>Used only when the root account doesn't exist yet. Safe to remove from <code>.env</code> after first boot.</td>
+</tr>
+<tr>
+<td><code>RESEND_API_KEY</code></td>
+<td>Optional</td>
+<td>Powers password-reset email. If unset, Apollo prints reset links to the server log.</td>
+</tr>
+<tr>
+<td><code>RESEND_FROM</code></td>
+<td>Optional</td>
+<td>Sender address. Must be on a Resend-verified domain to mail real users.</td>
+</tr>
+<tr>
+<td><code>FLASK_ENV</code></td>
+<td>Server: <code>production</code></td>
+<td>Disables the Werkzeug debugger and makes <code>SECRET_KEY</code> + <code>APOLLO_BASE_URL</code> mandatory.</td>
+</tr>
+<tr>
+<td><code>FLASK_DEBUG</code></td>
+<td>Optional</td>
+<td><code>1</code> (default in dev) enables debug. Ignored when <code>FLASK_ENV=production</code>.</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="schema">Schema</h2>
+<p>All tables are defined as SQLAlchemy Core <code>Table</code> objects in <code>apollo.py</code>
+and created by <code>metadata.create_all(engine)</code> at import time.
+<code>migrate_db()</code> (also at import) adds any new columns to pre-existing
+DBs in place.</p>
+<table>
+<thead>
+<tr>
+<th>Table</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>users</code></td>
+<td>One row per account (creds, lockout state, <code>is_root</code>, timezone, archer profile: <code>gender</code>, <code>age_group</code>, <code>default_bowstyle</code>).</td>
+</tr>
+<tr>
+<td><code>apollo</code></td>
+<td>One row per shot (coords, quiver/session metadata, equipment snapshot, and a <code>bow_style_settings</code> JSON snapshot of the gear in force when the arrow was loosed).</td>
+</tr>
+<tr>
+<td><code>session_times</code></td>
+<td>Session start/end times, optional manual length override.</td>
+</tr>
+<tr>
+<td><code>targets</code></td>
+<td>Available target faces (image, physical size, default flag).</td>
+</tr>
+<tr>
+<td><code>target_zones</code></td>
+<td>User-defined concentric scoring rings per target.</td>
+</tr>
+<tr>
+<td><code>bows</code></td>
+<td>Bow inventory (model, type, draw weight, AMO length, nock height) plus a <code>style_settings</code> JSON column for bowstyle-specific static gear.</td>
+</tr>
+<tr>
+<td><code>arrows</code></td>
+<td>Arrow inventory (length, spine, weights, shaft, tip).</td>
+</tr>
+<tr>
+<td><code>password_resets</code></td>
+<td>One-shot, short-lived reset tokens (stored as sha256, never plaintext).</td>
+</tr>
+<tr>
+<td><code>rate_limit_hits</code></td>
+<td>Persistent rate-limit counters (login, forgot-password).</td>
+</tr>
+<tr>
+<td><code>app_settings</code></td>
+<td>Global key/value config (e.g. server timezone).</td>
+</tr>
+<tr>
+<td><code>user_notes</code></td>
+<td>Per-user free-form scratchpad (one row per user).</td>
+</tr>
+</tbody>
+</table>
+<p>Every table has an explicit <code>id INTEGER PRIMARY KEY AUTOINCREMENT</code>.
+Queries in the app SELECT it aliased as <code>rowid</code> so older templates that
+read <code>rowid</code> keep working unchanged. All per-user tables carry a
+<code>user_id</code> column added by <code>ensure_user_id_columns()</code> for pre-multi-user
+DBs.</p>
+<hr />
+<h2 id="analyze-analyze">Analyze (<code>/analyze</code>)</h2>
+<p>Pick which reports to generate from a checkbox list; each report renders
+a chart plus a table of the underlying data, an intro paragraph framing
+the question it answers, and offers CSV / Excel downloads. Hover any
+metric or test name for an inline tooltip explaining what it measures
+and why it's there. Length values render with a server-side <strong>mm</strong> unit
+that flips to <strong>inches</strong> when you click <code>⇄ Imperial</code> on the side nav.</p>
+<h3 id="the-accuracy-precision-split">The accuracy / precision split</h3>
+<p>Archery error decomposes into two independent modes that <strong>need
+different fixes</strong>:</p>
+<table>
+<thead>
+<tr>
+<th>Mode</th>
+<th>Definition</th>
+<th>Headline number</th>
+<th>Fix</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Accuracy</strong></td>
+<td>Where the group's <em>centroid</em> sits relative to the bull. A bias.</td>
+<td><strong>MPI</strong> = ‖centroid − bull‖</td>
+<td>Sight, anchor, form</td>
+</tr>
+<tr>
+<td><strong>Precision</strong></td>
+<td>How tightly shots cluster <em>around their own centroid</em>, independent of where that centroid sits. A consistency.</td>
+<td><strong>R95</strong> = 95% containment radius about the centroid</td>
+<td>Tuning, execution, equipment</td>
+</tr>
+</tbody>
+</table>
+<p>Every report in <code>/analyze</code> reports these two axes separately. A "total
+error" metric (mean distance from the bull, Mann-Whitney U on the same)
+still appears, but is always labelled as a hybrid and never confused
+with either axis.</p>
+<p>A single <code>_archery_stats(xs, ys)</code> helper drives every panel — it fits a
+bivariate normal to the shot cloud and returns MPI, signed bias, Mean
+Radius, σ_x, σ_y, ρ, R95 (Rayleigh closed-form when isotropic, elliptical
+otherwise via χ²₂), and extreme spread. Samples below n=10 fall back to
+an empirical R95 percentile and the table flags them.</p>
+<h3 id="reports">Reports</h3>
+<p><strong>Activity</strong></p>
+<ul>
+<li><strong>Arrows shot vs time</strong> — bar chart of arrows shot per calendar day
+  (zero-fill so gaps are visible). Sessions on the same day are summed.</li>
+<li><strong>Sessions per day</strong> — same idea but bar = session count.</li>
+<li><strong>Shot volume calendar</strong> — GitHub-style year grid of shots per
+  calendar day with month-boundary ticks and a summary table (span,
+  active-day %, busiest day, avg-on-active-days). Streaks and gaps are
+  visible at a glance.</li>
+</ul>
+<p><strong>Per-target visualization</strong></p>
+<ul>
+<li><strong>Shots per target (date range)</strong> — every shot on each target,
+  overlaid on the face with: a centroid X, concentric <strong>MR</strong> (solid)
+  and <strong>R95</strong> (dashed) precision rings, a faint covariance ellipse
+  exposing stringing, and a pink bias arrow from the bull to the
+  centroid. Stats table split into Accuracy (MPI, signed bias) and
+  Precision (R95, MR, σ_x/σ_y, extreme spread). Accepts a date range.</li>
+<li><strong>Shot density heatmap</strong> — hexbin density overlay on each target
+  with ≥25 hits. Complementary to the scatter once you have hundreds
+  of shots on one face. Quadrant-breakdown table makes directional
+  bias jump out without reading the colorbar.</li>
+<li><strong>Hits by boundaries</strong> — for targets with scoring zones, counts hits
+  per ring + a replay of every shot. Bar colors are sampled directly
+  from the target image (works for any face you upload — NASP, FITA,
+  3D, Vegas, NFAA).</li>
+<li><strong>Expected score from fit</strong> — for each scoring target, fits a 2D
+  Gaussian to your history, Monte-Carlo samples 20 000 draws, and
+  projects expected points/arrow and expected end scores at 3 / 6 / 10
+  arrows. Empirical sentinel-miss rate is blended in so total-flyers
+  count against the projection.</li>
+</ul>
+<p><strong>Trends over time</strong></p>
+<ul>
+<li><strong>Accuracy &amp; precision over time</strong> — two-trace line chart:</li>
+<li><strong>MPI</strong> (accuracy) line in red.</li>
+<li><strong>R95</strong> (precision) line in green.</li>
+</ul>
+<p>Per-bucket table also shows MR, σ_x, σ_y. Auto-buckets to day, week,
+  or month based on the span. Distances are normalized by target
+  half-width so mixed sizes pool fairly.
+- <strong>Within-session drift</strong> — pools shots by <em>quiver index in session</em>
+  (1st quiver, 2nd, …) across all sessions, then plots MPI and R95
+  against quiver index. Reveals warm-up gains and late-session fatigue.
+  Twin-axis grey bars show how many sessions contribute to each bucket
+  so you know where confidence drops.
+- <strong>Cold bore vs warmed up</strong> — pool 1 = first quiver of every session;
+  pool 2 = quivers 2+. Side-by-side bars on MPI / R95 / pool size, then
+  independent <strong>Hotelling T²</strong> (accuracy diff) and <strong>Brown-Forsythe</strong>
+  (precision diff) tests with per-axis verdicts.
+- <strong>Handicap over time</strong> — plots the Archery GB 2023 handicap of every
+  recognised AGB target round you've completed against the date you shot
+  it, with the y-axis inverted so a <em>falling</em> handicap (improvement)
+  reads as a rising line. A least-squares trend line (handicap-points per
+  year) and a reference line for your AGB figure overlay it. Three
+  headline figures: <em>Latest</em>, <em>Best (recent)</em> (lowest single handicap in
+  the last 12 months), and the official <em>AGB handicap</em> (average of your
+  best three, rounded <strong>down</strong>; season → trailing-12-months → all-rounds
+  fallback, labelled provisional below three rounds). Every completed
+  round counts — Apollo has no record-status notion — so it's a personal
+  tracking number, not one to submit to a records officer.</p>
+<p><strong>Equipment comparison</strong></p>
+<ul>
+<li><strong>Head-to-head comparisons</strong> — see the next section.</li>
+</ul>
+<h3 id="head-to-head-statistical-model">Head-to-head statistical model</h3>
+<p>For every pair of bows / arrows / session tags / gear settings (release
+aid, aiming method, tab vs glove, sight type, … drawn from the per-bow
+bowstyle settings) with at least 5 shots
+each — and that have <em>never been used in the same session</em> (a pair that
+co-occurs in even one session is dropped, since the head-to-head only
+tells you something meaningful when the two sides are mutually
+exclusive) — Apollo decomposes the comparison into <strong>three independent
+test families</strong> so you can tell <em>what</em> differs, not just <em>that</em>
+something does:</p>
+<table>
+<thead>
+<tr>
+<th>Family</th>
+<th>Question</th>
+<th>Test</th>
+<th>Input</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Accuracy</strong></td>
+<td>Do the centroids sit in different places?</td>
+<td><strong>Hotelling's T²</strong> on (x, y)</td>
+<td>2D normalized shot vectors</td>
+</tr>
+<tr>
+<td><strong>Precision</strong></td>
+<td>Does one group cluster more tightly about <em>its own</em> centroid?</td>
+<td><strong>Brown-Forsythe</strong> (median-centered Levene's)</td>
+<td>distance-from-each-group's-own-centroid</td>
+</tr>
+<tr>
+<td><strong>Total error</strong></td>
+<td>Does one piece simply land closer to the bull on average?</td>
+<td><strong>Mann-Whitney U</strong> + <strong>Cliff's δ</strong></td>
+<td>distance-from-target-center</td>
+</tr>
+</tbody>
+</table>
+<p>The Precision family's input matters: feeding the F-test
+distance-from-center (as earlier versions did) lets a group's bias leak
+into the spread test. Distance-from-each-group's-own-centroid is the
+honest precision signal.</p>
+<p>p-values are adjusted with <strong>Holm-Bonferroni</strong> within each family
+separately. Per-pair tables render the three families as titled
+sub-sections (Accuracy / Precision / Total error / Pairwise tests), and
+the verdict line surfaces all three axes:</p>
+<pre><code>Accuracy: inconclusive (p = 0.47) · Precision: significant (p = 0.026) · Total error: significant (p = 0.048)
+</code></pre>
+<p>That triple lets you attribute a "this bow shoots better overall" win
+to better precision rather than better accuracy (or vice versa) — they
+need different remedies at the range.</p>
+<p><strong>Caveat:</strong> shots within a session are correlated (wind, light, fatigue
+all create within-session covariance). None of these tests model that,
+so adjusted p-values understate the true error rate. Treat them as
+exploratory — significant pairs are worth a closer look, but small
+samples or borderline results shouldn't be over-read.</p>
+<p><strong>Implementation:</strong> scipy is a soft dependency. When installed,
+<code>scipy.stats.mannwhitneyu</code> / <code>f.sf</code> are used directly; otherwise the
+helpers fall back to the normal approximation (Mann-Whitney) or a
+continued-fraction regularized incomplete beta (F-distribution). χ²₂
+quantiles for R95 / CEP use the closed-form <code>−2·ln(1 − q)</code>. All paths
+agree to better-than-display precision for the sample sizes /analyze
+sees. Every scoring, statistical, and predictive formula is catalogued
+with its source function in <a href="formulas.html">documentation/FORMULAS.md</a>.</p>
+<hr />
+<h2 id="tools-tools">Tools (<code>/tools</code>)</h2>
+<p>Six client-side archery calculators on one page, each in its own
+collapsible card (collapsed by default). All math runs in the browser —
+no DB hits, no server round-trips per keystroke.</p>
+<table>
+<thead>
+<tr>
+<th>Tool</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Wind drift</strong></td>
+<td>Drag-based lateral drift on a cylindrical shaft (<code>F = ½ρv²·C_d·(L·d)</code>, <code>drift = ½(F/m)·t²</code>). Inputs include arrow mass, shaft OD, length, mean wind, and <strong>peak gust</strong> — the wind² scaling in the drag formula means a 1.5× gust produces 2.25× the drift, surfaced explicitly. Shaft OD displays in inches or mm following the global <code>⇄ Imperial/Metric</code> toggle.</td>
+</tr>
+<tr>
+<td><strong>Sight marks</strong></td>
+<td>Piecewise-linear interpolation across any number of known distance/mark pairs. Extrapolates beyond the known range using the nearest segment's slope and flags it as extrapolated.</td>
+</tr>
+<tr>
+<td><strong>Arrow spine selector</strong></td>
+<td>Easton-style adjusted bow weight (±5 lbs/in arrow length, ±1.5 lbs per 25 gr point weight, bow-type correction) → recommended spine band.</td>
+</tr>
+<tr>
+<td><strong>FOC</strong></td>
+<td>Standard ATA <code>((balance − L/2)/L)·100</code> with low / target / hunting / EFOC band chips.</td>
+</tr>
+<tr>
+<td><strong>Arrow speed (fps)</strong></td>
+<td>Two methods: <strong>bow specs</strong> (energy-storage model <code>v = √(2·η·k·F_peak·stroke / m)</code>, works for any bow type from peak weight, draw length, brace height, arrow mass) and <strong>IBO/ATA rating</strong> (compound-only delta-from-rating).</td>
+</tr>
+<tr>
+<td><strong>Kinetic energy &amp; momentum</strong></td>
+<td><code>KE = mv²/450,240</code> (ft·lb), <code>momentum = mv/225,400</code> (slug·ft/s).</td>
+</tr>
+</tbody>
+</table>
+<p>(A <em>Slope compensator</em> card shipped earlier but was removed in v0.69 —
+the rifleman's-rule approximation fits a bullet better than an arrow's
+loopier trajectory, and was judged more likely to mislead than help.)</p>
+<p>The energy-storage FPS model uses bow-type-tuned constants for the
+force-draw-curve area fraction <code>k</code> and mechanical efficiency <code>η</code>:
+recurve <code>k=0.45 / η=0.72</code>, compound <code>k=0.65 / η=0.85</code>, longbow
+<code>k=0.40 / η=0.70</code>. Estimates land within published chronograph ranges
+across all three bow types.</p>
+<hr />
+<h2 id="predict-predict">Predict (<code>/predict</code>)</h2>
+<p>A performance-prediction wizard. The server fits a 2D angular-dispersion
+Gaussian (in milliradians) to a filtered slice of your shot history —
+optionally narrowed by bow, arrow, tag, or date range — then hands the
+parameters plus a chosen endpoint (a tournament round, a face, or a
+custom target/distance) to a client-side Monte-Carlo simulator
+(<code>static/apollo-predict.js</code>) that grows a score histogram live in the
+browser.</p>
+<p>Because the model is angular, it extrapolates to <strong>any</strong> distance: a mrad
+offset scales linearly with range. When the slice spans at least two
+distances with enough hits at each, Apollo also fits a <strong>distance trend</strong> —
+how bias and dispersion grow with range — and <strong>shrinks</strong> that growth
+(James-Stein style) toward the AGB handicap distance coefficient rather
+than trusting a flat fit. Gravity drop and wind aren't modelled; the
+results surface σ in mrad so you can sanity-check.</p>
+<hr />
+<h2 id="handicaps-classifications">Handicaps &amp; classifications</h2>
+<p>Apollo computes an <strong>Archery GB 2023 handicap</strong> for every completed AGB
+target round and resolves the <strong>classification</strong> earned. The math lives
+in three pure, Flask/DB-free modules so it stays unit-testable and
+single-sourced:</p>
+<table>
+<thead>
+<tr>
+<th>Module</th>
+<th>Role</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>handicap.py</code></td>
+<td>The AGB 2023 handicap engine. Derives an expected arrow/round score from a face's ring geometry + distance (<code>sigma_t(H,d) = ANG_0·(1+STEP/100)^(H+DATUM)·e^(KD·d)</code>) and inverts it to the integer handicap for a score. Constants match the MIT-licensed <code>archeryutils</code> reference, so numbers agree with published AGB tables and archerycalculator.co.uk.</td>
+</tr>
+<tr>
+<td><code>handicap_data.py</code></td>
+<td>Constant tables: AGB class definitions, age/gender steps, WA Star Award and USAA pin milestones, which rounds are AGB-classified / indoor / 1440.</td>
+</tr>
+<tr>
+<td><code>classifications.py</code></td>
+<td>Resolvers for <strong>Archery GB</strong> class (handicap-threshold per category), <strong>World Archery</strong> Star Awards (1440 point milestones), and <strong>USA Archery</strong> Performance Award pins. Returns every award earned for a round + score + category.</td>
+</tr>
+</tbody>
+</table>
+<p>The handicap deliberately uses the <strong>scheme-standard arrow</strong> (5.5 mm
+outdoor, 9.3 mm indoor) — not your real shaft — so the figure is
+comparable to published tables and between archers; the raw score it's
+looked up from is still scored with your actual arrow. The archer
+<em>category</em> (bowstyle / gender / age group) comes from the <strong>Archer
+profile</strong> block on <code>/account</code> and is optional — the handicap is computed
+without it; it only affects which classification you're awarded. NFAA
+classification is deferred (it's a relative multi-score scheme, not a
+single-round lookup).</p>
+<hr />
+<h2 id="notes">Notes</h2>
+<ul>
+<li><strong>Multi-user.</strong> The first account to register inherits any data left
+  over from a pre-multi-user install. Subsequent accounts start empty.
+  Root (created from <code>APOLLO_ROOT_*</code>) can browse/delete users and reset
+  passwords or email addresses via <code>/admin</code>.</li>
+<li><strong>Bowstyle gear settings.</strong> Apollo offers six bowstyles (recurve,
+  compound, barebow, longbow, traditional, flatbow). Selecting a bow type
+  reveals exactly that style's gear fields. Gear splits into two tiers:
+  <em>static</em> gear that rarely changes (compound release aid / let-off /
+  peep / scope, recurve clicker / stabilizer / tab, barebow aiming method
+  / riser weights) is set on Add/Edit bow; <em>dynamic</em> tuning you tweak
+  between outings (string crawl, brace height, plunger tension) is chosen
+  per session and persists for the rest of it. Each shot snapshots the
+  gear in force as JSON, so later edits never rewrite a past shot's
+  attribution. The whole feature is driven by one schema dict,
+  <code>BOWSTYLE_SETTINGS</code>, that templates render from, POST handlers validate
+  against, and <code>/analyze</code> buckets head-to-head comparisons by.</li>
+<li><strong>CSRF.</strong> Every POST form includes <code>{{ csrf_token() }}</code>. Rotating
+  <code>SECRET_KEY</code> invalidates in-flight tokens — expected.</li>
+<li><strong>Password resets.</strong> Tokens are sha256-hashed at rest, one-shot, and
+  expire after a short TTL. Without <code>RESEND_API_KEY</code>, the reset URL is
+  printed to the server log instead of mailed — fine for solo/offline
+  use.</li>
+<li><strong>Tournament mode.</strong> <code>/tournament</code> runs World Archery / NFAA / USA
+  Archery rounds with the right end size, target face, and scoring rule,
+  and supports live match play (2–4 archers taking turns on one device).
+  See <a href="tournament-overview.html">documentation/tournament/</a> for the
+  internal rule reference. Verify against current official rulebooks
+  before relying on a score for competition. (NASP no longer has its own
+  round in the selector; the NASP 40 cm face ships as the default seeded
+  target for new accounts.)</li>
+<li><strong>End-session redirect.</strong> The session-stats screen on <code>/end_session</code>
+  auto-redirects to the splash 7 seconds after rendering so a user
+  ending a session and walking away lands on the public page rather
+  than a stale stats card.</li>
+</ul>
+        </div>
+        <p class="docs-footer">Apollo documentation · generated from the
+        project Markdown by <code>documentation/build_docs.py</code>.</p>
+    </main>
+</body>
+</html>

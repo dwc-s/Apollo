@@ -98,7 +98,10 @@ max 150.
 5 sets × 3 arrows at 70 m on the 122 cm face. Per set the higher
 total earns 2 set points (1 each on a tie). First to 6 set points
 wins; tie at 5–5 → single-arrow shoot-off. Apollo records per-set
-totals; the user compares against an opponent's scorecard manually.
+totals and can run this as a **live match** (2–4 archers on one
+device — see `scoring.md` § Live match play), computing set points and
+the winner automatically; or you can log one archer and compare against
+an opponent's scorecard manually.
 
 ### `wa_match_compound` — WA Match Play — Compound
 

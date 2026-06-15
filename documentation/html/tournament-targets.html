@@ -1,0 +1,546 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Apollo Docs · Tournament Target Faces</title>
+    <link rel="stylesheet" href="/static/fonts/apollo-fonts.css">
+    <link rel="stylesheet" type="text/css" href="/static/style.css">
+    <style>
+.docs-body { padding: 0; padding-left: 240px; }
+.docs-sidebar {
+    position: fixed; top: 0; left: 0; bottom: 0; width: 200px;
+    background-color: #b3c6e3; padding: 22px 16px; box-sizing: border-box;
+    overflow-y: auto; display: flex; flex-direction: column; gap: 6px;
+    box-shadow: 2px 0 8px rgba(99, 106, 128, 0.18); z-index: 500;
+}
+.docs-sidebar-label {
+    font-family: "Quantico", sans-serif; font-weight: 700; font-size: 0.7rem;
+    letter-spacing: 0.12em; text-transform: uppercase; color: #5a6a86;
+    margin: 4px 6px 6px;
+}
+.docs-sidebar .docs-nav-group {
+    font-family: "Quantico", sans-serif; font-weight: 700; font-size: 0.68rem;
+    letter-spacing: 0.1em; text-transform: uppercase; color: #7a89a6;
+    margin: 12px 6px 2px;
+}
+.docs-sidebar a.docs-nav-link {
+    display: block; padding: 6px 8px; border-radius: 6px;
+    font-family: "Quantico", sans-serif; font-weight: 700; font-size: 0.82rem;
+    color: #1a3a5c; text-decoration: none; transition: background-color 0.15s;
+}
+.docs-sidebar a.docs-nav-link:hover { background-color: #95abcf; }
+.docs-sidebar a.docs-nav-link.active { background-color: #95abcf; }
+.docs-sidebar-foot { margin-top: auto; padding-top: 12px; }
+.docs-sidebar a.docs-back {
+    font-family: "Quantico", sans-serif; font-weight: 700; font-size: 0.82rem;
+    color: #5a6a86; text-decoration: none;
+}
+.docs-sidebar a.docs-back:hover { text-decoration: underline; }
+
+.docs-main { max-width: 920px; margin: 0 auto; padding: 28px 24px 60px; }
+.docs-card {
+    background-color: #eaf2fb; border-radius: 16px; padding: 36px 44px;
+    box-shadow: 0 2px 10px rgba(99, 106, 128, 0.18);
+    font-family: "Quantico", sans-serif; color: #243b54; line-height: 1.6;
+}
+.docs-card h1 {
+    font-family: "Bungee Shade", sans-serif; color: #a1d8ed;
+    -webkit-text-stroke: 1.5px #636a80; font-size: 2.5rem; line-height: 1.15;
+    margin: 0 0 22px;
+}
+.docs-card h2 {
+    font-family: "Quantico", sans-serif; font-weight: 700; color: #1a3a5c;
+    font-size: 1.5rem; margin: 34px 0 12px; padding-bottom: 6px;
+    border-bottom: 2px solid #b3c6e3;
+}
+.docs-card h3 {
+    font-family: "Quantico", sans-serif; font-weight: 700; color: #1a3a5c;
+    font-size: 1.15rem; margin: 24px 0 8px;
+}
+.docs-card h4 { color: #1a3a5c; margin: 18px 0 6px; }
+.docs-card p, .docs-card li { font-size: 0.95rem; }
+.docs-card a { color: #3a6ea5; text-decoration: none; }
+.docs-card a:hover { text-decoration: underline; }
+.docs-card code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    background-color: #d6e4f0; color: #1a3a5c; padding: 1px 6px;
+    border-radius: 4px; font-size: 0.86em;
+}
+.docs-card pre {
+    background-color: #1a3a5c; color: #d6e4f0; padding: 16px 18px;
+    border-radius: 10px; overflow-x: auto; line-height: 1.45;
+}
+.docs-card pre code { background: none; color: inherit; padding: 0; }
+.docs-card pre.docs-plaintext {
+    white-space: pre-wrap; word-break: break-word; font-size: 0.82rem;
+}
+.docs-card blockquote {
+    margin: 16px 0; padding: 8px 18px; border-left: 4px solid #95abcf;
+    background-color: #dde9f6; border-radius: 0 8px 8px 0; color: #33506e;
+}
+.docs-card table {
+    border-collapse: collapse; width: 100%; margin: 16px 0; font-size: 0.88rem;
+}
+.docs-card th, .docs-card td {
+    border: 1px solid #b3c6e3; padding: 7px 11px; text-align: left;
+    vertical-align: top;
+}
+.docs-card th { background-color: #b3c6e3; color: #1a3a5c; font-weight: 700; }
+.docs-card tr:nth-child(even) td { background-color: #e1ecf8; }
+.docs-card hr { border: 0; border-top: 1px solid #b3c6e3; margin: 28px 0; }
+.docs-footer {
+    text-align: center; font-family: "Quantico", sans-serif; font-size: 0.78rem;
+    color: #5a6a86; margin-top: 22px;
+}
+
+/* index */
+.docs-index-grid {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap: 18px; margin: 8px 0 6px;
+}
+.docs-index-card {
+    display: block; background-color: #dde9f6; border-radius: 12px;
+    padding: 18px 20px; text-decoration: none; color: #1a3a5c;
+    border: 1px solid #c2d3ea; transition: transform 0.12s, box-shadow 0.12s;
+}
+.docs-index-card:hover {
+    transform: translateY(-2px); box-shadow: 0 4px 12px rgba(99,106,128,0.22);
+    text-decoration: none;
+}
+.docs-index-card .t {
+    font-family: "Quantico", sans-serif; font-weight: 700; font-size: 1.05rem;
+    color: #1a3a5c; display: block; margin-bottom: 6px;
+}
+.docs-index-card .d { font-size: 0.86rem; color: #3f5b78; }
+
+@media (max-width: 760px) {
+    .docs-body { padding-left: 0; }
+    .docs-sidebar {
+        position: static; width: auto; box-shadow: none; flex-direction: row;
+        flex-wrap: wrap; align-items: center;
+    }
+    .docs-sidebar-foot { margin: 0 0 0 auto; }
+    .docs-main { padding: 18px 14px 40px; }
+    .docs-card { padding: 24px 20px; }
+}
+</style>
+</head>
+<body class="docs-body">
+    <aside class="docs-sidebar">
+        <a href="/" class="side-nav-brand">Apollo</a>
+        <div class="docs-sidebar-label">Documentation</div>
+        <a href="index.html" class="docs-nav-link">Home</a>
+        <div class="docs-nav-group">Project</div>
+        <a href="readme.html" class="docs-nav-link">Overview</a>
+        <a href="formulas.html" class="docs-nav-link">Formulas & Math Reference</a>
+        <a href="install.html" class="docs-nav-link">Install & Deploy Guide</a>
+        <div class="docs-nav-group">Tournament</div>
+        <a href="tournament-overview.html" class="docs-nav-link">Overview</a>
+        <a href="tournament-rules.html" class="docs-nav-link">Tournament Round Reference</a>
+        <a href="tournament-scoring.html" class="docs-nav-link">Internal Scoring Procedures</a>
+        <a href="tournament-targets.html" class="docs-nav-link active">Tournament Target Faces</a>
+        <div class="docs-sidebar-foot">
+            <a href="/" class="docs-back">‹ Back to app</a>
+        </div>
+    </aside>
+    <main class="docs-main">
+        <div class="docs-card">
+<h1 id="tournament-target-faces">Tournament Target Faces</h1>
+<p>Specification of every target face Apollo seeds for tournament mode.
+Radii are listed as the <strong>outer edge</strong> of the named ring, measured in
+millimetres from the calibrated face center — the same convention the
+<code>target_zones</code> table uses. All values are the canonical published
+dimensions from the relevant rulebook; the code in <code>apollo.py</code> is the
+source of truth and these tables match the in-code helpers.</p>
+<h2 id="world-archery-outdoor-target-faces">World Archery — outdoor target faces</h2>
+<h3 id="wa-122-cm-10-zone-face">WA 122 cm 10-zone face</h3>
+<p>Used at 90 / 70 m. Ring width = 6.1 cm. X-ring is the inner-10
+sub-ring (3.05 cm radius).</p>
+<table>
+<thead>
+<tr>
+<th>Ring</th>
+<th>Point value</th>
+<th>Outer radius (mm)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Inner-10 (X)</td>
+<td>10</td>
+<td>30.5</td>
+</tr>
+<tr>
+<td>10</td>
+<td>10</td>
+<td>61</td>
+</tr>
+<tr>
+<td>9</td>
+<td>9</td>
+<td>122</td>
+</tr>
+<tr>
+<td>8</td>
+<td>8</td>
+<td>183</td>
+</tr>
+<tr>
+<td>7</td>
+<td>7</td>
+<td>244</td>
+</tr>
+<tr>
+<td>6</td>
+<td>6</td>
+<td>305</td>
+</tr>
+<tr>
+<td>5</td>
+<td>5</td>
+<td>366</td>
+</tr>
+<tr>
+<td>4</td>
+<td>4</td>
+<td>427</td>
+</tr>
+<tr>
+<td>3</td>
+<td>3</td>
+<td>488</td>
+</tr>
+<tr>
+<td>2</td>
+<td>2</td>
+<td>549</td>
+</tr>
+<tr>
+<td>1</td>
+<td>1</td>
+<td>610</td>
+</tr>
+</tbody>
+</table>
+<p>Colors center-out: gold (10/9), red (8/7), light blue (6/5), black
+(4/3), white (2/1).</p>
+<h3 id="wa-80-cm-10-zone-face">WA 80 cm 10-zone face</h3>
+<p>Used at 50 / 30 m on the 1440 short distances. Ring width = 4.0 cm.
+X-ring is the inner-10 (2.0 cm radius).</p>
+<table>
+<thead>
+<tr>
+<th>Ring</th>
+<th>Outer radius (mm)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Inner-10 (X)</td>
+<td>20</td>
+</tr>
+<tr>
+<td>10</td>
+<td>40</td>
+</tr>
+<tr>
+<td>9</td>
+<td>80</td>
+</tr>
+<tr>
+<td>8</td>
+<td>120</td>
+</tr>
+<tr>
+<td>7</td>
+<td>160</td>
+</tr>
+<tr>
+<td>6</td>
+<td>200</td>
+</tr>
+<tr>
+<td>5</td>
+<td>240</td>
+</tr>
+<tr>
+<td>4</td>
+<td>280</td>
+</tr>
+<tr>
+<td>3</td>
+<td>320</td>
+</tr>
+<tr>
+<td>2</td>
+<td>360</td>
+</tr>
+<tr>
+<td>1</td>
+<td>400</td>
+</tr>
+</tbody>
+</table>
+<h3 id="wa-80-cm-6-ring-face-compound-50-m">WA 80 cm 6-ring face (compound 50 m)</h3>
+<p>Same ring widths as the 80 cm 10-zone face but only rings 5–10 are
+printed. Anything outside the 5 ring (240 mm radius) scores M.</p>
+<h3 id="wa-60-cm-10-zone-face-indoor-25-m">WA 60 cm 10-zone face (indoor 25 m)</h3>
+<p>Ring width = 3.0 cm. X-ring is the inner-10 (1.5 cm radius). Rings at
+15 / 30 / 60 / 90 / 120 / 150 / 180 / 210 / 240 / 270 / 300 mm.</p>
+<h3 id="wa-40-cm-10-zone-face-indoor-18-m-single-spot">WA 40 cm 10-zone face (indoor 18 m, single-spot)</h3>
+<p>Ring width = 2.0 cm. X-ring radius = 1.0 cm. Recurve scoring: outer 10
+and inner 10 both count as 10 (X is tiebreaker). Compound scoring on
+this face uses the dedicated <code>wa_40_compound</code> zone list — only the
+X-ring (inner-10) scores 10; the outer 10 ring is demoted to 9.</p>
+<table>
+<thead>
+<tr>
+<th>Ring</th>
+<th>Outer radius (mm)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Inner-10 (X)</td>
+<td>10</td>
+</tr>
+<tr>
+<td>10</td>
+<td>20</td>
+</tr>
+<tr>
+<td>9</td>
+<td>40</td>
+</tr>
+<tr>
+<td>8</td>
+<td>60</td>
+</tr>
+<tr>
+<td>7</td>
+<td>80</td>
+</tr>
+<tr>
+<td>6</td>
+<td>100</td>
+</tr>
+<tr>
+<td>5</td>
+<td>120</td>
+</tr>
+<tr>
+<td>4</td>
+<td>140</td>
+</tr>
+<tr>
+<td>3</td>
+<td>160</td>
+</tr>
+<tr>
+<td>2</td>
+<td>180</td>
+</tr>
+<tr>
+<td>1</td>
+<td>200</td>
+</tr>
+</tbody>
+</table>
+<h3 id="vegas-40-cm-3-spot-face-per-spot">Vegas 40 cm 3-spot face (per spot)</h3>
+<p>Three 20 cm spots stacked vertically; each spot shows rings 10–6 only.
+Per-spot ring widths derived from the underlying WA 40 cm face. Apollo
+records each shot against a single representative spot — the
+one-arrow-per-spot rule is enforced visually only.</p>
+<table>
+<thead>
+<tr>
+<th>Ring</th>
+<th>Outer radius (mm)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Inner-10 (X)</td>
+<td>10</td>
+</tr>
+<tr>
+<td>10</td>
+<td>20</td>
+</tr>
+<tr>
+<td>9</td>
+<td>40</td>
+</tr>
+<tr>
+<td>8</td>
+<td>60</td>
+</tr>
+<tr>
+<td>7</td>
+<td>80</td>
+</tr>
+<tr>
+<td>6</td>
+<td>100</td>
+</tr>
+</tbody>
+</table>
+<p>Anything outside 100 mm on the spot is a miss.</p>
+<h2 id="world-archery-field-target-faces">World Archery — Field target faces</h2>
+<p>WA Field faces show <strong>six</strong> scoring rings, scoring 6 down to 1 (gold
+center, black outer). Each ring is one-sixth of the face radius wide;
+the X-ring (compound tiebreak) is half the 6-ring radius.</p>
+<h3 id="wa-field-80-cm">WA Field 80 cm</h3>
+<p>Ring width = 66.67 mm. Rings at 33.33 / 66.67 / 133.33 / 200 /
+266.67 / 333.33 / 400 mm (X / 6 / 5 / 4 / 3 / 2 / 1).</p>
+<h3 id="wa-field-60-cm">WA Field 60 cm</h3>
+<p>Ring width = 50 mm. Rings at 25 / 50 / 100 / 150 / 200 / 250 / 300 mm.</p>
+<h3 id="wa-field-40-cm">WA Field 40 cm</h3>
+<p>Ring width = 33.33 mm. Rings at 16.67 / 33.33 / 66.67 / 100 / 133.33 /
+166.67 / 200 mm.</p>
+<h3 id="wa-field-20-cm">WA Field 20 cm</h3>
+<p>Ring width = 16.67 mm. Rings at 8.33 / 16.67 / 33.33 / 50 / 66.67 /
+83.33 / 100 mm. Compound bowmen use the dedicated <code>wa_field_20_compound</code>
+zone list — only the inner-6 (X) scores 6; outer 6 demoted to 5.</p>
+<h2 id="nfaa-indoor-faces">NFAA — indoor faces</h2>
+<h3 id="nfaa-indoor-blue-40-cm-single-spot">NFAA Indoor Blue 40 cm (single-spot)</h3>
+<p>Blue face, white rings. Used at 20 yards. Scoring 5 / 4 / 3 / 2 / 1
+with X = 5 (tiebreaker).</p>
+<table>
+<thead>
+<tr>
+<th>Ring</th>
+<th>Point value</th>
+<th>Outer radius (mm)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>X</td>
+<td>5</td>
+<td>20</td>
+</tr>
+<tr>
+<td>5</td>
+<td>5</td>
+<td>40</td>
+</tr>
+<tr>
+<td>4</td>
+<td>4</td>
+<td>80</td>
+</tr>
+<tr>
+<td>3</td>
+<td>3</td>
+<td>120</td>
+</tr>
+<tr>
+<td>2</td>
+<td>2</td>
+<td>160</td>
+</tr>
+<tr>
+<td>1</td>
+<td>1</td>
+<td>200</td>
+</tr>
+</tbody>
+</table>
+<h3 id="nfaa-5-spot-40-cm">NFAA 5-spot 40 cm</h3>
+<p>Five small spots arranged as on a "5" die face. Each spot shows the
+5 ring + X only.</p>
+<table>
+<thead>
+<tr>
+<th>Ring</th>
+<th>Point value</th>
+<th>Outer radius (mm)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>X</td>
+<td>5</td>
+<td>20</td>
+</tr>
+<tr>
+<td>5</td>
+<td>5</td>
+<td>40</td>
+</tr>
+</tbody>
+</table>
+<p>One arrow per spot — double-hits score the lower as a miss (rule
+documented; not enforced by Apollo).</p>
+<h2 id="nfaa-field-hunter-faces">NFAA — Field / Hunter faces</h2>
+<p>NFAA Field and Hunter faces share the same scoring geometry —
+three rings (5 / 4 / 3) with an X tiebreaker inside the 5 ring.
+Apollo encodes the four standard face sizes (65 / 50 / 35 / 20 cm)
+and uses the same zone list for both Field (white center, black
+outer) and Hunter (black face, white spot) variants.</p>
+<p>For each face the ring radii are 10% / 20% / 33.4% / 50% of the
+face diameter. For the 65 cm face:</p>
+<table>
+<thead>
+<tr>
+<th>Ring</th>
+<th>Point value</th>
+<th>Outer radius (mm)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>X</td>
+<td>5</td>
+<td>65</td>
+</tr>
+<tr>
+<td>5</td>
+<td>5</td>
+<td>130</td>
+</tr>
+<tr>
+<td>4</td>
+<td>4</td>
+<td>217</td>
+</tr>
+<tr>
+<td>3</td>
+<td>3</td>
+<td>325</td>
+</tr>
+</tbody>
+</table>
+<p>Other sizes scale proportionally.</p>
+<h2 id="nasp">NASP</h2>
+<p>The <code>nasp_80</code> face row is retained for users with seeded targets from
+earlier versions; NASP rounds are no longer offered in the tournament
+selector. The face uses the WA 80 cm 10-zone layout.</p>
+<h2 id="image-asset-map">Image asset map</h2>
+<p>For every tournament face Apollo wants to render, it needs a square
+PNG/JPG/WEBP under <code>static/targets/</code>. The seeded <code>targets</code> table row
+points at that file with <code>image_filename = 'targets/&lt;file&gt;'</code>.</p>
+<p>Until each image is sourced, the tournament route falls back to
+<code>targets/nasp_40cm.jpg</code> (a bundled NASP face) as a visual
+placeholder — <strong>the scoring zones are correct for the requested
+face</strong> (encoded in code, seeded into <code>target_zones</code>), only the
+backing photo is wrong. This means a user can run a "WA 720" round
+today and have the score tally correctly; the only thing missing
+is the precise visual face behind the scoring overlay.</p>
+<p>Source candidates (public-domain or licensable):
+- World Archery face artwork: published in WA Rulebook Book 3
+  Appendix; vector PDFs at
+  https://www.worldarchery.sport/rulebook
+- NFAA face artwork: included in the NFAA Constitution &amp; By-Laws
+  PDF at nfaausa.com.</p>
+<p>Once each image is sourced, drop it into <code>static/targets/</code> with the
+agreed filename and Apollo will pick it up on the next user login —
+the seeder updates <code>image_filename</code> on a mismatch.</p>
+        </div>
+        <p class="docs-footer">Apollo documentation · generated from the
+        project Markdown by <code>documentation/build_docs.py</code>.</p>
+    </main>
+</body>
+</html>
