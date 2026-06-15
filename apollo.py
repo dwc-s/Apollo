@@ -1209,6 +1209,23 @@ def _practice_from_tags(tags):
     return False
 
 
+def _counts_toward_handicap(tags):
+    """True only for a round that should feed the running handicap.
+
+    An official handicap comes from a round you actually competed: match
+    play, or a score sheet logged from a real competition — both carry a
+    ``match:`` tag. Practice never counts: solo live Practice mode has no
+    ``match:`` tag at all, and a paper practice scorecard carries the
+    ``practice_scorecard`` marker (even though it reuses the match plumbing).
+    """
+    if not tags:
+        return False
+    toks = [t.strip() for t in tags.split(',')]
+    has_match = any(t.startswith('match:') for t in toks)
+    is_practice_scorecard = 'practice_scorecard' in toks
+    return has_match and not is_practice_scorecard
+
+
 def _round_segments(round_def):
     """Normalize a round definition into a list of segments.
 
@@ -1303,7 +1320,14 @@ def _session_handicap(round_key, total_score):
     round_def = _tournament_round_def(round_key)
     if not passes or not round_def:
         return None
-    return handicap.handicap_from_score(total_score, passes, round_def.get('max_score'))
+    hc_val = handicap.handicap_from_score(total_score, passes, round_def.get('max_score'))
+    if hc_val is None:
+        return None
+    # Archery GB issues handicaps on a 0–150 scale (0 = best). The model can
+    # produce values outside that — negative for a near-perfect score, >150 for
+    # a near-zero one — but those are not handicaps as they are awarded or
+    # printed, so clamp to the scale as it is used in practice.
+    return max(0, min(150, hc_val))
 
 
 def _archer_category(session_tags=None):
@@ -1695,7 +1719,8 @@ def _tournament_face_render_payload(face_key):
     }
 
 
-def _compute_tournament_progress(session_id, user_id, round_def):
+def _compute_tournament_progress(session_id, user_id, round_def,
+                                 chunk_by_stored=False):
     """Compute the per-end / total / X count summary for one tournament
     session. Returns a dict the template renders into the score panel.
 
@@ -1704,6 +1729,14 @@ def _compute_tournament_progress(session_id, user_id, round_def):
     arrows_per_end into "ends" (honoring per-segment end size for
     multi-segment rounds), and reports cumulative totals plus the
     inner-10 / X count.
+
+    `chunk_by_stored` switches end-chunking to the practice-scorecard
+    model: ends are read off the stored rows (closed when a row's
+    `arrows_remaining` hits 0) instead of the round's fixed segment plan,
+    so a paper practice scorecard with arbitrary end sizes scores
+    correctly. In this mode every shot is on the round's primary face
+    (segment 0) and `arrows_planned` tracks what was actually shot, so
+    the card always reads as complete.
     """
     segments = _round_segments(round_def)
     planned_total = _round_total_arrows(round_def)
@@ -1733,7 +1766,8 @@ def _compute_tournament_progress(session_id, user_id, round_def):
     try:
         with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
             shots = cur.execute(
-                "SELECT x_coord, y_coord, target_id, arrow_shaft_diameter "
+                "SELECT x_coord, y_coord, target_id, arrow_shaft_diameter, "
+                "arrows_remaining "
                 "FROM apollo WHERE session_id = %s AND user_id = %s "
                 "ORDER BY timestamp, id",
                 (session_id, user_id)
@@ -1754,10 +1788,15 @@ def _compute_tournament_progress(session_id, user_id, round_def):
     end_arrows = []
     out['arrows_shot'] = len(shots)
     for shot_idx, r in enumerate(shots):
-        # Resolve the segment that this shot belongs to, so we use the
-        # right end size for chunking and the right face's X-ring radius
-        # for the X counter.
-        seg_idx, seg, _into = _segment_for_shot(segments, shot_idx)
+        if chunk_by_stored:
+            # Practice scorecard: one face (segment 0), ends read off the
+            # stored rows rather than a fixed plan.
+            seg_idx, seg = 0, segments[0]
+        else:
+            # Resolve the segment that this shot belongs to, so we use the
+            # right end size for chunking and the right face's X-ring radius
+            # for the X counter.
+            seg_idx, seg, _into = _segment_for_shot(segments, shot_idx)
         seg_face = TOURNAMENT_FACES.get(seg['face_key'], {})
         x_ring_radius = float(seg_face.get('x_ring_mm') or 0.0)
         seg_arrows_per_end = int(seg['arrows_per_end'])
@@ -1788,7 +1827,17 @@ def _compute_tournament_progress(session_id, user_id, round_def):
         running += points
         end_arrows.append({'points': points, 'x': xraw, 'y': yraw,
                            'miss': (xraw == MISS_SENTINEL and yraw == MISS_SENTINEL)})
-        if len(end_arrows) == seg_arrows_per_end:
+        if chunk_by_stored:
+            # Close the end when the stored countdown reaches 0 (the last
+            # arrow of each end was written with arrows_remaining == 0).
+            try:
+                ar = int(_row_get(r, 'arrows_remaining'))
+            except (TypeError, ValueError):
+                ar = 0
+            end_done = (ar <= 0)
+        else:
+            end_done = (len(end_arrows) == seg_arrows_per_end)
+        if end_done:
             out['ends'].append({
                 'arrows':       list(end_arrows),
                 'end_total':    sum(a['points'] for a in end_arrows),
@@ -1804,6 +1853,10 @@ def _compute_tournament_progress(session_id, user_id, round_def):
             'running':   running,
             'partial':   True,
         })
+    if chunk_by_stored:
+        # Arbitrary-length practice card: "planned" == what was shot, so
+        # the card always reads as complete.
+        out['arrows_planned'] = out['arrows_shot']
     out['is_complete'] = out['arrows_shot'] >= out['arrows_planned']
     return out
 
@@ -7092,6 +7145,163 @@ def tournament_score_sheet_submit():
     return redirect(url_for('tournament_match_results', match_id=match_id))
 
 
+@app.route('/tournament/practice_scorecard/setup', methods=['POST'])
+@login_required
+def tournament_practice_scorecard_setup():
+    """Render the flexible practice-scorecard form for a chosen round.
+
+    Like the competition score-sheet (`/tournament/score_sheet/setup`),
+    but single-archer and with arbitrary ends: the grid defaults to the
+    round's ends × arrows-per-end, yet the user can change any end's
+    arrow count and add or remove ends. The target face is fixed to the
+    round's primary face — it is *not* arbitrary."""
+    user_id = current_user_id()
+    round_key = (request.form.get('round_key') or '').strip()
+    round_def = _tournament_round_def(round_key)
+    if round_def is None:
+        return "Unknown tournament round", 400
+    _seed_tournament_faces(user_id)
+
+    # The practice card uses one face — the round's primary segment.
+    primary = _round_segments(round_def)[0]
+    face_key = primary['face_key']
+    face = TOURNAMENT_FACES.get(face_key, {})
+    labels = _face_ring_labels(face_key)
+    # Ring labels for the inputs — X first, then physical ring numbers in
+    # descending order, then M.
+    choices = ['X'] + [str(l) for l in labels] + ['M']
+    # label → point-value lookup (zones[0] is the X ring; zones[1:] map
+    # to the labels list 1:1). String keys so the JS matches input.value.
+    zones = list(face.get('zones') or ())
+    points_map = {'X': int(zones[0][0]) if zones else 0, 'M': 0}
+    for i, label in enumerate(labels):
+        if 1 + i < len(zones):
+            points_map[str(label)] = int(zones[1 + i][0])
+
+    owner_name, owner_email = _owner_name_email(user_id)
+
+    return render_template(
+        'tournament.html',
+        view='practice_scorecard',
+        round_key=round_key,
+        round_def=round_def,
+        face_key=face_key,
+        face_name=face.get('name', face_key),
+        distance_m=float(primary['distance_m']),
+        choices=choices,
+        points_map_json=json.dumps(points_map),
+        default_arrows_per_end=int(primary['arrows_per_end']),
+        default_ends=int(primary['ends']),
+        owner_name=owner_name,
+        today_iso=_app_now().strftime('%Y-%m-%d'),
+    )
+
+
+@app.route('/tournament/practice_scorecard', methods=['POST'])
+@login_required
+def tournament_practice_scorecard_submit():
+    """Process a submitted practice scorecard.
+
+    Single archer (the device owner), arbitrary ends. Writes one
+    synthetic apollo row per arrow — coords resolved by
+    `_coords_for_ring_label` so the existing classifier scores them —
+    recording each end's arrow count in `quiver_size`/`arrows_remaining`
+    so the results pipeline can chunk the ends back out without a fixed
+    round plan. Reuses the match machinery (one participant) so the
+    existing results page + downloads work unchanged."""
+    user_id = current_user_id()
+    round_key = (request.form.get('round_key') or '').strip()
+    round_def = _tournament_round_def(round_key)
+    if round_def is None:
+        return "Unknown tournament round", 400
+
+    primary = _round_segments(round_def)[0]
+    face_key = primary['face_key']
+    distance_m = primary['distance_m']
+    target_id = _tournament_face_target_id(user_id, face_key)
+
+    owner_name, owner_email = _owner_name_email(user_id)
+    archer_name = (request.form.get('archer_name') or owner_name or 'Me').strip()
+
+    # Read the dynamic end plan: end_count, then per end end_<e>_arrows
+    # and end_<e>_arrow_<a> ring labels.
+    try:
+        end_count = int(request.form.get('end_count') or 0)
+    except (TypeError, ValueError):
+        end_count = 0
+    if end_count < 1:
+        return "Add at least one end before submitting.", 400
+    end_count = min(end_count, 200)  # fence off a malformed bulk POST
+
+    # Competition-level meta (optional) — stored on every row like the
+    # score-sheet flow so the results page / reports can recover it.
+    comp_name     = (request.form.get('competition_name')     or '').strip()
+    comp_date     = (request.form.get('competition_date')     or '').strip()
+    comp_location = (request.form.get('competition_location') or '').strip()
+    notes         = (request.form.get('notes')                or '').strip()
+
+    match_id = _match_id_for(user_id, round_key)
+
+    from urllib.parse import quote
+    tag = (f'tournament:{round_key}, practice, practice_scorecard, '
+           f'match:{match_id}, participant:{archer_name}')
+    if owner_email:
+        tag += f', email:{owner_email}'
+    forced_bs = _round_bowstyle(round_def)
+    if forced_bs:
+        tag += f', bowstyle:{forced_bs}'
+    if comp_name:
+        tag += f', competition_name:{quote(comp_name, safe="")}'
+    if comp_date:
+        tag += f', competition_date:{quote(comp_date, safe="")}'
+    if comp_location:
+        tag += f', competition_location:{quote(comp_location, safe="")}'
+
+    try:
+        with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
+            session_id = _mint_session_id(con, cur, user_id)
+            if session_id is None:
+                return "Could not allocate session id — please try again", 500
+            ts = _app_now()
+            wrote_any = False
+            for end_n in range(1, end_count + 1):
+                try:
+                    arrows = int(request.form.get(f'end_{end_n}_arrows') or 0)
+                except (TypeError, ValueError):
+                    arrows = 0
+                arrows = max(0, min(arrows, 24))  # sane per-end cap
+                for arrow_n in range(1, arrows + 1):
+                    raw = (request.form.get(
+                        f'end_{end_n}_arrow_{arrow_n}') or '').strip().upper()
+                    if raw == '':
+                        raw = 'M'  # empty cell → miss (forgiving)
+                    x, y = _coords_for_ring_label(face_key, raw)
+                    cur.execute("""
+                        INSERT INTO apollo
+                        (user_id, session_id, timestamp, bow, arrow_type,
+                         quiver_size, arrows_remaining, distance,
+                         session_notes, x_coord, y_coord, is_precise,
+                         record_mode, target_id, session_tags)
+                        VALUES (%s,%s,%s,%s,%s,
+                                %s,%s,%s,
+                                %s,%s,%s,%s,
+                                %s,%s,%s)""",
+                        (user_id, session_id, ts, '', '',
+                         arrows, arrows - arrow_n, str(distance_m),
+                         notes, x, y, 0,
+                         0, target_id, tag)
+                    )
+                    wrote_any = True
+            if not wrote_any:
+                return "Add at least one arrow before submitting.", 400
+            con.commit()
+    except SQLAlchemyError as e:
+        print(f"❌ Practice scorecard submit error: {e}")
+        return "Error saving scorecard — please try again", 500
+
+    return redirect(url_for('tournament_match_results', match_id=match_id))
+
+
 def _match_participants(user_id, match_id):
     """Return participants of a tournament match, with their session_id,
     name, email, round_key, and competition meta (name/date/location).
@@ -7125,9 +7335,12 @@ def _match_participants(user_id, match_id):
         comp_date = ''
         comp_location = ''
         seat = None
+        is_practice_scorecard = False
         for part in (tags or '').split(','):
             p = part.strip()
-            if p.startswith('participant:'):
+            if p == 'practice_scorecard':
+                is_practice_scorecard = True
+            elif p.startswith('participant:'):
                 name = p.split(':', 1)[1].strip()
             elif p.startswith('email:'):
                 email = p.split(':', 1)[1].strip()
@@ -7152,11 +7365,13 @@ def _match_participants(user_id, match_id):
             'competition_name':      comp_name,
             'competition_date':      comp_date,
             'competition_location':  comp_location,
+            'practice_scorecard':    is_practice_scorecard,
         })
     return out
 
 
-def _participant_scorecard(user_id, session_id, round_def, round_key=None):
+def _participant_scorecard(user_id, session_id, round_def, round_key=None,
+                           practice=False):
     """Return the canonical scorecard for one participant:
     {'ends': [{'arrows':[label,...], 'end_total':n, 'running':n, 'segment_idx':i}],
      'total_score': n, 'x_count': n, 'arrows_shot': n, 'handicap': n, 'awards': [...]}.
@@ -7165,8 +7380,14 @@ def _participant_scorecard(user_id, session_id, round_def, round_key=None):
     aware) and decorates each arrow with the ring label the user
     originally entered, reverse-mapped from the stored coordinates. When
     ``round_key`` is supplied and the round is complete, the AGB handicap and
-    classification awards are included too."""
-    progress = _compute_tournament_progress(session_id, user_id, round_def)
+    classification awards are included too.
+
+    ``practice`` flags a paper practice scorecard: ends are chunked from
+    the stored rows (arbitrary end sizes), and no AGB handicap or
+    classification is attached — a practice/range log is never scored as
+    an official round, regardless of its end layout."""
+    progress = _compute_tournament_progress(session_id, user_id, round_def,
+                                            chunk_by_stored=practice)
     segments = _round_segments(round_def)
     # Reverse-map points → ring label. This is approximate for compound
     # faces where two zones share a point value; we display the score
@@ -7200,7 +7421,10 @@ def _participant_scorecard(user_id, session_id, round_def, round_key=None):
         })
     handicap = None
     awards = []
-    if round_key and progress.get('is_complete'):
+    # A practice scorecard is a casual / range log, not an official round —
+    # so it never carries a handicap or classification, even when its end
+    # layout happens to match the round's standard plan.
+    if round_key and progress.get('is_complete') and not practice:
         info = _session_handicap_awards(round_key, progress['total_score'])
         handicap = info['handicap']
         awards = info['awards']
@@ -7213,6 +7437,17 @@ def _participant_scorecard(user_id, session_id, round_def, round_key=None):
         'handicap':    handicap,
         'awards':      awards,
     }
+
+
+def _scorecard_max_ape(round_def, scorecard):
+    """Widest arrow column the scorecard tables need. Takes the max over
+    the round's segment end sizes *and* the actual ends shot — a practice
+    scorecard may have ends larger than the round's standard end size."""
+    seg_max = max((int(s['arrows_per_end']) for s in _round_segments(round_def)),
+                  default=0)
+    end_max = max((len(e['arrows']) for e in scorecard.get('ends', [])),
+                  default=0)
+    return max(seg_max, end_max, 1)
 
 
 def _scorecard_csv(round_def, participant, scorecard):
@@ -7233,7 +7468,7 @@ def _scorecard_csv(round_def, participant, scorecard):
         w.writerow([f"Email: {participant['email']}"])
     w.writerow([f"Logged: {_app_now().strftime('%Y-%m-%d %H:%M')}"])
     w.writerow([])
-    max_ape = max(int(s['arrows_per_end']) for s in _round_segments(round_def))
+    max_ape = _scorecard_max_ape(round_def, scorecard)
     w.writerow(['End'] + [f'A{i+1}' for i in range(max_ape)] + ['End total', 'Running'])
     for idx, end in enumerate(scorecard['ends'], start=1):
         row = [idx] + list(end['arrows'])
@@ -7285,7 +7520,7 @@ def _scorecard_xlsx(round_def, participant, scorecard):
     ws.cell(row=row_n, column=1, value=f"Logged: {_app_now().strftime('%Y-%m-%d %H:%M')}")
     row_n += 1
 
-    max_ape = max(int(s['arrows_per_end']) for s in _round_segments(round_def))
+    max_ape = _scorecard_max_ape(round_def, scorecard)
     header_row = row_n + 1
     ws.cell(row=header_row, column=1, value='End').font = Font(bold=True)
     for i in range(max_ape):
@@ -7341,7 +7576,7 @@ def _scorecard_pdf(round_def, participant, scorecard):
     from matplotlib.backends.backend_pdf import PdfPages
     import io
 
-    max_ape = max(int(s['arrows_per_end']) for s in _round_segments(round_def))
+    max_ape = _scorecard_max_ape(round_def, scorecard)
     header = ['End'] + [f'A{i+1}' for i in range(max_ape)] + ['End', 'Run']
     rows = []
     for idx, end in enumerate(scorecard['ends'], start=1):
@@ -7434,23 +7669,30 @@ def tournament_match_results(match_id):
     if round_def is None:
         return "Unknown round.", 400
 
+    # A solo practice scorecard is single-archer with arbitrary ends —
+    # no head-to-head match scoring, and nobody to email.
+    is_practice = bool(participants[0].get('practice_scorecard'))
+
     # Score the match (set points / cumulative / leaderboard) from each
     # participant's raw progress, in seat order so set play pairs the
-    # archers consistently.
-    by_seat = sorted(participants,
-                     key=lambda q: (q.get('seat') if q.get('seat') is not None else 999))
-    archers_for_scoring = [{
-        'name':      p['name'],
-        'seat':      p.get('seat'),
-        'is_active': False,
-        'progress':  _compute_tournament_progress(p['session_id'], user_id, round_def),
-    } for p in by_seat]
-    match_score = _match_set_scoring(archers_for_scoring, round_def)
+    # archers consistently. (Skipped for a practice scorecard.)
+    match_score = None
+    if not is_practice:
+        by_seat = sorted(participants,
+                         key=lambda q: (q.get('seat') if q.get('seat') is not None else 999))
+        archers_for_scoring = [{
+            'name':      p['name'],
+            'seat':      p.get('seat'),
+            'is_active': False,
+            'progress':  _compute_tournament_progress(p['session_id'], user_id, round_def),
+        } for p in by_seat]
+        match_score = _match_set_scoring(archers_for_scoring, round_def)
 
     results = []
     for p in participants:
         scorecard = _participant_scorecard(user_id, p['session_id'], round_def,
-                                           round_key=p['round_key'])
+                                           round_key=p['round_key'],
+                                           practice=p.get('practice_scorecard', False))
         results.append({**p, 'scorecard': scorecard})
 
     # Sort highest score first (ranking)
@@ -7458,7 +7700,8 @@ def tournament_match_results(match_id):
                                 r['scorecard']['x_count']),
                  reverse=True)
 
-    email_enabled = bool(os.environ.get('RESEND_API_KEY', '').strip()) and (resend is not None)
+    email_enabled = (bool(os.environ.get('RESEND_API_KEY', '').strip())
+                     and (resend is not None) and not is_practice)
     return render_template(
         'tournament.html',
         view='results',
@@ -7467,6 +7710,7 @@ def tournament_match_results(match_id):
         results=results,
         match_score=match_score,
         email_enabled=email_enabled,
+        is_practice=is_practice,
     )
 
 
@@ -7484,7 +7728,8 @@ def tournament_match_download(match_id, session_id, fmt):
     if round_def is None:
         return "Round not found.", 400
     scorecard = _participant_scorecard(user_id, session_id, round_def,
-                                       round_key=p['round_key'])
+                                       round_key=p['round_key'],
+                                       practice=p.get('practice_scorecard', False))
     safe_name = ''.join(c for c in p['name']
                         if c.isalnum() or c in ('-', '_')) or f's{session_id}'
     base = f"apollo-{p['round_key']}-{safe_name}"
@@ -7532,7 +7777,8 @@ def tournament_match_email(match_id):
             skipped.append({'name': p['name'], 'reason': 'no email on file'})
             continue
         scorecard = _participant_scorecard(user_id, p['session_id'], round_def,
-                                           round_key=p['round_key'])
+                                           round_key=p['round_key'],
+                                           practice=p.get('practice_scorecard', False))
         attachments = [
             {'filename': 'scorecard.pdf',  'content': _scorecard_pdf(round_def, p, scorecard)},
             {'filename': 'scorecard.csv',  'content': _scorecard_csv(round_def, p, scorecard)},
@@ -12888,9 +13134,11 @@ def _handicap_summary(points):
       that season has fewer than three rounds it falls back to the trailing 12
       months, then to all rounds, and ``agb_basis`` records which was used.
 
-    Practice and record rounds are treated alike — Apollo has no notion of an
-    "official shoot", so every completed AGB-target round is eligible. The
-    figure is therefore a personal tracking number, not a club-submitted one.
+    Only competed rounds feed this figure: match play and score sheets from
+    real competitions. Practice — both the live on-screen Practice mode and
+    paper practice scorecards — is excluded by the caller
+    (``_report_handicap_trend``), so casual shooting never moves the number.
+    It is still a personal tracking figure, not a club-submitted one.
     """
     if not points:
         return {'latest': None, 'best_recent': None,
@@ -12938,6 +13186,12 @@ def _report_handicap_trend(user_id):
 
     points = []
     for r in rows:
+        # Only competed rounds feed the running handicap — match play or a
+        # score sheet logged from a real competition. Practice never counts,
+        # neither the live on-screen Practice mode nor a paper practice
+        # scorecard.
+        if not _counts_toward_handicap(r['tags']):
+            continue
         round_key = _round_key_from_tags(r['tags'])
         # Cheap filter first: skip non-tournament and non-AGB rounds before
         # paying for a per-session progress recompute.

@@ -311,6 +311,10 @@
                     title="Skip the canvas — type each arrow's ring number from a paper scorecard. Use this to log a real competition (yours or your team's) after the fact.">
                 Enter scoresheet from actual tournament
             </button>
+            <button type="submit" formaction="/tournament/practice_scorecard/setup"
+                    title="Type ring numbers from a paper practice scorecard. Uses this round's target face, but the end count and arrows-per-end are flexible — they just default to the round's spec.">
+                Enter practice scorecard
+            </button>
         </form>
     </div>
     {% endfor %}
@@ -409,7 +413,7 @@
 <div class="complete-banner">
     Round complete — {{ progress.total_score }} / {{ round_def.max_score }} ({{ progress.x_count }}X).
     {% if handicap_info and handicap_info.handicap is not none %}
-    · <strong title="Archery GB 2023 handicap — lower is better">Handicap {{ handicap_info.handicap }}</strong>
+    · <strong title="The Archery GB 2023 handicap implied by this single round's score — a per-round figure, not a running or cumulative handicap, and not affected by practice scorecards. Lower is better.">Handicap {{ handicap_info.handicap }}</strong>
     {% endif %}
     <a href="/end_session" data-no-warn="1" style="color:#fff;text-decoration:underline;">Finalize and view stats →</a>
     {% if handicap_info and handicap_info.awards %}
@@ -1929,6 +1933,300 @@ applyUnits();
 {% endif %}
 
 
+{% if view == 'practice_scorecard' %}
+<style>
+    #practice-scorecard-form {
+        font-family: "Quantico", sans-serif;
+        max-width: max-content;
+        margin: 0 auto;
+        padding: 0 16px;
+    }
+    #practice-scorecard-form h2,
+    #practice-scorecard-form h4,
+    #practice-scorecard-form label,
+    #practice-scorecard-form p,
+    #practice-scorecard-form input,
+    #practice-scorecard-form textarea,
+    #practice-scorecard-form button,
+    #practice-scorecard-form table {
+        font-family: "Quantico", sans-serif;
+    }
+    .score-card {
+        display: block;
+        max-width: 100%;
+        margin: 18px auto;
+        padding: 18px 22px;
+        border: 1px solid #c3d0e3;
+        border-radius: 10px;
+        background: #fbfdff;
+        box-shadow: 0 1px 3px rgba(26,58,92,0.06);
+        text-align: left;
+    }
+    .meta-grid {
+        display: grid;
+        grid-template-columns: max-content 1fr;
+        column-gap: 14px;
+        row-gap: 10px;
+        align-items: center;
+        margin-top: 6px;
+    }
+    .meta-grid label { font-weight: 700; color: #1a3a5c; white-space: nowrap; }
+    .meta-grid input,
+    .meta-grid textarea {
+        font-size: 0.95rem;
+        padding: 6px 8px;
+        border: 1px solid #b9c6d8;
+        border-radius: 4px;
+        background: #fff;
+    }
+    .meta-grid textarea { min-height: 48px; resize: vertical; }
+    table.end-table { border-collapse: separate; border-spacing: 10px 6px; margin: 6px 0; }
+    table.end-table th, table.end-table td {
+        border: none; padding: 4px 6px; text-align: center; font-size: 0.95rem;
+        vertical-align: middle;
+    }
+    table.end-table th { font-weight: 700; color: #1a3a5c; border-bottom: 1px solid #c3d0e3; }
+    td.end-total, td.end-running { font-weight: 700; background: #f0f5fb; border-radius: 4px; }
+    .ring-input {
+        width: 2.4em; text-align: center; padding: 4px 0;
+        border: 1px solid #b9c6d8; border-radius: 4px;
+        font-family: "Quantico", sans-serif;
+    }
+    .arrow-inputs { display: inline-flex; gap: 6px; flex-wrap: wrap; justify-content: center; }
+    .end-ape { width: 3em; text-align: center; padding: 3px 0;
+        border: 1px solid #b9c6d8; border-radius: 4px; }
+    .rm-end {
+        background: transparent; border: 1px solid #c64a4a; color: #c64a4a;
+        border-radius: 14px; width: 26px; height: 26px; line-height: 18px;
+        font-weight: 700; cursor: pointer;
+    }
+    .add-end-btn, .submit-btn {
+        background: #1a3a5c; color: #fff; border: 0; border-radius: 4px;
+        cursor: pointer; font-family: "Quantico", sans-serif;
+    }
+    .add-end-btn { margin: 8px 0 16px 0; padding: 8px 14px; }
+    .add-end-btn:hover, .submit-btn:hover { background: #2a5a8c; }
+    .submit-btn { font-size: 1.05rem; padding: 10px 28px; }
+    .grand-summary { margin-top: 12px; font-size: 1.05rem; text-align: right; color: #1a3a5c; }
+</style>
+
+<h2 class="quantico" style="text-align:center;color:#1a3a5c;">
+    Practice scorecard: {{ round_def.name }}
+</h2>
+<p class="selector-intro" style="font-family:'Quantico',sans-serif;">
+    Type each arrow's ring value into the grid — <code>X</code> for an
+    inner-10/inner-X, <code>M</code> for a miss, or the printed ring
+    number. Empty cells count as misses. The ends below default to this
+    round's spec, but you can change any end's arrow count or add and
+    remove ends freely. Scoring uses the <strong>{{ face_name }}</strong>
+    face at {{ '%.1f'|format(distance_m) }} m.
+</p>
+
+<form action="/tournament/practice_scorecard" method="POST" id="practice-scorecard-form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="round_key" value="{{ round_key }}">
+    <input type="hidden" name="end_count" id="end-count" value="0">
+
+    <div class="score-card">
+        <div class="meta-grid">
+            <label for="archer_name">Archer</label>
+            <input type="text" id="archer_name" name="archer_name"
+                   value="{{ owner_name }}" placeholder="Your name">
+
+            <label for="competition_name">Session name</label>
+            <input type="text" id="competition_name" name="competition_name"
+                   placeholder="Optional — e.g. Tuesday range session">
+
+            <label for="competition_date">Date</label>
+            <input type="date" id="competition_date" name="competition_date"
+                   value="{{ today_iso }}">
+
+            <label for="competition_location">Location</label>
+            <input type="text" id="competition_location" name="competition_location"
+                   placeholder="Optional — e.g. Riverside Archery Club">
+
+            <label for="notes" style="align-self:start;">Notes</label>
+            <textarea id="notes" name="notes"
+                      placeholder="Optional — anything noteworthy about the session."></textarea>
+        </div>
+    </div>
+
+    <div class="score-card">
+        <label style="font-weight:700;color:#1a3a5c;">
+            Arrows per end for new ends:
+            <input type="number" id="default-ape" min="1" max="24"
+                   value="{{ default_arrows_per_end }}"
+                   style="width:4em;text-align:center;padding:4px;">
+        </label>
+        <table class="end-table">
+            <thead>
+                <tr>
+                    <th>End</th>
+                    <th>Arrows</th>
+                    <th>Scores</th>
+                    <th>End</th>
+                    <th>Run</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody id="ends-body"></tbody>
+        </table>
+        <button type="button" id="add-end" class="add-end-btn">+ Add end</button>
+        <div class="grand-summary">
+            Total: <strong id="grand-total">0</strong>
+            · X: <strong id="grand-x">0</strong>
+            · Arrows: <strong id="grand-arrows">0</strong>
+        </div>
+    </div>
+
+    <div style="margin:24px 0;text-align:center;">
+        <button type="submit" class="submit-btn">Save practice scorecard</button>
+    </div>
+</form>
+
+<script>
+(function() {
+    const POINTS_MAP = {{ points_map_json|safe }};
+    const CHOICES    = {{ choices|tojson }};
+    const DEFAULT_APE  = {{ default_arrows_per_end }};
+    const DEFAULT_ENDS = {{ default_ends }};
+
+    const body = document.getElementById('ends-body');
+
+    function pointsFor(label) {
+        const lbl = (label || '').toString().trim().toUpperCase();
+        if (lbl === '' || lbl === 'M') return 0;
+        return Object.prototype.hasOwnProperty.call(POINTS_MAP, lbl) ? POINTS_MAP[lbl] : 0;
+    }
+    function isX(label) {
+        return (label || '').toString().trim().toUpperCase() === 'X';
+    }
+
+    function makeRingInput(value) {
+        const inp = document.createElement('input');
+        inp.type = 'text';
+        inp.maxLength = 2;
+        inp.className = 'ring-input';
+        if (value != null) inp.value = value;
+        inp.addEventListener('input', () => {
+            inp.value = (inp.value || '').toUpperCase();
+            recalc();
+        });
+        inp.addEventListener('blur', () => {
+            const v = (inp.value || '').toUpperCase().trim();
+            if (!v) { inp.style.borderColor = ''; inp.title = ''; return; }
+            if (CHOICES.indexOf(v) === -1) {
+                inp.style.borderColor = '#c64a4a';
+                inp.title = 'Valid: ' + CHOICES.join(' / ');
+            } else {
+                inp.style.borderColor = '';
+                inp.title = '';
+            }
+        });
+        return inp;
+    }
+
+    // Re-render one row's arrow inputs to `count`, preserving any values
+    // already typed.
+    function renderArrows(row, count) {
+        const host = row.querySelector('.arrow-inputs');
+        const prev = Array.from(host.querySelectorAll('input.ring-input'))
+                          .map(i => i.value);
+        host.innerHTML = '';
+        for (let a = 0; a < count; a++) {
+            host.appendChild(makeRingInput(prev[a]));
+        }
+    }
+
+    function makeEndRow(arrowCount) {
+        const tr = document.createElement('tr');
+        tr.dataset.end = '1';
+        tr.innerHTML =
+            '<td class="end-num"></td>' +
+            '<td><input type="number" class="end-ape" min="1" max="24"></td>' +
+            '<td><div class="arrow-inputs"></div></td>' +
+            '<td class="end-total"></td>' +
+            '<td class="end-running"></td>' +
+            '<td><button type="button" class="rm-end" title="Remove this end">×</button></td>';
+        const ape = tr.querySelector('.end-ape');
+        ape.value = arrowCount;
+        ape.addEventListener('change', () => {
+            let n = parseInt(ape.value, 10);
+            if (isNaN(n) || n < 1) n = 1;
+            if (n > 24) n = 24;
+            ape.value = n;
+            renderArrows(tr, n);
+            recalc();
+        });
+        tr.querySelector('.rm-end').addEventListener('click', () => {
+            tr.remove();
+            renumber();
+            recalc();
+        });
+        renderArrows(tr, arrowCount);
+        return tr;
+    }
+
+    function addEnd(arrowCount) {
+        body.appendChild(makeEndRow(arrowCount));
+        renumber();
+        recalc();
+    }
+
+    function renumber() {
+        body.querySelectorAll('tr').forEach((row, i) => {
+            row.querySelector('.end-num').textContent = (i + 1);
+        });
+    }
+
+    function recalc() {
+        let running = 0, xCount = 0, arrows = 0;
+        body.querySelectorAll('tr').forEach((row) => {
+            let endTotal = 0;
+            row.querySelectorAll('input.ring-input').forEach((inp) => {
+                endTotal += pointsFor(inp.value);
+                if (isX(inp.value)) xCount += 1;
+                arrows += 1;
+            });
+            running += endTotal;
+            row.querySelector('.end-total').textContent = endTotal || '';
+            row.querySelector('.end-running').textContent = running;
+        });
+        document.getElementById('grand-total').textContent = running;
+        document.getElementById('grand-x').textContent = xCount;
+        document.getElementById('grand-arrows').textContent = arrows;
+    }
+
+    // On submit, assign contiguous field names the server expects:
+    // end_<e>_arrows and end_<e>_arrow_<a>, plus end_count.
+    document.getElementById('practice-scorecard-form')
+        .addEventListener('submit', () => {
+            const rows = Array.from(body.querySelectorAll('tr'));
+            document.getElementById('end-count').value = rows.length;
+            rows.forEach((row, i) => {
+                const e = i + 1;
+                row.querySelector('.end-ape').name = 'end_' + e + '_arrows';
+                row.querySelectorAll('input.ring-input').forEach((inp, j) => {
+                    inp.name = 'end_' + e + '_arrow_' + (j + 1);
+                });
+            });
+        });
+
+    document.getElementById('add-end').addEventListener('click', () => {
+        // Inherit the last end's count, falling back to the default.
+        const last = body.querySelector('tr:last-child .end-ape');
+        let n = last ? parseInt(last.value, 10) : DEFAULT_APE;
+        if (isNaN(n) || n < 1) n = DEFAULT_APE;
+        addEnd(n);
+    });
+
+    // Seed the round's default plan.
+    for (let i = 0; i < Math.max(1, DEFAULT_ENDS); i++) addEnd(DEFAULT_APE);
+})();
+</script>
+{% endif %}
+
+
 {% if view == 'results' %}
 <style>
     .results-page {
@@ -1961,7 +2259,7 @@ applyUnits();
 
 <div class="results-page">
 <h2 class="quantico" style="text-align:center;color:#1a3a5c;">
-    Results: {{ round_def.name }}
+    {% if is_practice %}Practice scorecard{% else %}Results{% endif %}: {{ round_def.name }}
 </h2>
 {% if results[0].competition_name or results[0].competition_date or results[0].competition_location %}
 <div class="results-meta" style="text-align:center;">
@@ -1977,8 +2275,13 @@ applyUnits();
 </div>
 {% endif %}
 <p class="selector-intro" style="font-family:'Quantico',sans-serif;">
+    {% if is_practice %}
+    Saved. Your full practice scorecard is below — download a copy in
+    PDF, CSV, or Excel.
+    {% else %}
     Saved. Each competitor's full scorecard is below — download a copy
     in PDF, CSV, or Excel, or email everyone their report in one click.
+    {% endif %}
 </p>
 
 {% if match_score and match_score.summary %}
@@ -2002,10 +2305,28 @@ applyUnits();
             {% if r.email %}<div style="font-size:0.8rem;opacity:0.7;">{{ r.email }}</div>{% endif %}
         </div>
         <div style="font-size:1.15rem;">
-            <strong>{{ r.scorecard.total_score }}</strong> / {{ round_def.max_score }}
+            <strong>{{ r.scorecard.total_score }}</strong>{% if not is_practice %} / {{ round_def.max_score }}{% endif %}
             · X: {{ r.scorecard.x_count }}
+            {% if is_practice %} · {{ r.scorecard.arrows_shot }} arrows{% endif %}
+            {% if r.scorecard.handicap is not none %}
+            · <strong title="The Archery GB 2023 handicap implied by this single round's score — a per-round figure, not a running or cumulative handicap, and not affected by practice scorecards. Lower is better.">Handicap {{ r.scorecard.handicap }}</strong>
+            {% endif %}
         </div>
     </div>
+    {% if r.scorecard.awards %}
+    <div style="margin-top:10px;display:flex;flex-wrap:wrap;gap:6px;align-items:center;">
+        {% for a in r.scorecard.awards %}
+        <span style="display:inline-block;padding:2px 8px;border-radius:10px;font-size:0.82em;
+                     background:#eef3fa;border:1px solid #c3d0e3;color:#1a3a5c;"
+              title="{{ a.scheme }}{% if a.record_status %} — awarded only at record-status events{% endif %}">
+            {{ a.scheme }}: {{ a.name }}{% if a.record_status %} *{% endif %}
+        </span>
+        {% endfor %}
+        {% if r.scorecard.awards | selectattr('record_status') | list %}
+        <span style="font-size:0.74em;opacity:0.75;color:#1a3a5c;">* record-status events only</span>
+        {% endif %}
+    </div>
+    {% endif %}
     {% if r.notes %}
     <div style="margin-top:10px;font-size:0.9rem;color:#1a3a5c;">
         <strong>Notes:</strong> {{ r.notes }}
@@ -2023,6 +2344,7 @@ applyUnits();
 {% endfor %}
 
 <div style="margin-top:24px;text-align:center;">
+    {% if not is_practice %}
     <form action="/tournament/match/{{ match_id }}/email" method="POST" id="email-form">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         {% if email_enabled %}
@@ -2039,6 +2361,7 @@ applyUnits();
             </p>
         {% endif %}
     </form>
+    {% endif %}
     <p style="margin-top:14px;">
         <a href="/tournament">← Back to tournament rounds</a>
     </p>
