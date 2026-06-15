@@ -176,14 +176,21 @@
             </div>
 
             <div class="coord-display">
-                <div class="vals" id="coord-readout">
-                    {% if x_coord and y_coord %}
-                        X&nbsp;<span id="disp-x">{{ x_coord }}</span>
-                        &nbsp;&nbsp;
-                        Y&nbsp;<span id="disp-y">{{ y_coord }}</span>
-                    {% else %}
-                        <span style="color:#636a80">— click target —</span>
-                    {% endif %}
+                <div class="coord-main">
+                    <div class="vals" id="coord-readout">
+                        {% if x_coord and y_coord %}
+                            X&nbsp;<span id="disp-x">{{ x_coord }}</span>
+                            &nbsp;&nbsp;
+                            Y&nbsp;<span id="disp-y">{{ y_coord }}</span>
+                        {% else %}
+                            <span style="color:#636a80">— click target —</span>
+                        {% endif %}
+                    </div>
+                    <div class="coord-sep"></div>
+                    <div class="arrows-left">
+                        <span class="ar-num" id="arrows-remaining-display">{{ arrows_remaining }}</span>
+                        <span class="ar-lab">Arrows left</span>
+                    </div>
                 </div>
                 <div class="coord-hint" id="coord-hint">(0, 0) = center &nbsp;·&nbsp; +X right &nbsp;·&nbsp; +Y up &nbsp;·&nbsp; cm</div>
             </div>
@@ -253,11 +260,7 @@
             <input type="text" id="quiver_size" name="quiver_size" value="{{ quiver_size }}" inputmode="numeric" pattern="[0-9]*"{% if quiver_size_locked %} readonly{% endif %}>
             {% if quiver_size_locked %}<div class="form-hint" style="font-size: 0.85em; color: #888;">locked until current quiver completes</div>{% endif %}
 
-            <span class="form-label">Remaining arrows in quiver</span>
-            <br>
-            <pre id="arrows-remaining-display">{{ arrows_remaining }}</pre>
             <input type="hidden" id="arrows_remaining" name="arrows_remaining" value="{{ arrows_remaining }}">
-
 
             <span class="form-label">Quivers completed</span>
             <br>

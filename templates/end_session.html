@@ -73,7 +73,7 @@
 <script>
 window.setTimeout(function () { window.location.href = '/'; }, 7000);
 </script>
-<h1 class="title">Session ended</h1>
+<h1 class="title">{{ end_noun or 'Session' }} ended</h1>
 <div class="sessions-table">
     <table>
         <thead>
@@ -112,7 +112,7 @@ window.setTimeout(function () { window.location.href = '/'; }, 7000);
 
 {% else %}
 <!-- ── Confirmation / end-session form (GET) ────────────────────────────── -->
-<h1 class="title">End Session</h1>
+<h1 class="title">End {{ end_noun or 'Session' }}</h1>
 
 <div class="form-panel" style="max-width:420px;margin:2rem auto;">
     {% if error %}
@@ -145,7 +145,7 @@ window.setTimeout(function () { window.location.href = '/'; }, 7000);
                style="width:100%;box-sizing:border-box;margin-top:6px;">
 
         <div class="submit-row" style="margin-top:1.5rem;">
-            <button type="submit">End Session</button>
+            <button type="submit">End {{ end_noun or 'Session' }}</button>
         </div>
     </form>
 </div>

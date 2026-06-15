@@ -475,8 +475,15 @@
             </div>
 
             <div class="coord-display">
-                <div class="vals" id="coord-readout">
-                    <span style="color:#636a80">— click target —</span>
+                <div class="coord-main">
+                    <div class="vals" id="coord-readout">
+                        <span style="color:#636a80">— click target —</span>
+                    </div>
+                    <div class="coord-sep"></div>
+                    <div class="arrows-left">
+                        <span class="ar-num" id="arrows-remaining-display">{{ arrows_remaining }}</span>
+                        <span class="ar-lab">Arrows left</span>
+                    </div>
                 </div>
                 <div class="coord-hint" id="coord-hint">(0, 0) = center · +X right · +Y up</div>
             </div>
@@ -488,7 +495,7 @@
                         style="background-color:#c97a4a;color:#fff;">Missed target</button>
                 <button type="button" class="clear-shot-btn" id="recall-btn"
                         style="background-color:#5a6c8a;color:#fff;"
-                        title="Undo the most recent shot in this session">Recall arrow</button>
+                        title="Undo the most recent shot in this round">Recall arrow</button>
             </div>
         </div>
 
@@ -549,15 +556,9 @@
             </div>
 
             {% if is_course_round %}
-            <span class="form-label">Arrows left at this target</span>
-            <br><pre>{{ arrows_remaining }}</pre>
-
             <span class="form-label">Targets completed</span>
             <br><pre>{{ quivers_completed }}</pre>
             {% else %}
-            <span class="form-label">Arrows left in this end</span>
-            <br><pre>{{ arrows_remaining }}</pre>
-
             <span class="form-label">Ends completed</span>
             <br><pre>{{ quivers_completed }}</pre>
             {% endif %}
@@ -2033,9 +2034,9 @@ applyUnits();
             <input type="text" id="archer_name" name="archer_name"
                    value="{{ owner_name }}" placeholder="Your name">
 
-            <label for="competition_name">Session name</label>
+            <label for="competition_name">Round name</label>
             <input type="text" id="competition_name" name="competition_name"
-                   placeholder="Optional — e.g. Tuesday range session">
+                   placeholder="Optional — e.g. Tuesday range round">
 
             <label for="competition_date">Date</label>
             <input type="date" id="competition_date" name="competition_date"
@@ -2047,7 +2048,7 @@ applyUnits();
 
             <label for="notes" style="align-self:start;">Notes</label>
             <textarea id="notes" name="notes"
-                      placeholder="Optional — anything noteworthy about the session."></textarea>
+                      placeholder="Optional — anything noteworthy about the round."></textarea>
         </div>
     </div>
 

@@ -98,9 +98,16 @@ BOWSTYLE_SETTINGS = {
          'scope': 'static', 'options': ['yes', 'no']},
         {'key': 'finger_protection', 'label': 'Finger protection',
          'kind': 'select', 'scope': 'static', 'options': ['tab', 'glove']},
+        {'key': 'sight_type', 'label': 'Sight type', 'kind': 'select',
+         'scope': 'static',
+         'options': ['aperture', 'aperture+clarifier', 'fiber-optic']},
         {'key': 'stabilizer', 'label': 'Stabilizer', 'kind': 'select',
          'scope': 'static',
          'options': ['long-rod', 'long+side', 'full-V-bar']},
+        {'key': 'long_rod_length', 'label': 'Long-rod length (in)',
+         'kind': 'text', 'scope': 'static'},
+        {'key': 'sight_aperture', 'label': 'Sight aperture (mm)',
+         'kind': 'number', 'scope': 'dynamic'},
         {'key': 'plunger_tension', 'label': 'Plunger tension', 'kind': 'text',
          'scope': 'dynamic'},
         {'key': 'brace_height', 'label': 'Brace height (mm)', 'kind': 'number',
@@ -8313,6 +8320,20 @@ def edit_session(session_id):
     )
 
 
+def _end_session_noun():
+    """Word the end-session page for the just-finished outing's context.
+
+    A live match sets ``match_id``; a tournament round sets
+    ``tournament_round_key``; anything else is a standalone session. Read
+    before the per-round keys are cleared on finalize.
+    """
+    if session.get('match_id'):
+        return 'Match'
+    if session.get('tournament_round_key'):
+        return 'Round'
+    return 'Session'
+
+
 @app.route('/end_session', methods=['GET', 'POST'])
 @login_required
 def end_session():
@@ -8372,13 +8393,18 @@ def end_session():
         except SQLAlchemyError:
             begin_time = _app_now()
 
+        end_noun = _end_session_noun()
         return render_template('end_session.html',
                                session_id=session_id,
                                begin_time=_format_session_dt_user(begin_time),
                                end_time=_format_session_dt_user(_app_now()),
+                               end_noun=end_noun,
                                stats=None)
 
-    # POST: finalize session
+    # POST: finalize session. Capture the context noun now, before the
+    # per-round Flask-session keys are cleared below, so the results view
+    # can word itself "Match" / "Round" / "Session".
+    end_noun = _end_session_noun()
     session_id_str = request.form.get('session_id', '').strip()
     if not session_id_str:
         session_id_str = str(session.get('session_id', ''))
@@ -8400,6 +8426,7 @@ def end_session():
             begin_time=begin_time_raw or _format_session_dt_user(_app_now()),
             end_time=end_time_raw or _format_session_dt_user(_app_now()),
             error="Times must be in the format YYYY-MM-DD HH:MM:SS.",
+            end_noun=end_noun,
             stats=None,
         )
 
@@ -8458,7 +8485,8 @@ def end_session():
                   'tournament_bowstyle',
                   'match_id', 'match_archers', 'match_idx'):
         session.pop(k, None)
-    return render_template('end_session.html', stats=stats, session_id=None, begin_time=None)
+    return render_template('end_session.html', stats=stats, session_id=None,
+                           begin_time=None, end_noun=end_noun)
 
 
 @app.route('/end_session_silent', methods=['POST'])

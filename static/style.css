@@ -495,6 +495,42 @@ h4 {
     text-align: center;
 }
 
+.coord-display .coord-main {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 16px;
+}
+
+.coord-display .coord-sep {
+    align-self: stretch;
+    width: 1px;
+    min-height: 1.6em;
+    background-color: #7f97bf;
+}
+
+.coord-display .arrows-left {
+    font-family: "Quantico", sans-serif;
+    color: #1a3a5c;
+    line-height: 1.1;
+    text-align: center;
+}
+
+.coord-display .arrows-left .ar-num {
+    display: block;
+    font-weight: 700;
+    font-size: 1.1rem;
+    letter-spacing: 0.05em;
+}
+
+.coord-display .arrows-left .ar-lab {
+    display: block;
+    font-size: 0.6rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: #3a567c;
+}
+
 .coord-display .vals {
     font-family: "Quantico", sans-serif;
     font-weight: 700;
@@ -512,6 +548,39 @@ h4 {
     font-size: 0.65rem;
     color: #636a80;
     margin-top: 3px;
+}
+
+/* ── Collapsible bow-specific gear group ──────────── */
+.bow-style-collapse {
+    margin: 4px 0 10px;
+    border: 1px solid #c3cee0;
+    border-radius: 8px;
+    background-color: #f3f6fc;
+}
+
+.bow-style-collapse > summary {
+    cursor: pointer;
+    padding: 8px 12px;
+    font-weight: 700;
+    color: #1a3a5c;
+    list-style: none;
+    user-select: none;
+}
+
+.bow-style-collapse > summary::-webkit-details-marker { display: none; }
+
+.bow-style-collapse > summary::before {
+    content: "▸";
+    display: inline-block;
+    margin-right: 8px;
+    color: #5a6c8a;
+    transition: transform 0.15s ease;
+}
+
+.bow-style-collapse[open] > summary::before { transform: rotate(90deg); }
+
+.bow-style-collapse #bow-style-settings {
+    padding: 0 12px 10px;
 }
 
 /* ── Clear / Miss buttons ─────────────────────────── */

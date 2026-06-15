@@ -10,6 +10,8 @@
 
    Requires in context: bowstyle_settings (schema), style_settings_by_bow (data).
 #}
+<details class="bow-style-collapse">
+<summary>Bow-specific gear &amp; tuning</summary>
 <div id="bow-style-settings">
 {% for bs, fields in (bowstyle_settings or {}).items() %}
     <div class="bow-style-fields" data-bow-style="{{ bs }}" style="display:none;">
@@ -31,6 +33,7 @@
     </div>
 {% endfor %}
 </div>
+</details>
 <script id="style-settings-by-bow" type="application/json">{{ (style_settings_by_bow or {}) | tojson }}</script>
 <script>
 // Show the gear block for the selected bow's type, disable hidden blocks'
