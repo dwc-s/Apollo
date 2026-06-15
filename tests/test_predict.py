@@ -110,6 +110,22 @@ def test_thin_distance_has_no_spurious_significance():
     assert pd[50.0]['spread_p'] is None
 
 
+def test_scorecard_rows_are_detected_by_match_tag():
+    """Scorecard rows store synthetic ring-midpoint coords and must be kept
+    out of the fit. Both competition score sheets and paper practice
+    scorecards carry a ``match:`` tag; plotted sessions never do."""
+    f = apollo._predict_row_is_scorecard
+    # Competition score sheet.
+    assert f('tournament:wa720, match:42, participant:Robin') is True
+    # Paper practice scorecard (also carries match: via the shared plumbing).
+    assert f('tournament:wa720, practice, practice_scorecard, match:7') is True
+    # Plotted sessions — tournament or practice — have no match: tag.
+    assert f('tournament:wa720') is False
+    assert f('practice') is False
+    assert f('') is False
+    assert f(None) is False
+
+
 if __name__ == '__main__':
     for name, fn in sorted(globals().items()):
         if name.startswith('test_') and callable(fn):

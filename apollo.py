@@ -6764,6 +6764,29 @@ def tournament_match_start():
     return redirect(url_for('tournament'))
 
 
+def _scorecard_equipment_ctx(user_id):
+    """Context for the scorecard equipment menu — the same bow/arrow/settings
+    data the live shoot view feeds ``_bow_style_settings.html``. Lets a
+    scorecard attribute its rows to a bow/arrow + bowtype settings, exactly
+    like a plotted session, so analyze/handicap filters can see the gear.
+    Scorecard rows are still kept out of the dispersion fit (see
+    ``_predict_row_is_scorecard``)."""
+    with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
+        arows = cur.execute(
+            "SELECT DISTINCT arrow FROM arrows WHERE user_id = %s",
+            (user_id,)).fetchall()
+        brows = cur.execute(
+            "SELECT DISTINCT bow_model FROM bows WHERE user_id = %s",
+            (user_id,)).fetchall()
+    return {
+        'bow_models':           [r[0] for r in brows] if brows else [],
+        'arrow_types':          [r[0] for r in arows] if arows else [],
+        'bowstyle_settings':    BOWSTYLE_SETTINGS,
+        'style_settings_by_bow': _style_settings_by_bow(user_id),
+        'effective_dw_by_bow':  _last_effective_dw_by_bow(user_id),
+    }
+
+
 @app.route('/tournament/score_sheet/setup', methods=['POST'])
 @login_required
 def tournament_score_sheet_setup():
@@ -6837,6 +6860,7 @@ def tournament_score_sheet_setup():
         owner_name=owner_name,
         owner_email=owner_email,
         today_iso=_app_now().strftime('%Y-%m-%d'),
+        **_scorecard_equipment_ctx(user_id),
     )
 
 
@@ -7106,6 +7130,19 @@ def tournament_score_sheet_submit():
                 per_p_notes = (request.form.get(
                     f'participant_{p["idx"]}_notes') or '').strip()
 
+                # Optional per-participant equipment (bow/arrow/effective draw
+                # weight + bowtype settings). _insert_shot snapshots the gear
+                # the same way a plotted session does; blanks → empty snapshot.
+                p_pref = f'participant_{p["idx"]}_'
+                p_bow = (request.form.get(p_pref + 'bow') or '').strip()
+                p_arrow = (request.form.get(p_pref + 'arrow_type') or '').strip()
+                p_eff_dw = (request.form.get(
+                    p_pref + 'effective_draw_weight') or '').strip() or None
+                p_style_pref = p_pref + 'style_'
+                p_style = {k[len(p_style_pref):]: v
+                           for k, v in request.form.items()
+                           if k.startswith(p_style_pref)}
+
                 # Walk the segment plan; for each end's worth of arrows
                 # read the user-entered ring label from the form and
                 # write a synthetic apollo row whose coords score it.
@@ -7126,23 +7163,19 @@ def tournament_score_sheet_submit():
                                 # didn't shoot or weren't reported).
                                 raw = 'M'
                             x, y = _coords_for_ring_label(face_key, raw)
-                            cur.execute("""
-                                INSERT INTO apollo
-                                (user_id, session_id, timestamp, bow, arrow_type,
-                                 quiver_size, arrows_remaining, distance,
-                                 session_notes, x_coord, y_coord, is_precise,
-                                 record_mode, target_id, session_tags)
-                                VALUES (%s,%s,%s,%s,%s,
-                                        %s,%s,%s,
-                                        %s,%s,%s,%s,
-                                        %s,%s,%s)""",
-                                (user_id, session_id, ts, '', '',
-                                 int(seg['arrows_per_end']),
-                                 int(seg['arrows_per_end']) - arrow_n,
-                                 str(seg['distance_m']),
-                                 per_p_notes, x, y, 0,
-                                 0, target_id, tag)
-                            )
+                            _insert_shot(
+                                cur, user_id=user_id, session_id=session_id,
+                                timestamp=ts, bow=p_bow, arrow_type=p_arrow,
+                                quiver_size=int(seg['arrows_per_end']),
+                                arrows_remaining=(
+                                    int(seg['arrows_per_end']) - arrow_n),
+                                distance=str(seg['distance_m']),
+                                session_notes=per_p_notes, x=x, y=y,
+                                is_precise=0, record_mode=0,
+                                target_id=target_id,
+                                effective_dw_session=p_eff_dw,
+                                session_tags=tag,
+                                style_settings_session=p_style)
                 con.commit()
                 inserted_session_ids.append(session_id)
     except SQLAlchemyError as e:
@@ -7201,6 +7234,7 @@ def tournament_practice_scorecard_setup():
         default_ends=int(primary['ends']),
         owner_name=owner_name,
         today_iso=_app_now().strftime('%Y-%m-%d'),
+        **_scorecard_equipment_ctx(user_id),
     )
 
 
@@ -7264,6 +7298,14 @@ def tournament_practice_scorecard_submit():
     if comp_location:
         tag += f', competition_location:{quote(comp_location, safe="")}'
 
+    # Optional equipment for this single-archer card (bow/arrow/effective draw
+    # weight + bowtype settings) — snapshotted via _insert_shot like a plotted
+    # session. Single archer, so the fields aren't participant-namespaced.
+    sc_bow = (request.form.get('bow') or '').strip()
+    sc_arrow = (request.form.get('arrow_type') or '').strip()
+    sc_eff_dw = (request.form.get('effective_draw_weight') or '').strip() or None
+    sc_style = _collect_style_settings(request.form)
+
     try:
         with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
             session_id = _mint_session_id(con, cur, user_id)
@@ -7283,21 +7325,14 @@ def tournament_practice_scorecard_submit():
                     if raw == '':
                         raw = 'M'  # empty cell → miss (forgiving)
                     x, y = _coords_for_ring_label(face_key, raw)
-                    cur.execute("""
-                        INSERT INTO apollo
-                        (user_id, session_id, timestamp, bow, arrow_type,
-                         quiver_size, arrows_remaining, distance,
-                         session_notes, x_coord, y_coord, is_precise,
-                         record_mode, target_id, session_tags)
-                        VALUES (%s,%s,%s,%s,%s,
-                                %s,%s,%s,
-                                %s,%s,%s,%s,
-                                %s,%s,%s)""",
-                        (user_id, session_id, ts, '', '',
-                         arrows, arrows - arrow_n, str(distance_m),
-                         notes, x, y, 0,
-                         0, target_id, tag)
-                    )
+                    _insert_shot(
+                        cur, user_id=user_id, session_id=session_id,
+                        timestamp=ts, bow=sc_bow, arrow_type=sc_arrow,
+                        quiver_size=arrows, arrows_remaining=arrows - arrow_n,
+                        distance=str(distance_m), session_notes=notes,
+                        x=x, y=y, is_precise=0, record_mode=0,
+                        target_id=target_id, effective_dw_session=sc_eff_dw,
+                        session_tags=tag, style_settings_session=sc_style)
                     wrote_any = True
             if not wrote_any:
                 return "Add at least one arrow before submitting.", 400
@@ -13937,6 +13972,24 @@ def _predict_user_targets(user_id):
     return out
 
 
+def _predict_row_is_scorecard(tags_raw):
+    """True when a shot row was entered from a scorecard rather than plotted.
+
+    Scorecards — competition score sheets *and* paper practice scorecards
+    alike — don't store real shot positions; they write *synthetic*
+    ring-midpoint coordinates via ``_coords_for_ring_label`` (y≡0, x≡the
+    ring's radius). Fitting those would inject a fake sideways bias and
+    collapse vertical dispersion, so the predict fit excludes them. Both
+    paths carry a ``match:`` tag (the same marker ``_counts_toward_handicap``
+    keys on); this is independent of bow/arrow, so it still holds once
+    scorecards capture equipment data.
+    """
+    if not tags_raw:
+        return False
+    return any(t.strip().startswith('match:')
+               for t in str(tags_raw).split(','))
+
+
 def _predict_session_matches_practice(tags_raw, mode):
     """Tournament/practice filter applied to a shot's session_tags string.
 
@@ -14227,6 +14280,12 @@ def _fit_shot_distribution(user_id, bows=None, arrows=None, tags=None,
     shaft_mms = []   # defined (positive) shaft diameters among fitted hits
     n_misses = 0
     for r in rows:
+        # Scorecard rows store synthetic ring-midpoint coords (y≡0, x≡the
+        # ring radius), not plotted positions — fitting them would inject a
+        # fake bias and collapse vertical dispersion. Drop them outright (no
+        # hit, no miss); the coordinate system itself is left untouched.
+        if _predict_row_is_scorecard(_row_get(r, 'session_tags')):
+            continue
         # Equipment / tag / date filters
         if bow_set and (_row_get(r, 'bow') or '') not in bow_set:
             continue

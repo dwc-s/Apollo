@@ -1739,6 +1739,7 @@ applyUnits();
                 <textarea name="participant_0_notes"
                           placeholder="Optional — anything noteworthy about the round."></textarea>
             </div>
+            <div class="equipment-host"></div>
             <div class="scorecard-grids-host"></div>
             <div class="participant-summary">
                 Total: <strong class="participant-total">0</strong>
@@ -1781,6 +1782,7 @@ applyUnits();
             <textarea name="participant___IDX___notes"
                       placeholder="Optional — anything noteworthy about the round."></textarea>
         </div>
+        <div class="equipment-host"></div>
         <div class="scorecard-grids-host"></div>
         <div class="participant-summary">
             Total: <strong class="participant-total">0</strong>
@@ -1829,12 +1831,61 @@ applyUnits();
     {% endfor %}
 </template>
 
+<template id="equipment-template">
+    <details class="bow-style-collapse equipment-collapse">
+    <summary>Bow, arrow &amp; gear (optional)</summary>
+    <div class="equipment-body">
+        <span class="form-label">Bow</span>
+        <select name="participant___IDX___bow" class="sc-bow">
+            <option value="">— none —</option>
+            {% for b in bow_models %}<option value="{{ b }}">{{ b }}</option>{% endfor %}
+        </select>
+
+        <div class="sc-bow-style-settings">
+        {% for bs, fields in (bowstyle_settings or {}).items() %}
+            <div class="bow-style-fields" data-bow-style="{{ bs }}" style="display:none;">
+                {% for f in fields %}
+                <span class="form-label{% if f.help %} has-tooltip{% endif %}"
+                      {% if f.help %}data-tooltip="{{ f.help }}"{% endif %}>{{ f.label }}</span>
+                {% if f.kind == 'select' %}
+                <select name="participant___IDX___style_{{ f.key }}" data-style-key="{{ f.key }}"
+                        data-style-scope="{{ f.scope }}" disabled>
+                    <option value="">— not set —</option>
+                    {% for opt in f.options %}<option value="{{ opt }}">{{ opt }}</option>{% endfor %}
+                </select>
+                {% else %}
+                <input type="text" name="participant___IDX___style_{{ f.key }}" data-style-key="{{ f.key }}"
+                       data-style-scope="{{ f.scope }}" disabled
+                       {% if f.kind == 'number' %}inputmode="decimal"{% endif %}>
+                {% endif %}
+                {% endfor %}
+            </div>
+        {% endfor %}
+        </div>
+
+        <span class="form-label">Effective draw weight (lbs, optional)</span>
+        <input type="text" name="participant___IDX___effective_draw_weight" class="sc-eff-dw"
+               inputmode="decimal" placeholder="leave blank to use bow's rated draw weight">
+
+        <span class="form-label">Arrow</span>
+        <select name="participant___IDX___arrow_type" class="sc-arrow">
+            <option value="">— none —</option>
+            {% for arrow in arrow_types %}<option value="{{ arrow }}">{{ arrow }}</option>{% endfor %}
+        </select>
+    </div>
+    </details>
+</template>
+
 <script>
 (function() {
     // Server pre-computes the ring-label → point-value table per
     // segment. Keys are stringified segment indices; values are
     // { 'X': pv, '10': pv, … , 'M': 0 }.
     const POINTS_BY_SEG = {{ points_by_segment_json|safe }};
+    // Per-bow saved gear ({model: {type, values}}) and last effective draw
+    // weight ({model: dw}), for prefilling each participant's equipment menu.
+    const STYLE_BY_BOW = {{ (style_settings_by_bow or {}) | tojson }};
+    const EFF_DW_BY_BOW = {{ (effective_dw_by_bow or {}) | tojson }};
 
     function pointsFor(segIdx, label) {
         const lbl = (label || '').toString().trim().toUpperCase();
@@ -1903,6 +1954,46 @@ applyUnits();
         host.querySelectorAll('input.ring-input').forEach(attachRingInputBehavior);
     }
 
+    // Per-participant equipment menu: clone the template, then wire the bow
+    // selector to reveal its bowtype's gear block (disabling the others so
+    // they never post) and prefill empty fields from the bow's saved gear +
+    // last effective draw weight — the scoped, per-card analogue of
+    // _bow_style_settings.html (which assumes a single id="bow").
+    function injectEquipment(card, idx) {
+        const host = card.querySelector('.equipment-host');
+        if (!host) return;
+        const eqTpl = document.getElementById('equipment-template').innerHTML;
+        host.innerHTML = eqTpl.replaceAll('__IDX__', idx);
+
+        const bowSel = host.querySelector('.sc-bow');
+        const dwInput = host.querySelector('.sc-eff-dw');
+        const blocks = Array.from(host.querySelectorAll('.bow-style-fields'));
+
+        function fillBlock(block, info) {
+            const vals = (info && info.values) || {};
+            block.querySelectorAll('[data-style-key]').forEach(el => {
+                const key = el.dataset.styleKey;
+                if (el.value === '' && vals[key] != null) el.value = vals[key];
+            });
+        }
+        function sync() {
+            const info = STYLE_BY_BOW[bowSel.value] || null;
+            const want = info ? info.type : null;
+            blocks.forEach(block => {
+                const show = block.dataset.bowStyle === want;
+                block.style.display = show ? '' : 'none';
+                block.querySelectorAll('input, select').forEach(el => { el.disabled = !show; });
+                if (show) fillBlock(block, info);
+            });
+            const dw = EFF_DW_BY_BOW[bowSel.value];
+            if (dwInput && dwInput.value === '' && dw != null && dw !== '') {
+                dwInput.value = dw;
+            }
+        }
+        bowSel.addEventListener('change', sync);
+        sync();
+    }
+
     function addParticipant() {
         const list = document.getElementById('participants-list');
         const idx = list.querySelectorAll('.participant-scorecard').length;
@@ -1911,6 +2002,7 @@ applyUnits();
             cardTpl.replaceAll('__IDX__', idx).replaceAll('__N__', idx + 1));
         const newCard = list.lastElementChild;
         injectScorecardGrids(newCard, idx);
+        injectEquipment(newCard, idx);
         newCard.querySelector('.rm-participant').addEventListener('click', () => {
             newCard.remove();
             renumberParticipants();
@@ -1922,6 +2014,7 @@ applyUnits();
     function bootstrapFirstCard() {
         const firstCard = document.querySelector('.participant-scorecard[data-pidx="0"]');
         injectScorecardGrids(firstCard, 0);
+        injectEquipment(firstCard, 0);
         firstCard.querySelector('input[type=text]')
             .addEventListener('input', renumberParticipants);
     }
@@ -2052,6 +2145,33 @@ applyUnits();
         </div>
     </div>
 
+    <div class="score-card" style="text-align:left;">
+        <details class="bow-style-collapse equipment-collapse">
+        <summary>Bow, arrow &amp; gear (optional)</summary>
+        <div class="equipment-body">
+            <span class="form-label">Bow</span>
+            <select id="bow" name="bow">
+                <option value="">— none —</option>
+                {% for b in bow_models %}<option value="{{ b }}">{{ b }}</option>{% endfor %}
+            </select>
+
+            {% include '_bow_style_settings.html' %}
+
+            <span class="form-label">Effective draw weight (lbs, optional)</span>
+            <input type="text" id="effective_draw_weight" name="effective_draw_weight"
+                   inputmode="decimal"
+                   placeholder="leave blank to use bow's rated draw weight">
+            <script id="effective-dw-by-bow" type="application/json">{{ (effective_dw_by_bow or {}) | tojson }}</script>
+
+            <span class="form-label">Arrow</span>
+            <select id="arrow_type" name="arrow_type">
+                <option value="">— none —</option>
+                {% for arrow in arrow_types %}<option value="{{ arrow }}">{{ arrow }}</option>{% endfor %}
+            </select>
+        </div>
+        </details>
+    </div>
+
     <div class="score-card">
         <label style="font-weight:700;color:#1a3a5c;">
             Arrows per end for new ends:
@@ -2086,6 +2206,24 @@ applyUnits();
 </form>
 
 <script>
+// Effective-draw-weight prefill: mirror the live shoot view — fill the field
+// from the selected bow's last value (the bow-style settings come from the
+// shared _bow_style_settings.html include, keyed on the same id="bow").
+(function () {
+    const bowSel  = document.getElementById('bow');
+    const dwInput = document.getElementById('effective_draw_weight');
+    const dataEl  = document.getElementById('effective-dw-by-bow');
+    if (!bowSel || !dwInput || !dataEl) return;
+    let prefillMap = {};
+    try { prefillMap = JSON.parse(dataEl.textContent || '{}'); }
+    catch (_) { prefillMap = {}; }
+    bowSel.addEventListener('change', () => {
+        const stored = prefillMap[bowSel.value];
+        if (dwInput.value === '' && stored != null && stored !== '') {
+            dwInput.value = stored;
+        }
+    });
+})();
 (function() {
     const POINTS_MAP = {{ points_map_json|safe }};
     const CHOICES    = {{ choices|tojson }};
