@@ -233,16 +233,6 @@
             </select>
             <div class="links-row"><a href="/add_bow">+ add bow</a></div>
 
-            {% include '_bow_style_settings.html' %}
-
-            <span class="form-label has-tooltip"
-                  data-tooltip="Actual draw weight as opposed to rated draw weight. Re-measure whenever the string is put back on the bow. Effective draw weight can be measured or estimated (add or subtract 2.5 lbs for each inch of draw length over or below the standard 28 inches).">Effective draw weight (lbs, optional)</span>
-            <input type="text" id="effective_draw_weight" name="effective_draw_weight"
-                   value="{{ effective_draw_weight or '' }}"
-                   inputmode="decimal"
-                   placeholder="leave blank to use bow's rated draw weight">
-            <script id="effective-dw-by-bow" type="application/json">{{ effective_dw_by_bow | tojson }}</script>
-
             <span class="form-label">Arrow</span>
             <select id="arrow_type" name="arrow_type">
                 {% for arrow in arrow_types %}
@@ -250,6 +240,8 @@
                 {% endfor %}
             </select>
             <div class="links-row"><a href="/add_arrow">+ add arrow</a></div>
+
+            {% include '_bow_style_settings.html' %}
 
             <span class="form-label">Quiver size</span>
             <br>
@@ -1033,35 +1025,6 @@ applyUnits();
 
 // ── Missed target button ─────────────────────────────────────────────────
 document.getElementById('miss-btn').addEventListener('click', recordMiss);
-
-// ── Effective draw weight prefill ────────────────────────────────────────
-// Each bow remembers the last effective draw weight the user recorded with
-// it. When the bow selector changes, autofill the field from that map so
-// the value sticks across sessions without locking the user out of
-// editing (e.g. after restringing). If the field already has a value the
-// user typed, don't clobber it.
-(function () {
-    const bowSel  = document.getElementById('bow');
-    const dwInput = document.getElementById('effective_draw_weight');
-    const dataEl  = document.getElementById('effective-dw-by-bow');
-    if (!bowSel || !dwInput || !dataEl) return;
-    let prefillMap = {};
-    try { prefillMap = JSON.parse(dataEl.textContent || '{}'); }
-    catch (_) { prefillMap = {}; }
-    function applyPrefill(force) {
-        const bow = bowSel.value;
-        if (!bow) return;
-        const stored = prefillMap[bow];
-        if (stored === undefined || stored === null || stored === '') return;
-        if (force || !dwInput.value.trim()) {
-            dwInput.value = stored;
-        }
-    }
-    bowSel.addEventListener('change', () => applyPrefill(true));
-    // Don't apply on first load — server already populated the field with
-    // the current session's value (which may intentionally differ from
-    // the last recorded value).
-})();
 
 // ── Recall arrow button ──────────────────────────────────────────────────
 // Undo the most recent shot in this session — for the "I tapped the wrong

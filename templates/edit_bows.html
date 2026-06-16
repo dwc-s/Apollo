@@ -89,36 +89,19 @@
                become a compound. Rendered read-only here (and the server
                UPDATE intentionally omits it) so historical shots keep a
                consistent type without us having to denormalize it. #}
-            <input type="text" value="{{ bow_data[i][0]['bow_type']|capitalize }}"
+            <input type="text" value="{{ bow_data[i][0]['bow_type']|bowstyle_label }}"
                    readonly disabled
                    style="background:#f5f5f5;color:#666;cursor:not-allowed;">
 
             <span class="form-label">Bow draw weight (lbs)</span>
             <input type="text" name="bow_draw_weight" value="{{ bow_data[i][0]['bow_draw_weight'] }}" inputmode="decimal">
 
+            <span class="form-label has-tooltip"
+                  data-tooltip="Actual draw weight as opposed to rated draw weight. Re-measure whenever the string is put back on the bow. Effective draw weight can be measured or estimated (add or subtract 2.5 lbs for each inch of draw length over or below the standard 28 inches).">Effective draw weight (lbs)</span>
+            <input type="text" name="effective_draw_weight" value="{{ bow_data[i][0]['effective_draw_weight'] or '' }}" inputmode="decimal">
+
             <span class="form-label amo-label">Bow length (AMO, inches)</span>
             <input type="text" name="bow_amo" value="{{ bow_data[i][0]['amo'] }}" inputmode="decimal">
-
-            <span class="form-label">Nock height (mm)</span>
-            <input type="text" name="nock_height" value="{{ bow_data[i][0]['nock_height'] or '' }}" inputmode="decimal">
-
-            {# Static, bowtype-specific gear for this bow's (immutable) type,
-               prefilled from the saved style_settings JSON. #}
-            {% set _bs = bow_data[i][0]['bow_type'] %}
-            {% set _saved = bow_data[i][0]['style_settings'] | fromjson %}
-            {% for f in bowstyle_settings.get(_bs, []) if f.scope == 'static' %}
-            <span class="form-label{% if f.help %} has-tooltip{% endif %}"
-                  {% if f.help %}data-tooltip="{{ f.help }}"{% endif %}>{{ f.label }}</span>
-            {% if f.kind == 'select' %}
-            <select name="style_{{ f.key }}">
-                <option value="">— not set —</option>
-                {% for opt in f.options %}<option value="{{ opt }}" {% if _saved.get(f.key) == opt %}selected{% endif %}>{{ opt }}</option>{% endfor %}
-            </select>
-            {% else %}
-            <input type="text" name="style_{{ f.key }}" value="{{ _saved.get(f.key, '') }}"
-                   {% if f.kind == 'number' %}inputmode="decimal"{% endif %}>
-            {% endif %}
-            {% endfor %}
 
         <div class="submit-row">
         <input type="submit" value="Delete bow" name="delete" class="button" formnovalidate>

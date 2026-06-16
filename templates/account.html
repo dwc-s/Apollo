@@ -226,7 +226,7 @@
             <select name="default_bowstyle">
                 <option value="">— not set —</option>
                 {% for bs in archer_bowstyles %}
-                <option value="{{ bs }}" {% if current_user and current_user.default_bowstyle == bs %}selected{% endif %}>{{ bs | capitalize }}</option>
+                <option value="{{ bs }}" {% if current_user and current_user.default_bowstyle == bs %}selected{% endif %}>{{ bs | bowstyle_label }}</option>
                 {% endfor %}
             </select>
             <div class="submit-row">

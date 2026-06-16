@@ -48,10 +48,23 @@ ARCHER_AGE_GROUPS = ['adult', '50+', 'under 21', 'under 18', 'under 16',
 ARCHER_BOWSTYLES = ['recurve', 'compound', 'barebow', 'longbow',
                     'traditional', 'flatbow']
 
+# Display labels for bowstyles. Stored values stay the short lowercase enums
+# above (DB values, BOWSTYLE_SETTINGS keys, classification categories); only the
+# text shown to the archer differs. Anything not listed falls back to a plain
+# capitalize in the ``bowstyle_label`` Jinja filter.
+BOWSTYLE_LABELS = {
+    'recurve':     'Olympic recurve',
+    'barebow':     'Barebow recurve',
+    'compound':    'Compound',
+    'longbow':     'Longbow',
+    'traditional': 'Traditional',
+    'flatbow':     'Flatbow',
+}
+
 # Per-bowstyle gear settings. Single source of truth for the bowtype-specific
-# options shown on the add/edit-bow, session, and tournament forms — the
-# templates render from it, the POST handlers validate against it, and the
-# analyze head-to-head report buckets shots by the ``select`` fields here.
+# options shown on the session and tournament forms — the templates render from
+# it, the POST handlers validate against it, and the analyze head-to-head report
+# buckets shots by the ``select`` fields here.
 #
 # Each field is a dict:
 #   key     — form field name + JSON key (namespaced ``style_<key>`` in forms)
@@ -59,53 +72,48 @@ ARCHER_BOWSTYLES = ['recurve', 'compound', 'barebow', 'longbow',
 #   kind    — 'select' | 'number' | 'text'
 #   options — list of allowed values (select only); first is the implicit blank-
 #             beating default in the UI but never auto-applied server-side
-#   scope   — 'static'  → a property of the bow, editable on add/edit-bow and
-#                          prefilled (overridable) per session
-#             'dynamic' → tuned per outing; session/tournament only, never on
-#                          the bow record
+#   scope   — 'dynamic' → tuned per outing; entered in session/tournament, never
+#                          a property of the bow record. (All gear is dynamic
+#                          now; the key is retained for the cleaner/JSON paths.)
 #   help    — optional tooltip text
 #
-# longbow / traditional / flatbow share one field set (all shoot off the shelf
-# with a chosen arrow material and aiming method).
+# longbow / traditional / flatbow share one field set (aiming method + brace
+# height; arrow material is inherited from the chosen arrow).
 _TRAD_FIELDS = [
     {'key': 'aim_method', 'label': 'Aiming method', 'kind': 'select',
-     'scope': 'static', 'options': ['instinctive', 'gap']},
-    {'key': 'arrow_material', 'label': 'Arrow material', 'kind': 'select',
-     'scope': 'static', 'options': ['wood', 'aluminium', 'carbon']},
-    {'key': 'shoot_off', 'label': 'Shot off', 'kind': 'select',
-     'scope': 'static', 'options': ['shelf', 'hand']},
+     'scope': 'dynamic', 'options': ['instinctive', 'gap']},
     {'key': 'brace_height', 'label': 'Brace height (mm)', 'kind': 'number',
      'scope': 'dynamic'},
 ]
 BOWSTYLE_SETTINGS = {
     'compound': [
         {'key': 'release_aid', 'label': 'Release aid', 'kind': 'select',
-         'scope': 'static',
+         'scope': 'dynamic',
          'options': ['index', 'thumb-trigger', 'hinge', 'back-tension',
                      'resistance']},
         {'key': 'let_off_pct', 'label': 'Let-off (%)', 'kind': 'number',
-         'scope': 'static'},
+         'scope': 'dynamic'},
         {'key': 'peep_size', 'label': 'Peep aperture (mm)', 'kind': 'text',
-         'scope': 'static'},
+         'scope': 'dynamic'},
         {'key': 'scope_magnification', 'label': 'Scope magnification (×)',
-         'kind': 'number', 'scope': 'static'},
+         'kind': 'number', 'scope': 'dynamic'},
         {'key': 'sight_type', 'label': 'Sight type', 'kind': 'select',
-         'scope': 'static',
+         'scope': 'dynamic',
          'options': ['single-pin', 'movable', 'multi-pin']},
     ],
     'recurve': [
         {'key': 'clicker', 'label': 'Clicker', 'kind': 'select',
-         'scope': 'static', 'options': ['yes', 'no']},
+         'scope': 'dynamic', 'options': ['yes', 'no']},
         {'key': 'finger_protection', 'label': 'Finger protection',
-         'kind': 'select', 'scope': 'static', 'options': ['tab', 'glove']},
+         'kind': 'select', 'scope': 'dynamic', 'options': ['tab', 'glove']},
         {'key': 'sight_type', 'label': 'Sight type', 'kind': 'select',
-         'scope': 'static',
+         'scope': 'dynamic',
          'options': ['aperture', 'aperture+clarifier', 'fiber-optic']},
         {'key': 'stabilizer', 'label': 'Stabilizer', 'kind': 'select',
-         'scope': 'static',
+         'scope': 'dynamic',
          'options': ['long-rod', 'long+side', 'full-V-bar']},
         {'key': 'long_rod_length', 'label': 'Long-rod length (in)',
-         'kind': 'text', 'scope': 'static'},
+         'kind': 'text', 'scope': 'dynamic'},
         {'key': 'sight_aperture', 'label': 'Sight aperture (mm)',
          'kind': 'number', 'scope': 'dynamic'},
         {'key': 'plunger_tension', 'label': 'Plunger tension', 'kind': 'text',
@@ -115,12 +123,14 @@ BOWSTYLE_SETTINGS = {
     ],
     'barebow': [
         {'key': 'aim_method', 'label': 'Aiming method', 'kind': 'select',
-         'scope': 'static',
+         'scope': 'dynamic',
          'options': ['string-walking', 'face-walking', 'gap', 'instinctive']},
         {'key': 'finger_protection', 'label': 'Finger protection',
-         'kind': 'select', 'scope': 'static', 'options': ['tab', 'glove']},
+         'kind': 'select', 'scope': 'dynamic', 'options': ['tab', 'glove']},
         {'key': 'riser_weights', 'label': 'Riser weights', 'kind': 'text',
-         'scope': 'static'},
+         'scope': 'dynamic'},
+        {'key': 'shoot_off', 'label': 'Shot off', 'kind': 'select',
+         'scope': 'dynamic', 'options': ['arrow rest', 'shelf', 'hand']},
         {'key': 'string_crawl', 'label': 'String crawl', 'kind': 'text',
          'scope': 'dynamic',
          'help': 'Under-nock crawl distance / tab marks for this distance.'},
@@ -3759,23 +3769,15 @@ def _fmt_ts(value):
     return s
 
 
-@app.template_filter('fromjson')
-def _fromjson(value):
-    """Parse a JSON-object column into a dict for templates; {} on null/garbage.
+@app.template_filter('bowstyle_label')
+def _bowstyle_label(bs):
+    """Human label for a bowstyle enum (e.g. 'recurve' → 'Olympic recurve').
 
-    Used to render the per-bow ``style_settings`` blob on edit_bows without
-    pre-parsing every row in the handler. Always returns a dict so a template's
-    ``.get()`` is safe even if the stored value is a JSON array or scalar.
+    Stored values stay the short lowercase enums; this only affects display.
+    Unknown values fall back to a plain capitalize.
     """
-    if not value:
-        return {}
-    if isinstance(value, dict):
-        return value
-    try:
-        parsed = json.loads(value)
-    except (ValueError, TypeError):
-        return {}
-    return parsed if isinstance(parsed, dict) else {}
+    key = (bs or '').strip().lower()
+    return BOWSTYLE_LABELS.get(key, (bs or '').capitalize())
 
 
 # ─── Auth: password rules, lockout, helpers ──────────────────────────────
@@ -5107,55 +5109,15 @@ def _distinct_user_tags(user_id):
     return out
 
 
-def _last_effective_dw_by_bow(user_id):
-    """Return a dict ``{bow_model: last_effective_draw_weight}`` so the
-    session page can prefill the per-session draw weight field whenever
-    the archer picks a bow they've used before.
-
-    Effective draw weight changes whenever the string is put back on the
-    bow, so it lives on the session (denormalized onto each apollo row),
-    not on the bow row. This helper looks up the most recent non-blank
-    value the user has ever recorded per bow model. Returns an empty
-    dict on error so the template still renders.
-    """
-    if user_id is None:
-        return {}
-    try:
-        with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
-            rows = cur.execute(
-                "SELECT a.bow, a.effective_draw_weight FROM apollo a "
-                "INNER JOIN ("
-                "    SELECT bow, MAX(id) AS max_id FROM apollo "
-                "    WHERE user_id = %s "
-                "      AND effective_draw_weight IS NOT NULL "
-                "      AND effective_draw_weight <> '' "
-                "      AND bow IS NOT NULL AND bow <> '' "
-                "    GROUP BY bow"
-                ") latest ON latest.bow = a.bow AND latest.max_id = a.id "
-                "WHERE a.user_id = %s",
-                (user_id, user_id)
-            ).fetchall()
-    except SQLAlchemyError:
-        return {}
-    out = {}
-    for row in rows or []:
-        bow = row['bow'] if 'bow' in row else row[0]
-        dw  = row['effective_draw_weight'] if 'effective_draw_weight' in row else row[1]
-        if bow and dw not in (None, ''):
-            out[str(bow)] = str(dw)
-    return out
-
-
 def _style_settings_by_bow(user_id):
     """Return ``{bow_model: {type, values}}`` to prefill the session and
     tournament forms' bowtype-specific settings group.
 
-    ``values`` is the bow's saved static gear overlaid with the *most recent
-    shot's* full snapshot, so every field prefills to its last-used value —
-    static overrides and dynamic tweaks alike persist across shots within a
-    session, the same way ``effective_draw_weight`` does (see
-    _current_session_effective_dw). On a bow's first-ever shot the static
-    defaults show through. Empty dict on error so the template still renders.
+    ``values`` is the bow's saved gear (legacy static blob, if any) overlaid
+    with the *most recent shot's* full snapshot, so every field prefills to its
+    last-used value and tweaks persist across shots within a session. On a bow's
+    first-ever shot the gear starts blank. Empty dict on error so the template
+    still renders.
     """
     if user_id is None:
         return {}
@@ -5225,28 +5187,6 @@ def _last_session_tags(user_id, session_id):
     return row[0] or ''
 
 
-def _current_session_effective_dw(user_id, session_id):
-    """Return the effective_draw_weight string stored on the latest shot in
-    this session, so a mid-session reload repopulates the input."""
-    if user_id is None or session_id is None:
-        return ''
-    try:
-        with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
-            row = cur.execute(
-                "SELECT effective_draw_weight FROM apollo "
-                "WHERE user_id = %s AND session_id = %s "
-                "AND effective_draw_weight IS NOT NULL "
-                "AND effective_draw_weight <> '' "
-                "ORDER BY id DESC LIMIT 1",
-                (user_id, session_id)
-            ).fetchone()
-    except SQLAlchemyError:
-        return ''
-    if not row:
-        return ''
-    return row[0] or ''
-
-
 def _last_session_bow_arrow(user_id, session_id):
     """Return ``(bow, arrow_type)`` from the latest shot in this session so a
     mid-session GET reload repopulates the bow/arrow dropdowns instead of
@@ -5273,7 +5213,7 @@ def _last_session_bow_arrow(user_id, session_id):
 def _insert_shot(cur, *, user_id, session_id, timestamp, bow, arrow_type,
                  quiver_size, arrows_remaining, distance, session_notes,
                  x, y, is_precise, record_mode, target_id,
-                 effective_dw_session, session_tags, style_settings_session=None):
+                 session_tags, style_settings_session=None):
     """Snapshot the current bow/arrow config and INSERT one shot row.
 
     Single source of truth for the per-shot insert, shared by the live
@@ -5286,8 +5226,8 @@ def _insert_shot(cur, *, user_id, session_id, timestamp, bow, arrow_type,
     cookie counter; the sync path passes the real on-device shot time plus
     the counter the client tracked while offline. ``arrows_remaining`` is
     always the *pre-decrement* value, which get_past_shots() and
-    recall_arrow() depend on. ``effective_dw_session`` is the per-session
-    effective draw weight (or None) recorded verbatim.
+    recall_arrow() depend on. Effective draw weight is an intrinsic property
+    of the bow now, so it's snapshotted from the bow row like draw weight.
     """
     # Snapshot the bow's current config onto the shot row. Without this, a
     # later edit to the bow (draw weight changed, AMO measured more
@@ -5295,26 +5235,26 @@ def _insert_shot(cur, *, user_id, session_id, timestamp, bow, arrow_type,
     # of every shot ever taken with it. bow_type is included so the row
     # remains self-describing even if the bow row is later deleted.
     bow_row = cur.execute(
-        "SELECT nock_height, bow_draw_weight, "
+        "SELECT effective_draw_weight, bow_draw_weight, "
         "amo, bow_type, style_settings FROM bows "
         "WHERE bow_model = %s AND user_id = %s LIMIT 1",
         (bow, user_id)
     ).fetchone()
     if bow_row is not None:
-        nock_height          = bow_row['nock_height']           if 'nock_height'           in bow_row else bow_row[0]
+        shot_effective_dw    = bow_row['effective_draw_weight'] if 'effective_draw_weight' in bow_row else bow_row[0]
         shot_bow_draw_weight = bow_row['bow_draw_weight']       if 'bow_draw_weight'       in bow_row else bow_row[1]
         shot_bow_amo         = bow_row['amo']                   if 'amo'                   in bow_row else bow_row[2]
         shot_bow_type        = bow_row['bow_type']              if 'bow_type'              in bow_row else bow_row[3]
         bow_style_raw        = bow_row['style_settings']        if 'style_settings'        in bow_row else bow_row[4]
     else:
-        nock_height = shot_bow_draw_weight = shot_bow_amo = shot_bow_type = None
+        shot_effective_dw = shot_bow_draw_weight = shot_bow_amo = shot_bow_type = None
         bow_style_raw = None
-    shot_effective_dw = effective_dw_session
 
-    # Snapshot the bowtype-specific settings: the bow's saved static gear
-    # overlaid with whatever the form posted this session (validated against
-    # the schema for the bow's type). Stored as JSON so later edits to the bow
-    # don't rewrite a past shot's gear. None when nothing applies.
+    # Snapshot the bowtype-specific settings: the bow's saved gear (legacy bows
+    # may still carry a static blob) overlaid with whatever the form posted this
+    # session (validated against the schema for the bow's type). Stored as JSON
+    # so later edits to the bow don't rewrite a past shot's gear. None when
+    # nothing applies.
     try:
         bow_static = json.loads(bow_style_raw) if bow_style_raw else {}
     except (ValueError, TypeError):
@@ -5353,19 +5293,19 @@ def _insert_shot(cur, *, user_id, session_id, timestamp, bow, arrow_type,
         INSERT INTO apollo (user_id, session_id, timestamp, bow,
         arrow_type, quiver_size, arrows_remaining,
         distance, session_notes, x_coord, y_coord, is_precise,
-        record_mode, target_id, nock_height,
+        record_mode, target_id,
         bow_draw_weight, effective_draw_weight, bow_amo, bow_type,
         arrow_length, arrow_spine, arrow_shaft_weight,
         arrow_shaft_diameter, arrow_shaft_material,
         arrow_nock_weight, arrow_tip, arrow_tip_weight,
         session_tags, bow_style_settings)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
                 %s, %s, %s, %s,
                 %s, %s, %s, %s, %s, %s, %s, %s,
                 %s, %s)""",
         (user_id, session_id, timestamp, bow, arrow_type, quiver_size,
          arrows_remaining, distance, session_notes, x, y, is_precise,
-         record_mode, target_id, nock_height,
+         record_mode, target_id,
          shot_bow_draw_weight, shot_effective_dw, shot_bow_amo, shot_bow_type,
          shot_arrow_length, shot_arrow_spine, shot_arrow_shaft_w,
          shot_arrow_shaft_d, shot_arrow_shaft_m,
@@ -5511,13 +5451,8 @@ def sesh():
         distance         = request.form.get('distance', '')
         session_notes    = request.form.get('session_notes', '')
         session_tags     = _normalize_tags(request.form.get('session_tags', ''))
-        # Per-session effective draw weight. Optional; blank means
-        # "use the rated draw weight from the bow row". Stored as a
-        # string for parity with bow_draw_weight (which is also string).
-        effective_dw_raw = (request.form.get('effective_draw_weight') or '').strip()
-        effective_dw_session = effective_dw_raw if effective_dw_raw else None
-        if effective_dw_session is not None and _parse_float(effective_dw_session) is None:
-            return "Error: effective draw weight must be a number", 400
+        # Effective draw weight is a property of the bow now (set on add/edit
+        # bow); _insert_shot snapshots it from the bow row.
         # Bowtype-specific settings posted this session (namespaced style_<key>).
         # _insert_shot validates them against the bow's actual type and merges
         # with the bow's saved static gear before snapshotting.
@@ -5617,7 +5552,6 @@ def sesh():
                             distance=distance, session_notes=session_notes,
                             x=x, y=y, is_precise=is_precise,
                             record_mode=record_mode, target_id=target_id,
-                            effective_dw_session=effective_dw_session,
                             session_tags=session_tags,
                             style_settings_session=style_settings_session,
                         )
@@ -5673,8 +5607,6 @@ def sesh():
                                    arrows_remaining=arrows_remaining,
                                    bow=bow,
                                    bows=bow_models,
-                                   effective_draw_weight=effective_dw_raw,
-                                   effective_dw_by_bow=_last_effective_dw_by_bow(user_id),
                                    bowstyle_settings=BOWSTYLE_SETTINGS,
                                    style_settings_by_bow=_style_settings_by_bow(user_id),
                                    session_notes=session_notes,
@@ -5739,9 +5671,6 @@ def sesh():
                            arrows_remaining=get_arrows_remaining,
                            bow=get_bow,
                            bows=bow_models,
-                           effective_draw_weight=_current_session_effective_dw(
-                               user_id, session['session_id']),
-                           effective_dw_by_bow=_last_effective_dw_by_bow(user_id),
                            bowstyle_settings=BOWSTYLE_SETTINGS,
                            style_settings_by_bow=_style_settings_by_bow(user_id),
                            session_notes='',
@@ -5982,11 +5911,6 @@ def sync_shots():
                 except (TypeError, ValueError):
                     arrows_remaining = quiver_size
 
-                effective_dw_raw = (str(s.get('effective_draw_weight') or '')).strip()
-                effective_dw_session = effective_dw_raw if effective_dw_raw else None
-                if effective_dw_session is not None and _parse_float(effective_dw_session) is None:
-                    effective_dw_session = None
-
                 _insert_shot(
                     cur,
                     user_id=user_id, session_id=session_id,
@@ -6001,7 +5925,6 @@ def sync_shots():
                     is_precise=int(s.get('is_precise', 1) or 0),
                     record_mode=int(s.get('record_mode', 1) or 0),
                     target_id=_coerce_target(s.get('target_id')),
-                    effective_dw_session=effective_dw_session,
                     session_tags=_normalize_tags(s.get('session_tags', '') or ''),
                     # Offline clients may attach the bowtype-specific settings
                     # as a dict; validated/merged server-side in _insert_shot.
@@ -6282,32 +6205,25 @@ def tournament():
         session['current_quiver_size'] = arrows_per_end
 
         # Equipment-row snapshots — same code path as /sesh.
-        # Per-session effective draw weight from the form (same rules as /sesh).
-        t_effective_dw_raw = (request.form.get('effective_draw_weight') or '').strip()
-        t_effective_dw = t_effective_dw_raw if t_effective_dw_raw else None
-        if t_effective_dw is not None and _parse_float(t_effective_dw) is None:
-            return "Error: effective draw weight must be a number", 400
         try:
             with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
                 bow_row = cur.execute(
-                    "SELECT nock_height, bow_draw_weight, "
+                    "SELECT effective_draw_weight, bow_draw_weight, "
                     "amo, bow_type, style_settings FROM bows "
                     "WHERE bow_model = %s AND user_id = %s LIMIT 1",
                     (bow, user_id)
                 ).fetchone()
                 if bow_row is not None:
-                    nock_height          = bow_row['nock_height']           if 'nock_height'           in bow_row else bow_row[0]
+                    shot_effective_dw    = bow_row['effective_draw_weight'] if 'effective_draw_weight' in bow_row else bow_row[0]
                     shot_bow_draw_weight = bow_row['bow_draw_weight']       if 'bow_draw_weight'       in bow_row else bow_row[1]
                     shot_bow_amo         = bow_row['amo']                   if 'amo'                   in bow_row else bow_row[2]
                     shot_bow_type        = bow_row['bow_type']              if 'bow_type'              in bow_row else bow_row[3]
                     bow_style_raw        = bow_row['style_settings']        if 'style_settings'        in bow_row else bow_row[4]
                 else:
-                    nock_height = shot_bow_draw_weight = shot_bow_amo = shot_bow_type = None
+                    shot_effective_dw = shot_bow_draw_weight = shot_bow_amo = shot_bow_type = None
                     bow_style_raw = None
-                # Effective DW now comes from the session form, not the bows row.
-                shot_effective_dw = t_effective_dw
 
-                # Bowtype-specific settings: bow's static gear overlaid with the
+                # Bowtype-specific settings: bow's saved gear overlaid with the
                 # form's posted overrides, validated against the bow's type.
                 # Same snapshot rationale as the /sesh path's _insert_shot.
                 try:
@@ -6343,19 +6259,19 @@ def tournament():
                     INSERT INTO apollo (user_id, session_id, timestamp, bow,
                     arrow_type, quiver_size, arrows_remaining,
                     distance, session_notes, x_coord, y_coord, is_precise,
-                    record_mode, target_id, nock_height,
+                    record_mode, target_id,
                     bow_draw_weight, effective_draw_weight, bow_amo, bow_type,
                     arrow_length, arrow_spine, arrow_shaft_weight,
                     arrow_shaft_diameter, arrow_shaft_material,
                     arrow_nock_weight, arrow_tip, arrow_tip_weight,
                     session_tags, bow_style_settings)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
                             %s, %s, %s, %s,
                             %s, %s, %s, %s, %s, %s, %s, %s,
                             %s, %s)""",
                     (user_id, session_id, _app_now(), bow, arrow_type, arrows_per_end,
                      arrows_remaining, distance, '', x, y, is_precise,
-                     record_mode, target_id, nock_height,
+                     record_mode, target_id,
                      shot_bow_draw_weight, shot_effective_dw, shot_bow_amo, shot_bow_type,
                      shot_arrow_length, shot_arrow_spine, shot_arrow_shaft_w,
                      shot_arrow_shaft_d, shot_arrow_shaft_m,
@@ -6524,8 +6440,6 @@ def tournament():
         arrow_shaft_diameters=_arrow_shaft_diameters_for_user(user_id),
         arrow_types=arrow_types,
         bow_models=bow_models,
-        effective_draw_weight=_current_session_effective_dw(user_id, session_id),
-        effective_dw_by_bow=_last_effective_dw_by_bow(user_id),
         bowstyle_settings=BOWSTYLE_SETTINGS,
         style_settings_by_bow=_style_settings_by_bow(user_id),
         arrows_per_end=arrows_per_end,
@@ -6783,7 +6697,6 @@ def _scorecard_equipment_ctx(user_id):
         'arrow_types':          [r[0] for r in arows] if arows else [],
         'bowstyle_settings':    BOWSTYLE_SETTINGS,
         'style_settings_by_bow': _style_settings_by_bow(user_id),
-        'effective_dw_by_bow':  _last_effective_dw_by_bow(user_id),
     }
 
 
@@ -7136,8 +7049,6 @@ def tournament_score_sheet_submit():
                 p_pref = f'participant_{p["idx"]}_'
                 p_bow = (request.form.get(p_pref + 'bow') or '').strip()
                 p_arrow = (request.form.get(p_pref + 'arrow_type') or '').strip()
-                p_eff_dw = (request.form.get(
-                    p_pref + 'effective_draw_weight') or '').strip() or None
                 p_style_pref = p_pref + 'style_'
                 p_style = {k[len(p_style_pref):]: v
                            for k, v in request.form.items()
@@ -7173,7 +7084,6 @@ def tournament_score_sheet_submit():
                                 session_notes=per_p_notes, x=x, y=y,
                                 is_precise=0, record_mode=0,
                                 target_id=target_id,
-                                effective_dw_session=p_eff_dw,
                                 session_tags=tag,
                                 style_settings_session=p_style)
                 con.commit()
@@ -7298,12 +7208,12 @@ def tournament_practice_scorecard_submit():
     if comp_location:
         tag += f', competition_location:{quote(comp_location, safe="")}'
 
-    # Optional equipment for this single-archer card (bow/arrow/effective draw
-    # weight + bowtype settings) — snapshotted via _insert_shot like a plotted
-    # session. Single archer, so the fields aren't participant-namespaced.
+    # Optional equipment for this single-archer card (bow/arrow + bowtype
+    # settings) — snapshotted via _insert_shot like a plotted session. Effective
+    # draw weight comes from the bow row. Single archer, so the fields aren't
+    # participant-namespaced.
     sc_bow = (request.form.get('bow') or '').strip()
     sc_arrow = (request.form.get('arrow_type') or '').strip()
-    sc_eff_dw = (request.form.get('effective_draw_weight') or '').strip() or None
     sc_style = _collect_style_settings(request.form)
 
     try:
@@ -7331,7 +7241,7 @@ def tournament_practice_scorecard_submit():
                         quiver_size=arrows, arrows_remaining=arrows - arrow_n,
                         distance=str(distance_m), session_notes=notes,
                         x=x, y=y, is_precise=0, record_mode=0,
-                        target_id=target_id, effective_dw_session=sc_eff_dw,
+                        target_id=target_id,
                         session_tags=tag, style_settings_session=sc_style)
                     wrote_any = True
             if not wrote_any:
@@ -8192,13 +8102,6 @@ def edit_session(session_id):
                 new_distance = (request.form.get('distance') or '').strip()
                 new_notes    = request.form.get('session_notes', '')
                 new_tags     = _normalize_tags(request.form.get('session_tags', ''))
-                # Effective draw weight is now per-session. Blank means
-                # "use the bow's rated draw weight in analysis".
-                edw_raw      = (request.form.get('effective_draw_weight') or '').strip()
-                new_effective_dw = edw_raw if edw_raw else None
-                if new_effective_dw is not None and _parse_float(new_effective_dw) is None:
-                    flash("Effective draw weight must be a number.")
-                    return redirect(url_for('edit_session', session_id=session_id))
                 posted_tid   = (request.form.get('target_id') or '').strip()
                 try:
                     new_target_id = int(posted_tid) if posted_tid else first['target_id']
@@ -8209,21 +8112,20 @@ def edit_session(session_id):
                     new_target_id = first['target_id']
 
                 # Refresh bow snapshot from the current bows row, if any.
-                # Effective draw weight is taken from the form (session-level),
-                # not from the bows row.
+                # Effective draw weight is an intrinsic bow property, so it's
+                # snapshotted from the bows row like draw weight / AMO.
                 bow_row = cur.execute(
-                    "SELECT nock_height, bow_draw_weight, "
+                    "SELECT bow_draw_weight, effective_draw_weight, "
                     "amo, bow_type FROM bows WHERE bow_model = %s AND user_id = %s LIMIT 1",
                     (new_bow, user_id)
                 ).fetchone()
                 if bow_row is not None:
                     bow_snap = (
-                        bow_row['nock_height'], bow_row['bow_draw_weight'],
-                        new_effective_dw, bow_row['amo'],
-                        bow_row['bow_type'],
+                        bow_row['bow_draw_weight'], bow_row['effective_draw_weight'],
+                        bow_row['amo'], bow_row['bow_type'],
                     )
                 else:
-                    bow_snap = (None, None, new_effective_dw, None, None)
+                    bow_snap = (None, None, None, None)
 
                 # Refresh arrow snapshot from the current arrows row, if any.
                 arrow_row = cur.execute(
@@ -8284,7 +8186,7 @@ def edit_session(session_id):
                 cur.execute(
                     "UPDATE apollo SET bow = %s, arrow_type = %s, distance = %s, "
                     "session_notes = %s, session_tags = %s, target_id = %s, "
-                    "nock_height = %s, bow_draw_weight = %s, effective_draw_weight = %s, "
+                    "bow_draw_weight = %s, effective_draw_weight = %s, "
                     "bow_amo = %s, bow_type = %s, "
                     "arrow_length = %s, arrow_spine = %s, arrow_shaft_weight = %s, "
                     "arrow_shaft_diameter = %s, arrow_shaft_material = %s, "
@@ -8328,7 +8230,6 @@ def edit_session(session_id):
         'session_notes': first['session_notes'] or '',
         'session_tags':  first['session_tags'] or '',
         'target_id':     first['target_id'],
-        'effective_draw_weight': first['effective_draw_weight'] or '',
     }
     # Per-row miss flag for the template — same rule as the replay payload.
     shot_view = []
@@ -8679,44 +8580,36 @@ def add_bow():
     user_id = current_user_id()
     if request.method == 'GET':
         return render_template('add_bow.html',
-                               archer_bowstyles=ARCHER_BOWSTYLES,
-                               bowstyle_settings=BOWSTYLE_SETTINGS)
+                               archer_bowstyles=ARCHER_BOWSTYLES)
     elif request.method == 'POST':
         try:
             new_bow_model         = request.form.get('new_bow_model')
             new_bow_type          = request.form.get('new_bow_type')
             new_bow_draw_weight   = request.form.get('new_bow_draw_weight')
+            new_effective_dw      = request.form.get('new_effective_draw_weight')
             new_bow_amo           = request.form.get('new_bow_amo')
-            new_nock_height       = request.form.get('new_nock_height')
 
             if not new_bow_model:
                 return "Error: New bow model field required", 400
 
-            # Collect the static, bowtype-specific gear fields (namespaced
-            # ``style_<key>`` in the form) and validate against the schema for
-            # the chosen type. Dynamic fields aren't part of the bow record.
-            _raw_style = {f['key']: request.form.get(f"style_{f['key']}")
-                          for f in _bowstyle_settings_for(new_bow_type)}
-            style_settings = _clean_style_settings(new_bow_type, _raw_style,
-                                                   scope='static')
-            style_json = json.dumps(style_settings) if style_settings else None
-
             # Reject non-numeric draw weights etc. so analyze's float() calls
-            # don't blow up later.
+            # don't blow up later. Effective draw weight is an intrinsic per-
+            # archer property of the bow (draw length rarely changes), so it
+            # lives on the bow record and is snapshotted onto each shot.
             if new_bow_draw_weight not in (None, '') and _parse_float(new_bow_draw_weight) is None:
                 return "Error: bow draw weight must be a positive number", 400
+            if new_effective_dw not in (None, '') and _parse_float(new_effective_dw) is None:
+                return "Error: effective draw weight must be a positive number", 400
             if new_bow_amo not in (None, '') and _parse_float(new_bow_amo) is None:
                 return "Error: AMO must be a positive number", 400
-            if new_nock_height not in (None, '') and _parse_nonneg_float(new_nock_height) is None:
-                return "Error: nock height must be a number", 400
 
             with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
                 cur.execute(
                     "INSERT INTO bows (user_id, bow_model, bow_type, bow_draw_weight, "
-                    "amo, nock_height, style_settings) "
-                    "VALUES (%s, %s, %s, %s, %s, %s, %s)",
+                    "effective_draw_weight, amo) "
+                    "VALUES (%s, %s, %s, %s, %s, %s)",
                     (user_id, new_bow_model, new_bow_type, new_bow_draw_weight,
-                     new_bow_amo, new_nock_height, style_json)
+                     new_effective_dw, new_bow_amo)
                 )
                 con.commit()
             if session.get('session_id') is None:
@@ -8750,7 +8643,7 @@ def edit_bows():
                 for bow in bow_models:
                     rows = cur.execute(
                         "SELECT id AS rowid, bow_model, bow_type, bow_draw_weight, "
-                        "effective_draw_weight, amo, nock_height, style_settings "
+                        "effective_draw_weight, amo "
                         "FROM bows WHERE bow_model = %s AND user_id = %s",
                         (bow, user_id)
                     ).fetchall()
@@ -8760,8 +8653,7 @@ def edit_bows():
             return render_template('edit_bows.html',
                                    bow_models=bow_models,
                                    bow_data=bow_data,
-                                   num_records=num_records,
-                                   bowstyle_settings=BOWSTYLE_SETTINGS)
+                                   num_records=num_records)
         except Exception as e:
             print(f"Retrieving bows error: {e}")
             return "Error retrieving bows", 500
@@ -8790,34 +8682,22 @@ def edit_bows():
         else:
             bow_model             = request.form.get('bow_model')
             bow_draw_weight       = request.form.get('bow_draw_weight')
+            effective_dw          = request.form.get('effective_draw_weight')
             bow_amo               = request.form.get('bow_amo')
-            nock_height           = request.form.get('nock_height')
             # NB: ``bow_type`` is intentionally *not* in the UPDATE — it's
             # an immutable property of a bow (longbow vs. recurve vs.
             # compound is a kind, not a tuning). The form renders it as a
             # read-only display so an attacker can't smuggle it in by
-            # crafting a POST either.
+            # crafting a POST either. Bowtype-specific gear isn't on the bow
+            # anymore — it's tuned per session in the gear collapsible.
             try:
                 with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
-                    # The schema to validate static settings against is fixed by
-                    # the bow's own (immutable) type — read it from the row, not
-                    # the form, so a crafted POST can't switch field sets.
-                    row = cur.execute(
-                        "SELECT bow_type FROM bows WHERE id = %s AND user_id = %s",
-                        (rowid, user_id)
-                    ).fetchone()
-                    bow_type = row[0] if row else None
-                    _raw_style = {f['key']: request.form.get(f"style_{f['key']}")
-                                  for f in _bowstyle_settings_for(bow_type)}
-                    style_settings = _clean_style_settings(bow_type, _raw_style,
-                                                           scope='static')
-                    style_json = json.dumps(style_settings) if style_settings else None
                     cur.execute(
                         "UPDATE bows SET bow_model = %s, bow_draw_weight = %s, "
-                        "amo = %s, nock_height = %s, style_settings = %s "
+                        "effective_draw_weight = %s, amo = %s "
                         "WHERE id = %s AND user_id = %s",
                         (bow_model, bow_draw_weight,
-                         bow_amo, nock_height, style_json, rowid, user_id)
+                         effective_dw, bow_amo, rowid, user_id)
                     )
                     con.commit()
             except Exception as e:

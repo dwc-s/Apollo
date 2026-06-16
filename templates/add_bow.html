@@ -82,39 +82,19 @@
         <span class="form-label">Bow type<span class="required-marker">*</span></span>
         <select id="new_bow_type" name="new_bow_type" required>
             {% for bs in archer_bowstyles %}
-            <option value="{{ bs }}">{{ bs | capitalize }}</option>
+            <option value="{{ bs }}">{{ bs | bowstyle_label }}</option>
             {% endfor %}
         </select>
-
-        {# Bowtype-specific static gear. One block per style; JS reveals the
-           block matching the selected bow type and disables the hidden ones'
-           inputs so they don't post. #}
-        {% for bs, fields in bowstyle_settings.items() %}
-        <div class="bow-style-fields" data-bow-style="{{ bs }}" style="display:none;">
-            {% for f in fields if f.scope == 'static' %}
-            <span class="form-label{% if f.help %} has-tooltip{% endif %}"
-                  {% if f.help %}data-tooltip="{{ f.help }}"{% endif %}>{{ f.label }}</span>
-            {% if f.kind == 'select' %}
-            <select name="style_{{ f.key }}" disabled>
-                <option value="">— not set —</option>
-                {% for opt in f.options %}<option value="{{ opt }}">{{ opt }}</option>{% endfor %}
-            </select>
-            {% else %}
-            <input type="text" name="style_{{ f.key }}" disabled
-                   {% if f.kind == 'number' %}inputmode="decimal"{% endif %}>
-            {% endif %}
-            {% endfor %}
-        </div>
-        {% endfor %}
 
         <span class="form-label">Bow draw weight</span>
         <input type="text" name="new_bow_draw_weight" id="new_bow_draw_weight" inputmode="decimal">
 
+        <span class="form-label has-tooltip"
+              data-tooltip="Actual draw weight as opposed to rated draw weight. Re-measure whenever the string is put back on the bow. Effective draw weight can be measured or estimated (add or subtract 2.5 lbs for each inch of draw length over or below the standard 28 inches).">Effective draw weight (lbs)</span>
+        <input type="text" name="new_effective_draw_weight" id="new_effective_draw_weight" inputmode="decimal">
+
         <span class="form-label" id="amo-label">Bow length (AMO) in inches</span>
         <input type="text" name="new_bow_amo" id="new_bow_amo" inputmode="decimal">
-
-        <span class="form-label">Nock height (mm)</span>
-        <input type="text" name="new_nock_height" id="new_nock_height" inputmode="decimal">
 
         <div class="submit-row">
             <input type="submit" value="Submit">
@@ -149,27 +129,6 @@ document.querySelector('form').addEventListener('submit', () => {
 });
 
 applyUnits();
-</script>
-<script>
-// Reveal the gear block for the selected bow type and disable the hidden
-// blocks' inputs so a hidden style's fields never post.
-(function styleFieldsInit() {
-    const typeSel = document.getElementById('new_bow_type');
-    const blocks  = Array.from(document.querySelectorAll('.bow-style-fields'));
-    if (!typeSel || !blocks.length) return;
-    function sync() {
-        const want = typeSel.value;
-        blocks.forEach(block => {
-            const show = block.dataset.bowStyle === want;
-            block.style.display = show ? '' : 'none';
-            block.querySelectorAll('input, select').forEach(el => {
-                el.disabled = !show;
-            });
-        });
-    }
-    typeSel.addEventListener('change', sync);
-    sync();
-})();
 </script>
 </body>
 </html>

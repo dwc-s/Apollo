@@ -294,7 +294,7 @@
                 Bowstyle:
                 <select name="bowstyle">
                     {% for bs in archer_bowstyles %}
-                    <option value="{{ bs }}" {% if current_user and current_user.default_bowstyle == bs %}selected{% endif %}>{{ bs | capitalize }}</option>
+                    <option value="{{ bs }}" {% if current_user and current_user.default_bowstyle == bs %}selected{% endif %}>{{ bs | bowstyle_label }}</option>
                     {% endfor %}
                 </select>
             </label>
@@ -571,16 +571,6 @@
             </select>
             <div class="links-row"><a href="/add_bow">+ add bow</a></div>
 
-            {% include '_bow_style_settings.html' %}
-
-            <span class="form-label has-tooltip"
-                  data-tooltip="Actual draw weight as opposed to rated draw weight. Re-measure whenever the string is put back on the bow.">Effective draw weight (lbs, optional)</span>
-            <input type="text" id="effective_draw_weight" name="effective_draw_weight"
-                   value="{{ effective_draw_weight or '' }}"
-                   inputmode="decimal"
-                   placeholder="leave blank to use bow's rated draw weight">
-            <script id="effective-dw-by-bow" type="application/json">{{ effective_dw_by_bow | tojson }}</script>
-
             <span class="form-label">Arrow</span>
             <select id="arrow_type" name="arrow_type">
                 {% for arrow in arrow_types %}
@@ -588,6 +578,8 @@
                 {% endfor %}
             </select>
             <div class="links-row"><a href="/add_arrow">+ add arrow</a></div>
+
+            {% include '_bow_style_settings.html' %}
 
             {% if progress.ends %}
             <span class="form-label">{% if is_course_round %}Targets scorecard{% else %}Ends scorecard{% endif %}</span>
@@ -1071,23 +1063,6 @@ stage.addEventListener('click', e => {
 
 document.getElementById('miss-btn').addEventListener('click', recordMiss);
 
-// ── Effective draw weight prefill ────────────────────────────────────────
-(function () {
-    const bowSel  = document.getElementById('bow');
-    const dwInput = document.getElementById('effective_draw_weight');
-    const dataEl  = document.getElementById('effective-dw-by-bow');
-    if (!bowSel || !dwInput || !dataEl) return;
-    let prefillMap = {};
-    try { prefillMap = JSON.parse(dataEl.textContent || '{}'); }
-    catch (_) { prefillMap = {}; }
-    bowSel.addEventListener('change', () => {
-        const stored = prefillMap[bowSel.value];
-        if (stored !== undefined && stored !== null && stored !== '') {
-            dwInput.value = stored;
-        }
-    });
-})();
-
 // ── Recall arrow button ──────────────────────────────────────────────────
 // Undo the most recent shot in this tournament session — for accidental
 // submissions. Fires a POST to /recall_arrow, then reloads so the page
@@ -1430,7 +1405,7 @@ applyUnits();
 </style>
 
 <h2 class="quantico" style="text-align:center;color:#1a3a5c;">Live match — {{ round_def.name }}</h2>
-<p class="selector-intro">
+<p class="selector-intro" style="font-family:'Quantico',sans-serif;">
     Enter 2–4 archers who'll share this device. They take turns at the canvas:
     each archer shoots a full end, then the target hands off to the next archer.
     {% if round_def.match_scoring == 'set' %}
@@ -1841,6 +1816,12 @@ applyUnits();
             {% for b in bow_models %}<option value="{{ b }}">{{ b }}</option>{% endfor %}
         </select>
 
+        <span class="form-label">Arrow</span>
+        <select name="participant___IDX___arrow_type" class="sc-arrow">
+            <option value="">— none —</option>
+            {% for arrow in arrow_types %}<option value="{{ arrow }}">{{ arrow }}</option>{% endfor %}
+        </select>
+
         <div class="sc-bow-style-settings">
         {% for bs, fields in (bowstyle_settings or {}).items() %}
             <div class="bow-style-fields" data-bow-style="{{ bs }}" style="display:none;">
@@ -1862,16 +1843,6 @@ applyUnits();
             </div>
         {% endfor %}
         </div>
-
-        <span class="form-label">Effective draw weight (lbs, optional)</span>
-        <input type="text" name="participant___IDX___effective_draw_weight" class="sc-eff-dw"
-               inputmode="decimal" placeholder="leave blank to use bow's rated draw weight">
-
-        <span class="form-label">Arrow</span>
-        <select name="participant___IDX___arrow_type" class="sc-arrow">
-            <option value="">— none —</option>
-            {% for arrow in arrow_types %}<option value="{{ arrow }}">{{ arrow }}</option>{% endfor %}
-        </select>
     </div>
     </details>
 </template>
@@ -1882,10 +1853,9 @@ applyUnits();
     // segment. Keys are stringified segment indices; values are
     // { 'X': pv, '10': pv, … , 'M': 0 }.
     const POINTS_BY_SEG = {{ points_by_segment_json|safe }};
-    // Per-bow saved gear ({model: {type, values}}) and last effective draw
-    // weight ({model: dw}), for prefilling each participant's equipment menu.
+    // Per-bow saved gear ({model: {type, values}}) for prefilling each
+    // participant's equipment menu.
     const STYLE_BY_BOW = {{ (style_settings_by_bow or {}) | tojson }};
-    const EFF_DW_BY_BOW = {{ (effective_dw_by_bow or {}) | tojson }};
 
     function pointsFor(segIdx, label) {
         const lbl = (label || '').toString().trim().toUpperCase();
@@ -1956,9 +1926,9 @@ applyUnits();
 
     // Per-participant equipment menu: clone the template, then wire the bow
     // selector to reveal its bowtype's gear block (disabling the others so
-    // they never post) and prefill empty fields from the bow's saved gear +
-    // last effective draw weight — the scoped, per-card analogue of
-    // _bow_style_settings.html (which assumes a single id="bow").
+    // they never post) and prefill empty fields from the bow's saved gear —
+    // the scoped, per-card analogue of _bow_style_settings.html (which assumes
+    // a single id="bow").
     function injectEquipment(card, idx) {
         const host = card.querySelector('.equipment-host');
         if (!host) return;
@@ -1966,7 +1936,6 @@ applyUnits();
         host.innerHTML = eqTpl.replaceAll('__IDX__', idx);
 
         const bowSel = host.querySelector('.sc-bow');
-        const dwInput = host.querySelector('.sc-eff-dw');
         const blocks = Array.from(host.querySelectorAll('.bow-style-fields'));
 
         function fillBlock(block, info) {
@@ -1985,10 +1954,6 @@ applyUnits();
                 block.querySelectorAll('input, select').forEach(el => { el.disabled = !show; });
                 if (show) fillBlock(block, info);
             });
-            const dw = EFF_DW_BY_BOW[bowSel.value];
-            if (dwInput && dwInput.value === '' && dw != null && dw !== '') {
-                dwInput.value = dw;
-            }
         }
         bowSel.addEventListener('change', sync);
         sync();
@@ -2155,19 +2120,13 @@ applyUnits();
                 {% for b in bow_models %}<option value="{{ b }}">{{ b }}</option>{% endfor %}
             </select>
 
-            {% include '_bow_style_settings.html' %}
-
-            <span class="form-label">Effective draw weight (lbs, optional)</span>
-            <input type="text" id="effective_draw_weight" name="effective_draw_weight"
-                   inputmode="decimal"
-                   placeholder="leave blank to use bow's rated draw weight">
-            <script id="effective-dw-by-bow" type="application/json">{{ (effective_dw_by_bow or {}) | tojson }}</script>
-
             <span class="form-label">Arrow</span>
             <select id="arrow_type" name="arrow_type">
                 <option value="">— none —</option>
                 {% for arrow in arrow_types %}<option value="{{ arrow }}">{{ arrow }}</option>{% endfor %}
             </select>
+
+            {% include '_bow_style_settings.html' %}
         </div>
         </details>
     </div>
@@ -2206,24 +2165,6 @@ applyUnits();
 </form>
 
 <script>
-// Effective-draw-weight prefill: mirror the live shoot view — fill the field
-// from the selected bow's last value (the bow-style settings come from the
-// shared _bow_style_settings.html include, keyed on the same id="bow").
-(function () {
-    const bowSel  = document.getElementById('bow');
-    const dwInput = document.getElementById('effective_draw_weight');
-    const dataEl  = document.getElementById('effective-dw-by-bow');
-    if (!bowSel || !dwInput || !dataEl) return;
-    let prefillMap = {};
-    try { prefillMap = JSON.parse(dataEl.textContent || '{}'); }
-    catch (_) { prefillMap = {}; }
-    bowSel.addEventListener('change', () => {
-        const stored = prefillMap[bowSel.value];
-        if (dwInput.value === '' && stored != null && stored !== '') {
-            dwInput.value = stored;
-        }
-    });
-})();
 (function() {
     const POINTS_MAP = {{ points_map_json|safe }};
     const CHOICES    = {{ choices|tojson }};
