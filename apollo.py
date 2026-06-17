@@ -12,6 +12,7 @@ MySQL (web/cloud — set DATABASE_URL=mysql+pymysql://user:pass@host/db).
 Schema is defined once via Core Table objects and compiled to the right
 dialect by metadata.create_all() at import time.
 """
+import base64
 import csv
 import hashlib
 import json
@@ -4114,7 +4115,7 @@ def _hash_reset_token(token):
     return hashlib.sha256(token.encode('utf-8')).hexdigest()
 
 
-def _send_email(to_addr, subject, body):
+def _send_email(to_addr, subject, body, attachments=None):
     """Send a plain-text email via Resend, or fall back to stdout in dev.
 
     Reads RESEND_API_KEY at call time so a missing/rotated key doesn't
@@ -4123,6 +4124,10 @@ def _send_email(to_addr, subject, body):
     sender, which only delivers to verified test recipients; set
     RESEND_FROM to an address on a domain you've verified in the Resend
     dashboard before opening this up to real users).
+
+    ``attachments`` is an optional list of ``{filename, content}`` dicts
+    where ``content`` is raw bytes; each is base64-encoded for the Resend
+    API (the SDK's Attachment.content accepts a base64 string).
 
     When RESEND_API_KEY is unset *or* the `resend` package isn't
     installed, we print the message to stdout — the dev flow
@@ -4137,17 +4142,28 @@ def _send_email(to_addr, subject, body):
         print(f"    Subject: {subject}")
         for line in body.splitlines():
             print(f"    | {line}")
+        for a in (attachments or []):
+            print(f"    + attachment: {a['filename']} ({len(a['content'])} bytes)")
         return True
 
     sender = os.environ.get('RESEND_FROM', '').strip() or 'onboarding@resend.dev'
     resend.api_key = api_key
+    payload = {
+        "from":    sender,
+        "to":      to_addr,
+        "subject": subject,
+        "text":    body,
+    }
+    if attachments:
+        payload["attachments"] = [
+            {
+                "filename": a['filename'],
+                "content":  base64.b64encode(a['content']).decode('ascii'),
+            }
+            for a in attachments
+        ]
     try:
-        resend.Emails.send({
-            "from":    sender,
-            "to":      to_addr,
-            "subject": subject,
-            "text":    body,
-        })
+        resend.Emails.send(payload)
         return True
     except Exception as e:
         # Resend raises its own exception types; catch broadly so a
@@ -6204,79 +6220,23 @@ def tournament():
             arrows_remaining = arrows_per_end
         session['current_quiver_size'] = arrows_per_end
 
-        # Equipment-row snapshots — same code path as /sesh.
+        # Equipment-row snapshots go through _insert_shot — the single
+        # source of truth the live /sesh path also uses, so a future
+        # column add can't drift between the two insert sites. The
+        # tournament specifics: quiver_size is fixed at arrows_per_end,
+        # there are no session notes, and the tag carries the round/match
+        # context instead of user tags.
         try:
             with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
-                bow_row = cur.execute(
-                    "SELECT effective_draw_weight, bow_draw_weight, "
-                    "amo, bow_type, style_settings FROM bows "
-                    "WHERE bow_model = %s AND user_id = %s LIMIT 1",
-                    (bow, user_id)
-                ).fetchone()
-                if bow_row is not None:
-                    shot_effective_dw    = bow_row['effective_draw_weight'] if 'effective_draw_weight' in bow_row else bow_row[0]
-                    shot_bow_draw_weight = bow_row['bow_draw_weight']       if 'bow_draw_weight'       in bow_row else bow_row[1]
-                    shot_bow_amo         = bow_row['amo']                   if 'amo'                   in bow_row else bow_row[2]
-                    shot_bow_type        = bow_row['bow_type']              if 'bow_type'              in bow_row else bow_row[3]
-                    bow_style_raw        = bow_row['style_settings']        if 'style_settings'        in bow_row else bow_row[4]
-                else:
-                    shot_effective_dw = shot_bow_draw_weight = shot_bow_amo = shot_bow_type = None
-                    bow_style_raw = None
-
-                # Bowtype-specific settings: bow's saved gear overlaid with the
-                # form's posted overrides, validated against the bow's type.
-                # Same snapshot rationale as the /sesh path's _insert_shot.
-                try:
-                    bow_static = json.loads(bow_style_raw) if bow_style_raw else {}
-                except (ValueError, TypeError):
-                    bow_static = {}
-                merged_style = dict(bow_static)
-                merged_style.update(_clean_style_settings(
-                    shot_bow_type, _collect_style_settings(request.form)))
-                shot_style_settings = json.dumps(merged_style) if merged_style else None
-
-                arrow_row = cur.execute(
-                    "SELECT length, spine, shaft_weight, shaft_diameter, "
-                    "shaft_material, nock_weight, tip, tip_weight FROM arrows "
-                    "WHERE arrow = %s AND user_id = %s LIMIT 1",
-                    (arrow_type, user_id)
-                ).fetchone()
-                if arrow_row is not None:
-                    shot_arrow_length    = arrow_row['length']         if 'length'         in arrow_row else arrow_row[0]
-                    shot_arrow_spine     = arrow_row['spine']          if 'spine'          in arrow_row else arrow_row[1]
-                    shot_arrow_shaft_w   = arrow_row['shaft_weight']   if 'shaft_weight'   in arrow_row else arrow_row[2]
-                    shot_arrow_shaft_d   = arrow_row['shaft_diameter'] if 'shaft_diameter' in arrow_row else arrow_row[3]
-                    shot_arrow_shaft_m   = arrow_row['shaft_material'] if 'shaft_material' in arrow_row else arrow_row[4]
-                    shot_arrow_nock_w    = arrow_row['nock_weight']    if 'nock_weight'    in arrow_row else arrow_row[5]
-                    shot_arrow_tip       = arrow_row['tip']            if 'tip'            in arrow_row else arrow_row[6]
-                    shot_arrow_tip_w     = arrow_row['tip_weight']     if 'tip_weight'     in arrow_row else arrow_row[7]
-                else:
-                    shot_arrow_length = shot_arrow_spine = shot_arrow_shaft_w = None
-                    shot_arrow_shaft_d = shot_arrow_shaft_m = shot_arrow_nock_w = None
-                    shot_arrow_tip = shot_arrow_tip_w = None
-
-                cur.execute("""
-                    INSERT INTO apollo (user_id, session_id, timestamp, bow,
-                    arrow_type, quiver_size, arrows_remaining,
-                    distance, session_notes, x_coord, y_coord, is_precise,
-                    record_mode, target_id,
-                    bow_draw_weight, effective_draw_weight, bow_amo, bow_type,
-                    arrow_length, arrow_spine, arrow_shaft_weight,
-                    arrow_shaft_diameter, arrow_shaft_material,
-                    arrow_nock_weight, arrow_tip, arrow_tip_weight,
-                    session_tags, bow_style_settings)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                            %s, %s, %s, %s,
-                            %s, %s, %s, %s, %s, %s, %s, %s,
-                            %s, %s)""",
-                    (user_id, session_id, _app_now(), bow, arrow_type, arrows_per_end,
-                     arrows_remaining, distance, '', x, y, is_precise,
-                     record_mode, target_id,
-                     shot_bow_draw_weight, shot_effective_dw, shot_bow_amo, shot_bow_type,
-                     shot_arrow_length, shot_arrow_spine, shot_arrow_shaft_w,
-                     shot_arrow_shaft_d, shot_arrow_shaft_m,
-                     shot_arrow_nock_w, shot_arrow_tip, shot_arrow_tip_w,
-                     tournament_tag, shot_style_settings)
+                _insert_shot(
+                    cur,
+                    user_id=user_id, session_id=session_id,
+                    timestamp=_app_now(), bow=bow, arrow_type=arrow_type,
+                    quiver_size=arrows_per_end, arrows_remaining=arrows_remaining,
+                    distance=distance, session_notes='', x=x, y=y,
+                    is_precise=is_precise, record_mode=record_mode,
+                    target_id=target_id, session_tags=tournament_tag,
+                    style_settings_session=_collect_style_settings(request.form),
                 )
                 con.commit()
         except SQLAlchemyError as e:
@@ -7758,7 +7718,7 @@ def tournament_match_email(match_id):
             body_lines += ['', f"Notes: {p['notes']}"]
         body_lines += ['', 'Full per-end breakdown is attached as PDF / CSV / Excel.']
         body = '\n'.join(body_lines)
-        ok = _send_email_with_attachments(
+        ok = _send_email(
             to_addr=p['email'],
             subject=f"Apollo results — {round_def['name']}",
             body=body,
@@ -7769,44 +7729,6 @@ def tournament_match_email(match_id):
         else:
             skipped.append({'name': p['name'], 'reason': 'send failed'})
     return jsonify(ok=True, sent=sent, skipped=skipped)
-
-
-def _send_email_with_attachments(to_addr, subject, body, attachments):
-    """Like `_send_email`, but accepts a list of {filename, content}
-    dicts to attach. Falls back to writing the body + an attachment
-    summary to stdout when Resend isn't configured."""
-    import base64
-    api_key = os.environ.get('RESEND_API_KEY', '').strip()
-    if not api_key or resend is None:
-        reason = "RESEND_API_KEY not set" if resend is not None else "resend package not installed"
-        print(f"✉️  [dev] Would send email with attachments ({reason}):")
-        print(f"    To:      {to_addr}")
-        print(f"    Subject: {subject}")
-        for line in body.splitlines():
-            print(f"    | {line}")
-        for a in attachments:
-            print(f"    + attachment: {a['filename']} ({len(a['content'])} bytes)")
-        return True
-    sender = os.environ.get('RESEND_FROM', '').strip() or 'onboarding@resend.dev'
-    resend.api_key = api_key
-    try:
-        resend.Emails.send({
-            "from":    sender,
-            "to":      to_addr,
-            "subject": subject,
-            "text":    body,
-            "attachments": [
-                {
-                    "filename": a['filename'],
-                    "content":  base64.b64encode(a['content']).decode('ascii'),
-                }
-                for a in attachments
-            ],
-        })
-        return True
-    except Exception as e:
-        print(f"⚠️  Failed to send email to {to_addr} via Resend: {e}")
-        return False
 
 
 @app.route("/previous_sessions", methods=['GET'])
