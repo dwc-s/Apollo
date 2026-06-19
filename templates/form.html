@@ -116,6 +116,11 @@
             <input type="file" id="form-file" accept="video/*" hidden>
         </div>
         <div id="form-status" class="form-status"></div>
+        <div id="form-replay-bar" class="form-replay-bar" hidden>
+            <button type="button" id="form-replay-play" aria-label="Play / pause">❚❚</button>
+            <input type="range" id="form-replay-slider" min="0" max="0" value="0" aria-label="Replay position">
+            <button type="button" id="form-replay-close" class="secondary" aria-label="Close replay">✕</button>
+        </div>
     </div>
 
     <div id="form-results" class="form-results" hidden></div>
@@ -153,12 +158,17 @@
     {% if recent %}
     <div class="form-history">
         <h3>Recent analyses</h3>
-        <ul>
+        <ul id="form-history-list">
             {% for r in recent %}
             <li>
                 <span class="form-history-date">{{ r.created_at | fmt_ts }}</span>
                 <span class="form-history-bow">{{ bowstyle_labels.get(r.bowstyle, r.bowstyle|capitalize) }}</span>
                 <span class="form-history-score">{{ '%.0f' % r.overall_score if r.overall_score is not none else '—' }}</span>
+                {% if r.has_replay %}
+                <button type="button" class="form-history-replay" data-replay-id="{{ r.id }}">▶ Replay</button>
+                {% else %}
+                <span class="form-history-noreplay">—</span>
+                {% endif %}
             </li>
             {% endfor %}
         </ul>

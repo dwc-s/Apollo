@@ -261,4 +261,42 @@ near('aspect 1: shoulder tilt 26.57°', tiltSquare, 26.57, 0.5);
 near('aspect 0.5: same pose reads 14.04°', tiltWide, 14.04, 0.5);
 ok('aspect correction shrinks the vertical component', tiltWide < tiltSquare);
 
+// ── Replay payload: downsample, round, remap phases, reconstruct ──
+(function () {
+    // 100 frames; draw wrist drifts so frames differ. Anchor at 40, follow 70.
+    const seq = [];
+    for (let i = 0; i < 100; i++) {
+        seq.push({ t: i / 30, landmarks: frame({
+            [LM.L_SHOULDER]: { x: 0.40, y: 0.50 },
+            [LM.R_SHOULDER]: { x: 0.60, y: 0.50 },
+            [LM.R_WRIST]: { x: 0.55, y: 0.50 + i * 0.0001 },
+            [LM.R_ELBOW]: { x: 0.80, y: 0.50, visibility: 0.2 },   // low-vis → null
+        }) });
+    }
+    const ph = { anchorIndex: 40, followIndex: 70, holdStart: 35, holdEnd: 45 };
+    const rep = F.buildReplay(seq, ph, 'right', 16 / 9);
+    ok('replay downsamples to <= 60 frames', rep.frames.length <= 60 && rep.frames.length > 0);
+    ok('replay keeps the landmark index list + handedness',
+        Array.isArray(rep.lms) && rep.hand === 'right');
+    ok('replay stores aspect rounded', Math.abs(rep.aspect - 1.778) < 0.001);
+    ok('phase indices remap into kept-frame range',
+        rep.anchor >= 0 && rep.anchor < rep.frames.length &&
+        rep.follow >= 0 && rep.follow < rep.frames.length && rep.anchor < rep.follow);
+    // Coordinates are rounded to 3 decimals.
+    const firstShoulder = rep.frames[0][rep.lms.indexOf(LM.L_SHOULDER)];
+    ok('coords rounded to 3dp', firstShoulder[0] === 0.4 && firstShoulder[1] === 0.5);
+    // Low-visibility landmark stored as null.
+    ok('low-visibility landmark → null in replay',
+        rep.frames[0][rep.lms.indexOf(LM.R_ELBOW)] === null);
+
+    // Reconstruct expands back to a 33-slot array indexed by BlazePose index.
+    const lm = F.reconstructReplayFrame(rep, rep.frames[0]);
+    ok('reconstruct yields a 33-slot array', lm.length === 33);
+    ok('reconstruct places shoulders at their BlazePose indices',
+        lm[LM.L_SHOULDER] && Math.abs(lm[LM.L_SHOULDER].x - 0.4) < 1e-9 &&
+        lm[LM.R_ELBOW] === null);
+    // Empty input → null payload.
+    ok('buildReplay([]) → null', F.buildReplay([], ph, 'right', 1) === null);
+})();
+
 console.log(`\n✓ all ${passed} form-math assertions passed`);

@@ -2538,6 +2538,12 @@ form_captures_table = Table('form_captures', metadata,
     Column('overall_score', Float),
     Column('metrics_json', Text),
     Column('scores_json', Text),
+    # Optional compact, downsampled pose sequence for replay — anonymous
+    # skeleton points only (no video, no image), so a saved shot can be
+    # re-watched as a silhouette with the angle lines drawn over it. Nullable:
+    # captures saved before replay existed (or when the payload is too big)
+    # simply have no replay.
+    Column('frames_json', Text),
 )
 
 
@@ -3046,6 +3052,24 @@ def _ensure_session_tags_column():
         conn.execute(text("ALTER TABLE apollo ADD COLUMN session_tags TEXT"))
 
 
+def _ensure_form_captures_columns():
+    """Add the frames_json column to form_captures on DBs that predate replay.
+
+    Idempotent: skips when the table doesn't exist yet (fresh DB → create_all
+    makes it with the column) or already has it. frames_json holds the optional
+    compact pose sequence used to replay a saved shot.
+    """
+    insp = sa_inspect(engine)
+    if 'form_captures' not in insp.get_table_names():
+        return
+    cols = {c['name'] for c in insp.get_columns('form_captures')}
+    if 'frames_json' in cols:
+        return
+    print("⚙️  Migrating: adding frames_json column to form_captures")
+    with engine.begin() as conn:
+        conn.execute(text("ALTER TABLE form_captures ADD COLUMN frames_json TEXT"))
+
+
 def _ensure_user_timezone_column():
     """Add the timezone column to users on DBs that predate timezone support.
 
@@ -3285,6 +3309,7 @@ def migrate_db():
     _migrate_poundage_to_draw_weight()
     _ensure_shot_snapshot_columns()
     _ensure_session_tags_column()
+    _ensure_form_captures_columns()
     _ensure_is_root_column()
     _ensure_user_timezone_column()
     _ensure_archer_profile_columns()
@@ -14490,15 +14515,28 @@ def form_analysis():
             overall = float(overall)
         except (TypeError, ValueError):
             overall = None
+        # Optional replay payload: a compact pose sequence (anonymous skeleton
+        # points only — never video). Serialise it, but drop it rather than
+        # reject the save if it's implausibly large (keeps it under a TEXT
+        # column and guards against a runaway client).
+        frames = data.get('frames')
+        frames_json = None
+        if isinstance(frames, dict):
+            try:
+                candidate = json.dumps(frames, separators=(',', ':'))
+            except (TypeError, ValueError):
+                candidate = None
+            if candidate is not None and len(candidate) <= 60000:
+                frames_json = candidate
         try:
             with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
                 cur.execute(
                     "INSERT INTO form_captures "
                     "(user_id, created_at, bowstyle, overall_score, "
-                    " metrics_json, scores_json) "
-                    "VALUES (%s, %s, %s, %s, %s, %s)",
+                    " metrics_json, scores_json, frames_json) "
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s)",
                     (user_id, _app_now(), bs, overall,
-                     json.dumps(metrics), json.dumps(scores))
+                     json.dumps(metrics), json.dumps(scores), frames_json)
                 )
                 con.commit()
         except SQLAlchemyError as e:
@@ -14574,19 +14612,66 @@ def _form_consistency(user_id, bowstyle, checkpoints, limit=10):
 
 
 def _form_recent_captures(user_id, limit=10):
-    """Most recent saved form analyses for the archer (for the history strip)."""
+    """Most recent saved form analyses for the archer (for the history strip).
+
+    Includes the row id (so a click can fetch the full capture for replay) and a
+    has_replay flag (whether a pose sequence was stored).
+    """
     try:
         with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
             rows = cur.execute(
-                "SELECT created_at, bowstyle, overall_score "
+                # Test frames_json for presence in SQL rather than selecting the
+                # whole (potentially ~tens-of-KB) blob for every history row.
+                "SELECT id, created_at, bowstyle, overall_score, "
+                "(frames_json IS NOT NULL) AS has_replay "
                 "FROM form_captures WHERE user_id = %s "
                 "ORDER BY created_at DESC LIMIT %s",
                 (user_id, int(limit))
             ).fetchall()
     except SQLAlchemyError:
         return []
-    return [{'created_at': r['created_at'], 'bowstyle': r['bowstyle'],
-             'overall_score': r['overall_score']} for r in (rows or [])]
+    return [{'id': r['id'], 'created_at': r['created_at'],
+             'bowstyle': r['bowstyle'], 'overall_score': r['overall_score'],
+             'has_replay': bool(r['has_replay'])} for r in (rows or [])]
+
+
+@app.route('/form/capture/<int:capture_id>', methods=['GET'])
+@login_required
+def form_capture(capture_id):
+    """Return one saved analysis as JSON for replay — scoped to the owner.
+
+    Hands back the stored derived data (bowstyle, scores, overall) plus the
+    compact pose sequence (frames) so the client can re-draw the shot as a
+    silhouette with the angle lines over it. 404s on a capture that isn't this
+    user's, so ids can't be enumerated across accounts.
+    """
+    user_id = current_user_id()
+    try:
+        with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
+            row = cur.execute(
+                "SELECT bowstyle, overall_score, metrics_json, scores_json, "
+                "frames_json FROM form_captures WHERE id = %s AND user_id = %s",
+                (capture_id, user_id)
+            ).fetchone()
+    except SQLAlchemyError:
+        row = None
+    if row is None:
+        return jsonify(ok=False, msg='Not found.'), 404
+
+    def _loads(raw, default):
+        try:
+            return json.loads(raw) if raw else default
+        except (ValueError, TypeError):
+            return default
+
+    return jsonify(
+        ok=True,
+        bowstyle=row['bowstyle'],
+        overall_score=row['overall_score'],
+        metrics=_loads(row['metrics_json'], {}),
+        scores=_loads(row['scores_json'], {}),
+        frames=_loads(row['frames_json'], None),
+    )
 
 
 @app.route('/form/author', methods=['GET'])

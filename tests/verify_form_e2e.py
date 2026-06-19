@@ -143,6 +143,74 @@ def main():
     print(f"✓ consistency reports per-metric mean/SD across shots "
           f"({len(cons)} metrics, e.g. {sl['label']} ±{sl['sd']:.2f})")
 
+    # ── Replay: save a pose sequence, fetch it back, enforce ownership ─────
+    replay_payload = {
+        "v": 1, "lms": [11, 12, 15, 16], "hand": "right", "aspect": 1.778,
+        "anchor": 1, "follow": 2, "holdStart": 0, "holdEnd": 2,
+        "frames": [
+            [[0.40, 0.50], [0.60, 0.50], [0.30, 0.50], [0.58, 0.50]],
+            [[0.40, 0.50], [0.60, 0.50], [0.30, 0.50], [0.55, 0.50]],
+            [[0.40, 0.50], [0.60, 0.50], [0.30, 0.50], [0.65, 0.50]],
+        ],
+    }
+    rr = client.post("/form", json={
+        "bowstyle": "recurve", "metrics": {"shoulder_level": 2.0},
+        "scores": {"shoulder_level": {"status": "pass", "deviation": 2.0}},
+        "overall_score": 90.0, "frames": replay_payload})
+    assert rr.status_code == 200 and rr.get_json().get("ok")
+
+    def latest_capture_id(u):
+        with _conn() as con, closing(con.cursor()) as cur:
+            row = cur.execute("SELECT id FROM form_captures WHERE user_id = %s "
+                              "ORDER BY id DESC LIMIT 1", (u,)).fetchone()
+            return row[0] if row else None
+
+    cap_id = latest_capture_id(uid)
+    cap = client.get(f"/form/capture/{cap_id}").get_json()
+    assert cap and cap["ok"], cap
+    assert cap["frames"] and cap["frames"]["anchor"] == 1, "replay frames not round-tripped"
+    assert len(cap["frames"]["frames"]) == 3 and cap["frames"]["hand"] == "right"
+    assert cap["scores"]["shoulder_level"]["status"] == "pass"
+    # The history strip now offers a replay control for this shot.
+    html_r = client.get("/form").get_data(as_text=True)
+    assert f'data-replay-id="{cap_id}"' in html_r, "replay button missing for a shot with pose data"
+    print("✓ replay pose sequence saved, fetched back, and offered in history")
+
+    # Another user cannot fetch this capture (404 — ids aren't cross-account).
+    with _conn() as con, closing(con.cursor()) as cur:
+        cur.execute("DELETE FROM users WHERE username = 'verify_form_other'")
+        cur.execute(
+            "INSERT INTO users (username, email, password_hash, created_at, "
+            "is_active) VALUES ('verify_form_other', 'vfo@example.com', 'x', %s, 1)",
+            (datetime.utcnow(),))
+        con.commit()
+        other = cur.execute(
+            "SELECT id FROM users WHERE username = 'verify_form_other'").fetchone()[0]
+    with client.session_transaction() as s:
+        s["user_id"] = other
+    assert client.get(f"/form/capture/{cap_id}").status_code == 404, \
+        "capture must be scoped to its owner"
+    with _conn() as con, closing(con.cursor()) as cur:
+        cur.execute("DELETE FROM users WHERE id = %s", (other,))
+        cur.execute("DELETE FROM form_captures WHERE user_id = %s", (other,))
+        con.commit()
+    with client.session_transaction() as s:
+        s["user_id"] = uid
+    print("✓ replay capture is owner-scoped (404 for other users)")
+
+    # Oversized replay payload is dropped (save still succeeds, no replay stored).
+    big = {"v": 1, "lms": [11], "hand": "right", "aspect": 1.0,
+           "anchor": 0, "follow": -1, "holdStart": -1, "holdEnd": -1,
+           "frames": [[[0.123, 0.456]]] * 20000}
+    rb = client.post("/form", json={
+        "bowstyle": "recurve", "metrics": {"shoulder_level": 1.0},
+        "scores": {"shoulder_level": {"status": "pass", "deviation": 1.0}},
+        "overall_score": 99.0, "frames": big})
+    assert rb.status_code == 200 and rb.get_json().get("ok")
+    big_cap = client.get(f"/form/capture/{latest_capture_id(uid)}").get_json()
+    assert big_cap["ok"] and big_cap["frames"] is None, "oversized replay should be dropped"
+    print("✓ oversized replay payload dropped, save still succeeds")
+
     # ── Malformed POST is rejected ─────────────────────────────────────────
     bad = client.post("/form", json={"bowstyle": "recurve", "metrics": "nope"})
     assert bad.status_code == 400, "malformed metrics should 400"

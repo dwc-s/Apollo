@@ -359,6 +359,60 @@
         }
     };
 
+    // ── Replay payload (anonymous pose sequence, for re-watching a shot) ────
+    // The landmarks we keep for replay: enough to draw a body silhouette,
+    // skeleton, and the checkpoint angle lines (no fingers, no video).
+    var REPLAY_LMS = [0, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 23, 24, 25, 26, 27, 28];
+    var REPLAY_MAX_FRAMES = 60;   // downsample cap → keeps the JSON under a TEXT column
+    // Build a compact, downsampled, rounded pose sequence from the captured
+    // samples. `aspect` is width/height of the source so replay can preserve the
+    // body's true proportions. Phase indices are remapped onto the kept frames.
+    function buildReplay(samples, phases, hand, aspect) {
+        if (!samples || !samples.length) return null;
+        var n = samples.length;
+        var stride = Math.max(1, Math.ceil(n / REPLAY_MAX_FRAMES));
+        var picked = [];
+        for (var i = 0; i < n; i += stride) picked.push(i);
+        function mapTo(orig) {
+            if (orig == null || orig < 0) return -1;
+            var best = 0, bestd = Infinity;
+            for (var k = 0; k < picked.length; k++) {
+                var d = Math.abs(picked[k] - orig);
+                if (d < bestd) { bestd = d; best = k; }
+            }
+            return best;
+        }
+        var frames = picked.map(function (oi) {
+            var lm = samples[oi].landmarks;
+            return REPLAY_LMS.map(function (li) {
+                var p = lm && lm[li];
+                if (!p || (p.visibility != null && p.visibility < VIS_MIN)) return null;
+                return [Math.round(p.x * 1000) / 1000, Math.round(p.y * 1000) / 1000];
+            });
+        });
+        return {
+            v: 1, lms: REPLAY_LMS, hand: hand || 'right',
+            aspect: (aspect && aspect > 0) ? Math.round(aspect * 1000) / 1000 : (4 / 3),
+            anchor: mapTo(phases && phases.anchorIndex),
+            follow: mapTo(phases && phases.followIndex),
+            holdStart: mapTo(phases && phases.holdStart),
+            holdEnd: mapTo(phases && phases.holdEnd),
+            frames: frames
+        };
+    }
+    // Expand one stored frame (array aligned to replay.lms) back to a 33-slot
+    // landmark array of {x, y} | null, so the drawing code can index by the
+    // usual BlazePose indices.
+    function reconstructReplayFrame(replay, frameArr) {
+        var lm = [];
+        for (var i = 0; i < 33; i++) lm.push(null);
+        (replay.lms || []).forEach(function (li, k) {
+            var p = frameArr && frameArr[k];
+            if (p) lm[li] = { x: p[0], y: p[1] };
+        });
+        return lm;
+    }
+
     // ── Public pure API (browser + Node) ────────────────────────────────────
     var API = {
         LM: LM, VIS_MIN: VIS_MIN,
@@ -374,7 +428,9 @@
         scoreAll: scoreAll,
         measureAll: measureAll,
         holdSteadiness: holdSteadiness,
-        detectPhases: detectPhases
+        detectPhases: detectPhases,
+        buildReplay: buildReplay,
+        reconstructReplayFrame: reconstructReplayFrame
     };
     if (typeof module !== 'undefined' && module.exports) module.exports = API;
     if (typeof window !== 'undefined') window.ApolloForm = API;
@@ -421,7 +477,11 @@
             stopBtn: document.getElementById('form-stop-btn'),
             status: document.getElementById('form-status'),
             results: document.getElementById('form-results'),
-            saveBtn: document.getElementById('form-save-btn')
+            saveBtn: document.getElementById('form-save-btn'),
+            replayBar: document.getElementById('form-replay-bar'),
+            replayPlay: document.getElementById('form-replay-play'),
+            replaySlider: document.getElementById('form-replay-slider'),
+            replayClose: document.getElementById('form-replay-close')
         };
         var ctx2d = els.canvas ? els.canvas.getContext('2d') : null;
 
@@ -649,7 +709,13 @@
                 bowstyle: (els.bowstyle && els.bowstyle.value) || payload.bowstyle,
                 metrics: measured,
                 scores: {},
-                overall_score: graded.overall
+                overall_score: graded.overall,
+                // Compact pose sequence so the saved shot can be replayed as a
+                // silhouette. aspect = width/height, recovered from measureAspect
+                // (= height/width, set during capture) since the video element
+                // may already be cleared by the time the user hits Save.
+                replay: buildReplay(samples, phases, hand,
+                                    measureAspect ? (1 / measureAspect) : (4 / 3))
             };
             Object.keys(graded.results).forEach(function (id) {
                 lastResult.scores[id] = {
@@ -733,6 +799,7 @@
             // Reset the input so picking the SAME file again re-fires 'change'.
             els.file.value = '';
             if (!f || busy) return;
+            replayStop();   // a capture and a replay must not share the canvas
             setBusy(true);
             stopCamera();
             els.video.srcObject = null;
@@ -765,6 +832,7 @@
         });
         if (els.camBtn) els.camBtn.addEventListener('click', function () {
             if (busy) return;
+            replayStop();   // a capture and a replay must not share the canvas
             setBusy(true);
             analyzeCamera()
                 .then(function (samples) { stopCamera(); return samples; })
@@ -790,7 +858,8 @@
                     bowstyle: lastResult.bowstyle,
                     metrics: lastResult.metrics,
                     scores: lastResult.scores,
-                    overall_score: lastResult.overall_score
+                    overall_score: lastResult.overall_score,
+                    frames: lastResult.replay
                 })
             }).then(function (r) { return r.json(); }).then(function (j) {
                 setStatus(j && j.ok ? 'Saved to your form history.' : 'Could not save.', j && j.ok ? 'ok' : 'error');
@@ -798,7 +867,223 @@
               .then(function () { els.saveBtn.disabled = false; });
         });
 
+        // ── Replay: re-watch a saved shot as a silhouette with angle lines ──
+        // The body is reconstructed from the stored pose points (no video was
+        // ever kept); the checkpoint "angle lines" are drawn over it, coloured
+        // by the saved pass/warn/fail status, and the readings are listed.
+        var replay = { raf: 0, playing: false, idx: 0, last: 0, data: null,
+                       spec: null, scores: {}, metrics: {} };
+
+        function statusColor(s) {
+            return s === 'pass' ? '#2f9e57' : s === 'warn' ? '#d99a1c'
+                 : s === 'fail' ? '#c0392b' : 'rgba(210,210,210,0.55)';
+        }
+        function px(p, W, H) { return [p.x * W, p.y * H]; }
+        function strokeSeg(a, b, W, H) {
+            if (!a || !b) return;
+            ctx2d.beginPath();
+            ctx2d.moveTo(a.x * W, a.y * H); ctx2d.lineTo(b.x * W, b.y * H);
+            ctx2d.stroke();
+        }
+        function midpt(a, b) { return (a && b) ? { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 } : null; }
+
+        // Filled body blob reconstructed from the joints — the silhouette.
+        function drawSilhouette(lm, W, H) {
+            ctx2d.save();
+            ctx2d.fillStyle = 'rgba(150,168,200,0.40)';
+            ctx2d.strokeStyle = 'rgba(150,168,200,0.40)';
+            ctx2d.lineJoin = 'round'; ctx2d.lineCap = 'round';
+            var Ls = lm[11], Rs = lm[12], Lh = lm[23], Rh = lm[24];
+            if (Ls && Rs && Rh && Lh) {
+                ctx2d.beginPath();
+                ctx2d.moveTo(Ls.x * W, Ls.y * H); ctx2d.lineTo(Rs.x * W, Rs.y * H);
+                ctx2d.lineTo(Rh.x * W, Rh.y * H); ctx2d.lineTo(Lh.x * W, Lh.y * H);
+                ctx2d.closePath(); ctx2d.fill();
+            }
+            ctx2d.lineWidth = Math.max(10, W * 0.05);
+            [[11, 13], [13, 15], [12, 14], [14, 16], [23, 25], [25, 27],
+             [24, 26], [26, 28], [11, 12], [23, 24], [11, 23], [12, 24]]
+                .forEach(function (e) { strokeSeg(lm[e[0]], lm[e[1]], W, H); });
+            var nose = lm[0], le = lm[7], re = lm[8];
+            if (nose) {
+                var hr = (le && re)
+                    ? Math.hypot((le.x - re.x) * W, (le.y - re.y) * H) * 0.95
+                    : W * 0.05;
+                ctx2d.beginPath();
+                ctx2d.arc(nose.x * W, nose.y * H, Math.max(hr, W * 0.04), 0, Math.PI * 2);
+                ctx2d.fill();
+            }
+            ctx2d.restore();
+        }
+
+        // The checkpoint "angle lines": the segment(s) each measure is taken
+        // from, coloured by the saved status so the form reads at a glance.
+        function drawAngleLines(lm, hand, scores, W, H) {
+            var d = (hand === 'left') ? { sh: 11, el: 13, wr: 15 } : { sh: 12, el: 14, wr: 16 };
+            var b = (hand === 'left') ? { sh: 12, el: 14, wr: 16 } : { sh: 11, el: 13, wr: 15 };
+            var face = midpt(lm[9], lm[10]) || lm[0];
+            var midSh = midpt(lm[11], lm[12]), midHip = midpt(lm[23], lm[24]);
+            var lines = [
+                { id: 'draw_elbow_elevation', segs: [[lm[d.el], lm[d.wr]], [lm[d.wr], lm[b.wr]]] },
+                { id: 'shoulder_level', segs: [[lm[11], lm[12]]] },
+                { id: 'bow_shoulder_set', segs: [[lm[b.sh], lm[b.el]]] },
+                { id: 'bow_arm_elevation', segs: [[lm[b.sh], lm[b.wr]]] },
+                { id: 'head_position', segs: [[lm[7], lm[8]]] },
+                { id: 'spine_posture', segs: [[midHip, midSh]] },
+                { id: 'anchor_contact', segs: [[lm[d.wr], face]] }
+            ];
+            ctx2d.save();
+            ctx2d.lineWidth = Math.max(3, W / 160);
+            ctx2d.lineCap = 'round';
+            lines.forEach(function (ln) {
+                var st = scores[ln.id] && scores[ln.id].status;
+                if (st == null) return;            // checkpoint not in this spec
+                ctx2d.strokeStyle = statusColor(st);
+                ln.segs.forEach(function (s) { strokeSeg(s[0], s[1], W, H); });
+            });
+            ctx2d.restore();
+        }
+
+        function drawReplayAt(i) {
+            if (!replay.data || !ctx2d) return;
+            var W = els.canvas.width, H = els.canvas.height;
+            var lm = reconstructReplayFrame(replay.data, replay.data.frames[i]);
+            ctx2d.fillStyle = '#11151f'; ctx2d.fillRect(0, 0, W, H);
+            drawSilhouette(lm, W, H);
+            // skeleton (thin, light) on top of the silhouette
+            ctx2d.save();
+            ctx2d.strokeStyle = 'rgba(235,240,250,0.85)';
+            ctx2d.lineWidth = Math.max(2, W / 320);
+            EDGES.forEach(function (e) { strokeSeg(lm[e[0]], lm[e[1]], W, H); });
+            ctx2d.restore();
+            // colour the form lines (track the body every frame; colour fixed
+            // from the graded anchor)
+            drawAngleLines(lm, replay.data.hand, replay.scores, W, H);
+            // anchor marker
+            if (i === replay.data.anchor) {
+                ctx2d.fillStyle = 'rgba(0,0,0,0.6)';
+                ctx2d.font = '14px sans-serif';
+                ctx2d.fillRect(0, 0, ctx2d.measureText('Full draw').width + 16, 24);
+                ctx2d.fillStyle = '#fff'; ctx2d.fillText('Full draw', 8, 17);
+            }
+            if (els.replaySlider) els.replaySlider.value = String(i);
+            replay.idx = i;
+        }
+
+        function replayTick(now) {
+            if (!replay.playing) return;
+            if (now - replay.last > 66) {   // ~15 fps, the sampling rate
+                replay.last = now;
+                var next = (replay.idx + 1) % replay.data.frames.length;
+                drawReplayAt(next);
+            }
+            replay.raf = requestAnimationFrame(replayTick);
+        }
+        function replayPlay() {
+            if (!replay.data) return;
+            replay.playing = true;
+            if (els.replayPlay) els.replayPlay.textContent = '❚❚';
+            cancelAnimationFrame(replay.raf);
+            replay.last = 0;
+            replay.raf = requestAnimationFrame(replayTick);
+        }
+        function replayPause() {
+            replay.playing = false;
+            if (els.replayPlay) els.replayPlay.textContent = '▶';
+            cancelAnimationFrame(replay.raf);
+        }
+        function replayStop() {
+            replayPause();
+            replay.data = null;
+            if (els.replayBar) els.replayBar.hidden = true;
+            if (els.results) { els.results.hidden = true; els.results.innerHTML = ''; }
+        }
+
+        function renderReplayReadings() {
+            if (!els.results) return;
+            var spec = replay.spec || [];
+            var html = '<ul class="form-checklist">';
+            spec.forEach(function (cp) {
+                var sc = replay.scores[cp.id];
+                if (!sc) return;
+                var val = replay.metrics[cp.id];
+                var reading = (typeof val === 'number')
+                    ? Math.round(val) + (cp.unit || '') : '—';
+                html += '<li class="form-cp form-cp-' + (sc.status || 'unknown') + '">' +
+                    '<span class="form-cp-icon">' +
+                    (sc.status === 'pass' ? '✓' : sc.status === 'warn' ? '!' :
+                     sc.status === 'fail' ? '✕' : '–') + '</span>' +
+                    '<div class="form-cp-body"><div class="form-cp-head">' +
+                    '<span class="form-cp-label">' + cp.label + '</span>' +
+                    '<span class="form-cp-reading">' + reading + '</span></div></div></li>';
+            });
+            html += '</ul>';
+            els.results.innerHTML = html;
+            els.results.hidden = false;
+        }
+
+        function startReplay(capture) {
+            if (!capture || !capture.frames || !capture.frames.frames ||
+                !capture.frames.frames.length) {
+                setStatus('This shot has no replay data.', 'error');
+                return;
+            }
+            replayStop();
+            replay.data = capture.frames;
+            replay.scores = capture.scores || {};
+            replay.metrics = capture.metrics || {};
+            replay.spec = (payload.specs && (payload.specs[capture.bowstyle]
+                || payload.specs[payload.bowstyle])) || [];
+            // size the canvas to the original aspect so proportions are right
+            var aspect = replay.data.aspect || (4 / 3);
+            var H = 480, Wpx = Math.round(H * aspect);
+            els.canvas.width = Wpx; els.canvas.height = H;
+            if (els.replaySlider) {
+                els.replaySlider.min = '0';
+                els.replaySlider.max = String(replay.data.frames.length - 1);
+                els.replaySlider.value = '0';
+            }
+            if (els.replayBar) els.replayBar.hidden = false;
+            renderReplayReadings();
+            var start = replay.data.anchor >= 0 ? replay.data.anchor : 0;
+            drawReplayAt(start);
+            replayPlay();
+            setStatus('Replaying saved shot.', 'ok');
+            try { els.canvas.scrollIntoView({ behavior: 'smooth', block: 'center' }); } catch (e) {}
+        }
+
+        function loadAndReplay(id) {
+            if (busy) return;   // don't fight an in-progress capture for the canvas
+            setStatus('Loading replay…', 'busy');
+            fetch('/form/capture/' + encodeURIComponent(id), {
+                headers: { 'Accept': 'application/json' }
+            }).then(function (r) { return r.json(); }).then(function (j) {
+                if (!j || !j.ok) { setStatus('Could not load that shot.', 'error'); return; }
+                startReplay(j);
+            }).catch(function () { setStatus('Could not load that shot.', 'error'); });
+        }
+
+        if (els.replayPlay) els.replayPlay.addEventListener('click', function () {
+            if (replay.playing) replayPause(); else replayPlay();
+        });
+        if (els.replaySlider) els.replaySlider.addEventListener('input', function () {
+            replayPause();
+            drawReplayAt(Math.max(0, Math.min(replay.data ? replay.data.frames.length - 1 : 0,
+                parseInt(els.replaySlider.value, 10) || 0)));
+        });
+        if (els.replayClose) els.replayClose.addEventListener('click', replayStop);
+
+        // History list: a "Replay" control on each saved shot that has pose data.
+        var historyList = document.getElementById('form-history-list');
+        if (historyList) historyList.addEventListener('click', function (ev) {
+            var btn = ev.target.closest('[data-replay-id]');
+            if (!btn) return;
+            ev.preventDefault();
+            loadAndReplay(btn.getAttribute('data-replay-id'));
+        });
+
         // Stop the camera if the user navigates away mid-record.
         window.addEventListener('pagehide', stopCamera);
+        window.addEventListener('pagehide', replayPause);
     });
 })();
