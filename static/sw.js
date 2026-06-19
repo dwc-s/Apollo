@@ -28,7 +28,7 @@
  *
  * Bump VERSION to invalidate every cache on the next activate.
  */
-const VERSION = 'apollo-v3';
+const VERSION = 'apollo-v4';
 // One versioned cache. Using a single cache (rather than separate shell +
 // runtime caches) means a stale-while-revalidate write always overwrites the
 // exact key it was read from — a fresh copy can't be shadowed by an older
@@ -158,7 +158,13 @@ self.addEventListener('fetch', (event) => {
   }
 
   // Same-origin static images/icons/target images: cache-first (large,
-  // immutable — no value in re-fetching every load).
+  // immutable — no value in re-fetching every load). This also covers the
+  // vendored MediaPipe pose assets used by /form (vision_bundle.mjs, the
+  // /wasm/*.wasm fileset, and pose_landmarker_lite.task — none match the
+  // .css/.js rule above). They're ~25 MB total, so they are deliberately
+  // NOT in PRECACHE (no install-time cost for users who never open /form);
+  // the first online visit to /form populates the cache and analysis then
+  // works offline. Bump VERSION to force clients onto a newer model/bundle.
   if (sameOrigin && url.pathname.startsWith('/static/')) {
     event.respondWith(cacheFirst(req));
     return;

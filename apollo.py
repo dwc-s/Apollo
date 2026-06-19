@@ -41,6 +41,7 @@ import sys as _sys
 _sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import handicap
 import classifications
+import form_checkpoints
 
 # Ordered choice lists for the archer-profile form (classification category).
 ARCHER_GENDERS = ['male', 'female', 'open']
@@ -2522,6 +2523,24 @@ user_notes_table = Table('user_notes', metadata,
 )
 
 
+# Form-analysis captures from the /form motion-capture page. The raw video is
+# NEVER stored or transmitted — pose extraction and scoring run entirely in the
+# browser. Only the derived, anonymous numbers land here: the measured joint
+# angles (metrics_json) and the per-checkpoint scores (scores_json), plus the
+# overall score, the bowstyle the run was graded against, and which captured
+# key-frame ('anchor'/'follow_through') the angles came from. One row per saved
+# analysis, owned by user_id like every other per-user table.
+form_captures_table = Table('form_captures', metadata,
+    Column('id', Integer, primary_key=True, autoincrement=True),
+    Column('user_id', Integer, index=True, nullable=False),
+    Column('created_at', DateTime),
+    Column('bowstyle', String(32)),
+    Column('overall_score', Float),
+    Column('metrics_json', Text),
+    Column('scores_json', Text),
+)
+
+
 # ─── Backend selector ────────────────────────────────────────────────────
 # Explicit manual switch — SQLite is the default in every case, and MySQL
 # only kicks in when APOLLO_BACKEND=mysql is set. A stray DATABASE_URL in
@@ -2689,7 +2708,7 @@ class CompatConnection:
 # single-user to multi-user. On a fresh DB metadata.create_all() handles
 # this; on an existing DB we ALTER TABLE ADD COLUMN at startup.
 _PER_USER_TABLES = ('apollo', 'arrows', 'bows', 'session_times', 'targets',
-                    'target_zones')
+                    'target_zones', 'form_captures')
 
 
 def _ensure_user_id_columns():
@@ -3733,14 +3752,23 @@ def _set_security_headers(response):
     #     heatmap is a server-rendered matplotlib SVG — so Google Fonts,
     #     jsdelivr (lightGallery / Plotly / Chart.js) are no longer referenced
     #     and everything else works fully same-origin (and offline).
+    #
+    # 'wasm-unsafe-eval': the /form motion-capture page instantiates the
+    # vendored MediaPipe pose model (WebAssembly) in the browser. WASM
+    # compilation is blocked by a plain script-src, and this is the narrow,
+    # purpose-built token for it — it permits WebAssembly.instantiate only, NOT
+    # arbitrary string eval() (that would be 'unsafe-eval'). The model and wasm
+    # are same-origin under /static, so connect-src 'self' still covers fetch.
+    # worker-src allows the pose runner's blob-URL worker.
     response.headers.setdefault(
         'Content-Security-Policy',
         "default-src 'self'; "
-        "script-src 'self' 'unsafe-inline' https://cdnjs.buymeacoffee.com; "
+        "script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' https://cdnjs.buymeacoffee.com; "
         "style-src 'self' 'unsafe-inline'; "
         "img-src 'self' data: blob: https:; "
         "font-src 'self' data:; "
         "connect-src 'self'; "
+        "worker-src 'self' blob:; "
         "frame-ancestors 'none'; "
         "base-uri 'self'; "
         "form-action 'self'"
@@ -14419,6 +14447,177 @@ def predict():
     ctx['endpoint_label'] = endpoint_label
     ctx['endpoint_max'] = endpoint_max
     return render_template('predict.html', **ctx)
+
+
+# ─── Form analysis (motion capture) ──────────────────────────────────────
+# Pose extraction and scoring happen entirely client-side (static/apollo-form.js
+# + a vendored markerless pose model). The server only (a) hands the page the
+# checkpoint reference spec for the chosen bowstyle, and (b) optionally persists
+# the derived numbers. No video ever reaches the server.
+
+def _form_payload(bowstyle):
+    """Build the JSON payload the /form page hands to the client analyzer."""
+    bs = (bowstyle or '').strip().lower()
+    return {
+        'bowstyle':    bs,
+        'checkpoints': form_checkpoints.checkpoints_for(bs),
+    }
+
+
+@app.route('/form', methods=['GET', 'POST'])
+@login_required
+def form_analysis():
+    """Motion-capture form analysis (analysis mode).
+
+    GET renders the capture/analyze page seeded with the checkpoint spec for
+    the requested (or the archer's default) bowstyle. POST persists a finished
+    analysis — only the derived angles + scores, never video — so the archer
+    can track form over time. The POST is fetch-based JSON from the client and
+    rides CSRFProtect via the X-CSRFToken header, same as /api/sync_shots.
+    """
+    user_id = current_user_id()
+    user = current_user()
+
+    if request.method == 'POST':
+        data = request.get_json(silent=True) or {}
+        bs = (data.get('bowstyle') or '').strip().lower()
+        metrics = data.get('metrics')
+        scores = data.get('scores')
+        overall = data.get('overall_score')
+        if not isinstance(metrics, dict) or not isinstance(scores, dict):
+            return jsonify(ok=False, msg='Expected metrics and scores objects.'), 400
+        try:
+            overall = float(overall)
+        except (TypeError, ValueError):
+            overall = None
+        try:
+            with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
+                cur.execute(
+                    "INSERT INTO form_captures "
+                    "(user_id, created_at, bowstyle, overall_score, "
+                    " metrics_json, scores_json) "
+                    "VALUES (%s, %s, %s, %s, %s, %s)",
+                    (user_id, _app_now(), bs, overall,
+                     json.dumps(metrics), json.dumps(scores))
+                )
+                con.commit()
+        except SQLAlchemyError as e:
+            print(f"❌ Form-capture save error: {e}")
+            return jsonify(ok=False, msg='Could not save analysis.'), 500
+        return jsonify(ok=True)
+
+    # GET — pick the bowstyle: explicit ?bowstyle=, else the archer's profile
+    # default, else recurve. The picker on the page re-fetches the spec on
+    # change without a round-trip (all profiles are embedded in the payload).
+    requested = (request.args.get('bowstyle') or '').strip().lower()
+    default_bs = requested or (user.get('default_bowstyle') if user else '') or 'recurve'
+    specs = {bs: form_checkpoints.checkpoints_for(bs)
+             for bs in form_checkpoints.all_bowstyles()}
+    payload = {
+        'bowstyle':     default_bs if default_bs in specs else 'recurve',
+        'specs':        specs,
+        'save_url':     url_for('form_analysis'),
+    }
+    shown_bs = payload['bowstyle']
+    return render_template(
+        'form.html',
+        payload=payload,
+        bowstyle_labels=BOWSTYLE_LABELS,
+        bowstyles=list(specs.keys()),
+        recent=_form_recent_captures(user_id),
+        consistency=_form_consistency(user_id, shown_bs, specs[shown_bs]),
+        consistency_bowstyle=shown_bs,
+    )
+
+
+def _form_consistency(user_id, bowstyle, checkpoints, limit=10):
+    """Shot-to-shot consistency: per-metric mean and (sample) standard deviation
+    across the archer's recent saved analyses for a bowstyle.
+
+    The lower the SD, the more repeatable that element of form is shot to shot —
+    which, for archery, matters more than any single perfect frame. Reads the
+    stored metrics_json (no video), needs ≥2 captures of a metric to report it,
+    and joins each to its checkpoint label/unit so the template can render a
+    table in checkpoint order. Returns [] when there isn't enough history.
+    """
+    try:
+        with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
+            rows = cur.execute(
+                "SELECT metrics_json FROM form_captures "
+                "WHERE user_id = %s AND bowstyle = %s "
+                "ORDER BY created_at DESC LIMIT %s",
+                (user_id, (bowstyle or '').strip().lower(), int(limit))
+            ).fetchall()
+    except SQLAlchemyError:
+        return []
+    series = {}
+    for r in rows or []:
+        try:
+            metrics = json.loads(r['metrics_json'] or '{}')
+        except (ValueError, TypeError):
+            continue
+        if not isinstance(metrics, dict):
+            continue
+        for key, val in metrics.items():
+            if isinstance(val, (int, float)):
+                series.setdefault(key, []).append(float(val))
+    out = []
+    for cp in checkpoints:
+        vals = series.get(cp['id'])
+        if not vals or len(vals) < 2:
+            continue
+        mean = sum(vals) / len(vals)
+        sd = (sum((x - mean) ** 2 for x in vals) / (len(vals) - 1)) ** 0.5
+        out.append({'label': cp['label'], 'unit': cp.get('unit', ''),
+                    'mean': mean, 'sd': sd, 'n': len(vals)})
+    return out
+
+
+def _form_recent_captures(user_id, limit=10):
+    """Most recent saved form analyses for the archer (for the history strip)."""
+    try:
+        with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
+            rows = cur.execute(
+                "SELECT created_at, bowstyle, overall_score "
+                "FROM form_captures WHERE user_id = %s "
+                "ORDER BY created_at DESC LIMIT %s",
+                (user_id, int(limit))
+            ).fetchall()
+    except SQLAlchemyError:
+        return []
+    return [{'created_at': r['created_at'], 'bowstyle': r['bowstyle'],
+             'overall_score': r['overall_score']} for r in (rows or [])]
+
+
+@app.route('/form/author', methods=['GET'])
+@root_required
+def form_author():
+    """Learning mode (dev/admin only): capture a known-good archer to author
+    the reference checkpoint targets.
+
+    This is the *config-writing* half of the feature, deliberately gated to the
+    root user and kept separate from the user-facing analyzer so no user's form
+    can ever influence the reference. It reuses the same client pipeline but,
+    instead of scoring against the spec, it reports the raw measured angles so
+    the operator can transcribe tuned targets into form_checkpoints.py. v1 has
+    no write-back UI on purpose — editing the spec is a code change, reviewed
+    like any other.
+    """
+    specs = {bs: form_checkpoints.checkpoints_for(bs)
+             for bs in form_checkpoints.all_bowstyles()}
+    payload = {
+        'bowstyle': 'recurve',
+        'specs':    specs,
+        'author':   True,
+    }
+    return render_template(
+        'form.html',
+        payload=payload,
+        bowstyle_labels=BOWSTYLE_LABELS,
+        bowstyles=list(specs.keys()),
+        recent=[],
+        author_mode=True,
+    )
 
 
 @app.route('/analyze', methods=['GET', 'POST'])
