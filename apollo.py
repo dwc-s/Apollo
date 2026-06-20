@@ -2380,6 +2380,14 @@ apollo_table = Table('apollo', metadata,
     # + per-session dynamic overrides) in force when this arrow was loosed. Same
     # self-describing rationale as the bow_* snapshot columns above.
     Column('bow_style_settings', Text),
+    # Client-generated idempotency key for AJAX shot submits (/api/record_shot).
+    # Lets a retried POST after a lost response (the iPad keep-alive race) be
+    # detected as a duplicate and folded into a success instead of inserting a
+    # second row. NULL for full-page (/sesh) and offline-synced shots, which
+    # never retry. UNIQUE(user_id, client_uuid) — added by
+    # _ensure_apollo_client_uuid_unique_index — enforces it; NULLs are distinct
+    # under both SQLite and MySQL so unlimited NULL rows coexist.
+    Column('client_uuid', String(64)),
 )
 
 arrows_table = Table('arrows', metadata,
@@ -3052,6 +3060,53 @@ def _ensure_session_tags_column():
         conn.execute(text("ALTER TABLE apollo ADD COLUMN session_tags TEXT"))
 
 
+def _ensure_client_uuid_column():
+    """Add the client_uuid column to apollo on DBs that predate AJAX shots.
+
+    Idempotent: only ALTERs when missing. Nullable so full-page (/sesh) and
+    offline-synced shots — which pass NULL — keep working. The matching unique
+    index is added by _ensure_apollo_client_uuid_unique_index().
+    """
+    insp = sa_inspect(engine)
+    if 'apollo' not in insp.get_table_names():
+        return
+    cols = {c['name'] for c in insp.get_columns('apollo')}
+    if 'client_uuid' in cols:
+        return
+    print("⚙️  Migrating: adding client_uuid column to apollo")
+    with engine.begin() as conn:
+        conn.execute(text("ALTER TABLE apollo ADD COLUMN client_uuid VARCHAR(64)"))
+
+
+def _ensure_apollo_client_uuid_unique_index():
+    """Add a UNIQUE index on apollo(user_id, client_uuid) for shot idempotency.
+
+    A retried /api/record_shot POST carrying the same client_uuid hits this
+    index and the duplicate INSERT raises IntegrityError, which the route
+    catches and treats as success — so a dropped response can't double-record
+    a shot. NULLs (full-page and synced shots) are distinct under both SQLite
+    and MySQL, so unlimited NULL rows coexist.
+
+    Best-effort like the other index migrations: a legacy DB with pre-existing
+    duplicate keys would fail the CREATE; we log and move on rather than
+    crashing startup.
+    """
+    try:
+        insp = sa_inspect(engine)
+        if 'apollo' not in set(insp.get_table_names()):
+            return
+        existing = {ix.get('name') for ix in insp.get_indexes('apollo')}
+        if 'ux_apollo_user_client_uuid' in existing:
+            return
+        with engine.begin() as conn:
+            conn.execute(text(
+                "CREATE UNIQUE INDEX ux_apollo_user_client_uuid "
+                "ON apollo(user_id, client_uuid)"
+            ))
+    except SQLAlchemyError as e:
+        print(f"⚠️  Could not add unique index on apollo(user_id, client_uuid): {e}")
+
+
 def _ensure_form_captures_columns():
     """Add the frames_json column to form_captures on DBs that predate replay.
 
@@ -3309,6 +3364,7 @@ def migrate_db():
     _migrate_poundage_to_draw_weight()
     _ensure_shot_snapshot_columns()
     _ensure_session_tags_column()
+    _ensure_client_uuid_column()
     _ensure_form_captures_columns()
     _ensure_is_root_column()
     _ensure_user_timezone_column()
@@ -3318,6 +3374,7 @@ def migrate_db():
     _drop_legacy_unique_target_name()
     _ensure_session_times_unique_index()
     _ensure_targets_user_name_unique_index()
+    _ensure_apollo_client_uuid_unique_index()
     _ensure_root_user()
 
 
@@ -5282,7 +5339,8 @@ def _last_session_bow_arrow(user_id, session_id):
 def _insert_shot(cur, *, user_id, session_id, timestamp, bow, arrow_type,
                  quiver_size, arrows_remaining, distance, session_notes,
                  x, y, is_precise, record_mode, target_id,
-                 session_tags, style_settings_session=None):
+                 session_tags, style_settings_session=None,
+                 client_uuid=None):
     """Snapshot the current bow/arrow config and INSERT one shot row.
 
     Single source of truth for the per-shot insert, shared by the live
@@ -5367,11 +5425,11 @@ def _insert_shot(cur, *, user_id, session_id, timestamp, bow, arrow_type,
         arrow_length, arrow_spine, arrow_shaft_weight,
         arrow_shaft_diameter, arrow_shaft_material,
         arrow_nock_weight, arrow_tip, arrow_tip_weight,
-        session_tags, bow_style_settings)
+        session_tags, bow_style_settings, client_uuid)
         VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
                 %s, %s, %s, %s,
                 %s, %s, %s, %s, %s, %s, %s, %s,
-                %s, %s)""",
+                %s, %s, %s)""",
         (user_id, session_id, timestamp, bow, arrow_type, quiver_size,
          arrows_remaining, distance, session_notes, x, y, is_precise,
          record_mode, target_id,
@@ -5379,8 +5437,151 @@ def _insert_shot(cur, *, user_id, session_id, timestamp, bow, arrow_type,
          shot_arrow_length, shot_arrow_spine, shot_arrow_shaft_w,
          shot_arrow_shaft_d, shot_arrow_shaft_m,
          shot_arrow_nock_w, shot_arrow_tip, shot_arrow_tip_w,
-         session_tags, shot_style_settings)
+         session_tags, shot_style_settings, client_uuid)
     )
+
+
+class _ShotRejected(Exception):
+    """A per-shot submission the server refuses to record.
+
+    Carries a user-facing ``message`` and HTTP ``code`` so the two callers
+    can shape their own response — the full-page /sesh POST returns the
+    message as plain-text, the AJAX /api/record_shot returns it as JSON.
+    """
+    def __init__(self, message, code=400):
+        super().__init__(message)
+        self.message = message
+        self.code = code
+
+
+def _session_counters_from_db(user_id, session_id):
+    """Re-derive (effective_quiver_size, arrows_remaining, quivers_completed)
+    for a session from its shot rows alone.
+
+    Used to heal the Flask-session counters after an *idempotent* (retried)
+    shot whose original response — and its Set-Cookie — was lost: the cookie
+    may or may not reflect the already-saved shot, so we recompute the truth
+    from the DB instead of trusting it.
+
+    ``quivers_completed`` is the count of shots whose stored (pre-decrement)
+    ``arrows_remaining`` is 1 — each such shot is the one that closed a
+    quiver. The current ``arrows_remaining`` is the last shot's pre-decrement
+    value, decremented and wrapped exactly as the live path computes it.
+    """
+    with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
+        last = cur.execute(
+            "SELECT quiver_size, arrows_remaining FROM apollo "
+            "WHERE session_id = %s AND user_id = %s ORDER BY id DESC LIMIT 1",
+            (session_id, user_id)
+        ).fetchone()
+        if not last:
+            return 0, 0, 0
+        try:
+            eff = int(last['quiver_size'] if 'quiver_size' in last else last[0])
+            ar  = int(last['arrows_remaining'] if 'arrows_remaining' in last else last[1])
+        except (TypeError, ValueError):
+            return 0, 0, 0
+        qc_row = cur.execute(
+            "SELECT COUNT(*) FROM apollo "
+            "WHERE session_id = %s AND user_id = %s AND arrows_remaining = 1",
+            (session_id, user_id)
+        ).fetchone()
+        quivers_completed = int(qc_row[0]) if qc_row and qc_row[0] is not None else 0
+    ar -= 1
+    if ar <= 0:
+        ar = eff
+    return eff, ar, quivers_completed
+
+
+def _apply_shot(*, user_id, session_id, bow, arrow_type, distance,
+                session_notes, session_tags, style_settings_session,
+                x, y, is_precise, record_mode, target_id,
+                quiver_size_int, mid_quiver, current_quiver_size,
+                arrows_remaining, quivers_completed, client_uuid=None):
+    """Validate, insert, and advance the counters for one live shot.
+
+    Single source of truth for the per-shot mutation shared by the full-page
+    /sesh POST and the AJAX /api/record_shot endpoint. Returns the tuple
+    ``(effective_quiver_size, arrows_remaining, quivers_completed,
+    past_shots)``; the caller owns the Flask-session writes and the response
+    shape. Raises :class:`_ShotRejected` for a submission the server won't
+    accept (missing coords, missing/zero quiver size, a mid-quiver size
+    change) and may raise ``SQLAlchemyError`` on a DB failure.
+
+    Idempotency: when ``client_uuid`` is supplied and a row with the same
+    ``(user_id, client_uuid)`` already exists — a retried submit after a
+    dropped response — no second row is inserted and the counters are
+    recomputed from the DB (see :func:`_session_counters_from_db`) rather
+    than advanced again, so the shot can't be double-recorded or
+    double-counted.
+    """
+    if x == '' or y == '':
+        raise _ShotRejected("Error: missing shot coordinates", 400)
+    if quiver_size_int <= 0:
+        # A shot with quiver_size=0 would inflate quivers_completed by one per
+        # shot (arrows_remaining -= 1 → -1 ≤ 0 → reset forever). Reject.
+        raise _ShotRejected("Error: quiver size must be a positive integer", 400)
+    if mid_quiver and quiver_size_int != current_quiver_size:
+        # Mid-quiver the size is locked; the user must finish the quiver (or
+        # end the session) before changing it. The UI disables the input, so
+        # reaching here implies a hand-crafted POST.
+        raise _ShotRejected(
+            "Error: quiver size cannot change mid-quiver — "
+            "finish the current quiver first.", 400)
+
+    # Between quivers (or at session start) the submitted value becomes the
+    # new lock and the new arrows_remaining; mid-quiver keeps the locked size.
+    if mid_quiver:
+        effective_quiver_size = current_quiver_size
+    else:
+        effective_quiver_size = quiver_size_int
+        arrows_remaining = effective_quiver_size
+
+    duplicate = False
+    with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
+        if client_uuid:
+            existing = cur.execute(
+                "SELECT id FROM apollo WHERE user_id = %s AND client_uuid = %s LIMIT 1",
+                (user_id, client_uuid)
+            ).fetchone()
+            duplicate = existing is not None
+        if not duplicate:
+            try:
+                _insert_shot(
+                    cur,
+                    user_id=user_id, session_id=session_id,
+                    timestamp=_app_now(), bow=bow, arrow_type=arrow_type,
+                    quiver_size=effective_quiver_size,
+                    arrows_remaining=arrows_remaining,
+                    distance=distance, session_notes=session_notes,
+                    x=x, y=y, is_precise=is_precise,
+                    record_mode=record_mode, target_id=target_id,
+                    session_tags=session_tags,
+                    style_settings_session=style_settings_session,
+                    client_uuid=client_uuid,
+                )
+                con.commit()
+            except DBIntegrityError:
+                # A concurrent retry carrying the same client_uuid won the
+                # race to the unique index — treat as a duplicate.
+                con.rollback()
+                duplicate = True
+
+    if duplicate:
+        # Retried submit (lost response): don't re-record or double-count —
+        # recompute the authoritative counters from the DB.
+        eff, ar, qc = _session_counters_from_db(user_id, session_id)
+        return eff, ar, qc, get_past_shots(session_id, eff, ar, user_id)
+
+    # Quiver bookkeeping: each saved shot decrements the remaining counter;
+    # hitting zero closes a quiver and refills with the locked size.
+    arrows_remaining -= 1
+    if arrows_remaining <= 0:
+        quivers_completed += 1
+        arrows_remaining = effective_quiver_size
+    past_shots = get_past_shots(
+        session_id, effective_quiver_size, arrows_remaining, user_id)
+    return effective_quiver_size, arrows_remaining, quivers_completed, past_shots
 
 
 @app.route('/sesh', methods=['GET', 'POST'])
@@ -5584,69 +5785,36 @@ def sesh():
             effective_quiver_size = current_quiver_size if mid_quiver else quiver_size_int
             past_shots = []
             if x == '' or y == '':
+                # No coordinates posted — re-render without saving (matches
+                # the long-standing behavior of this no-JS fallback path).
                 print("⚠️ Missing coordinates — arrow not saved")
-            elif quiver_size_int <= 0:
-                # A shot with quiver_size=0 would inflate quivers_completed
-                # by one per shot (arrows_remaining -= 1 → -1 ≤ 0 → reset to
-                # 0 forever). Reject rather than corrupt the counters.
-                print("⚠️ quiver_size missing or zero — arrow not saved")
-                return "Error: quiver size must be a positive integer", 400
-            elif mid_quiver and quiver_size_int != current_quiver_size:
-                # Lock enforcement: mid-quiver, the size cannot change. The
-                # user must finish the current quiver (or end the session)
-                # before adjusting. The template also disables the input,
-                # so reaching this branch implies a hand-crafted POST.
-                print(f"⚠️ Quiver size change rejected mid-quiver: "
-                      f"locked={current_quiver_size}, submitted={quiver_size_int}")
-                return ("Error: quiver size cannot change mid-quiver — "
-                        "finish the current quiver first."), 400
             else:
-                # Between quivers (or at session start): the submitted
-                # value becomes the new lock and the new arrows_remaining.
-                # Mid-quiver with matching size: keep the locked value
-                # (effective_quiver_size is already set above).
-                if not mid_quiver:
-                    effective_quiver_size = quiver_size_int
-                    session['current_quiver_size'] = effective_quiver_size
-                    arrows_remaining = effective_quiver_size
-                    session['arrows_remaining'] = effective_quiver_size
-                with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
-                    try:
-                        _insert_shot(
-                            cur,
-                            user_id=user_id, session_id=session_id,
-                            timestamp=_app_now(), bow=bow, arrow_type=arrow_type,
-                            quiver_size=effective_quiver_size,
-                            arrows_remaining=arrows_remaining,
-                            distance=distance, session_notes=session_notes,
-                            x=x, y=y, is_precise=is_precise,
-                            record_mode=record_mode, target_id=target_id,
-                            session_tags=session_tags,
-                            style_settings_session=style_settings_session,
-                        )
-                        con.commit()
-                        print(f"✅ Entry saved for session {session_id}")
-
-                        # Quiver bookkeeping: each saved shot decrements the
-                        # remaining counter; hitting zero closes one quiver
-                        # and refills the counter for the next. We refill
-                        # with the *locked* size (effective_quiver_size),
-                        # since that's the size of the quiver that was just
-                        # completed — also what the next quiver will run
-                        # with unless the user enters a new value before
-                        # firing the next shot (which then updates
-                        # current_quiver_size at the top of the handler).
-                        arrows_remaining -= 1
-                        if arrows_remaining <= 0:
-                            quivers_completed += 1
-                            arrows_remaining = effective_quiver_size
-
-                        session['arrows_remaining'] = arrows_remaining
-                        session['quivers_completed'] = quivers_completed
-                    except SQLAlchemyError as e:
-                        print(f"❌ Database error: {e}")
-                        return "Error saving entry", 500
-                past_shots = get_past_shots(session_id, effective_quiver_size, arrows_remaining, user_id)
+                # Delegate the validate → insert → bookkeep state machine to
+                # the shared helper (also used by /api/record_shot), then mirror
+                # the resulting counters back into the session cookie.
+                try:
+                    (effective_quiver_size, arrows_remaining,
+                     quivers_completed, past_shots) = _apply_shot(
+                        user_id=user_id, session_id=session_id, bow=bow,
+                        arrow_type=arrow_type, distance=distance,
+                        session_notes=session_notes, session_tags=session_tags,
+                        style_settings_session=style_settings_session,
+                        x=x, y=y, is_precise=is_precise, record_mode=record_mode,
+                        target_id=target_id, quiver_size_int=quiver_size_int,
+                        mid_quiver=mid_quiver,
+                        current_quiver_size=current_quiver_size,
+                        arrows_remaining=arrows_remaining,
+                        quivers_completed=quivers_completed)
+                except _ShotRejected as e:
+                    print(f"⚠️ {e.message}")
+                    return e.message, e.code
+                except SQLAlchemyError as e:
+                    print(f"❌ Database error: {e}")
+                    return "Error saving entry", 500
+                session['current_quiver_size'] = effective_quiver_size
+                session['arrows_remaining'] = arrows_remaining
+                session['quivers_completed'] = quivers_completed
+                print(f"✅ Entry saved for session {session_id}")
             # After the first saved shot the target is locked; reflect that
             # in the response so the dropdown disables without a roundtrip.
             target_locked = True
@@ -5760,6 +5928,142 @@ def sesh():
                                               or session.get('match_id')),
                            current_quiver_size=get_current_qs,
                            target_config=target_config)
+
+
+@app.route('/api/record_shot', methods=['POST'])
+@login_required
+def api_record_shot():
+    """Record one live shot via AJAX and return the new session state as JSON.
+
+    The /sesh screen submits each shot here with ``fetch`` instead of doing a
+    full-page navigation POST to /sesh. That removes the per-shot 58 KB
+    re-render and — crucially — lets a dropped response be *retried* in the
+    client rather than stranding the user on a 502 (the iPad keep-alive race
+    that motivated this). Retries are made safe by a per-shot ``client_uuid``:
+    a duplicate insert is folded into a success via _apply_shot's idempotency.
+
+    Mirrors the /sesh POST ``arrow_shot`` branch field-for-field (target
+    resolution, the quiver lock state machine, the shared _apply_shot
+    mutation) so a shot saved here is byte-for-byte equivalent to one saved
+    full-page. Practice sessions only — tournaments have their own route.
+
+    CSRF: protected by CSRFProtect; the client sends the page's csrf_token via
+    the X-CSRFToken header (and in the form body), exactly like /recall_arrow.
+    """
+    user_id = current_user_id()
+    session_id = session.get('session_id')
+    if not session_id:
+        return jsonify(ok=False, msg='No active session.'), 400
+
+    form = request.form
+
+    def _form_int(name, default=0):
+        try:
+            return int(form.get(name, str(default)))
+        except (TypeError, ValueError):
+            return default
+
+    bow                    = form.get('bow', '')
+    arrow_type             = form.get('arrow_type', '')
+    quiver_size            = form.get('quiver_size', '')
+    distance               = form.get('distance', '')
+    session_notes          = form.get('session_notes', '')
+    session_tags           = _normalize_tags(form.get('session_tags', ''))
+    style_settings_session = _collect_style_settings(form)
+    x                      = form.get('x_coord', '')
+    y                      = form.get('y_coord', '')
+    is_precise             = _form_int('is_precise', 0)
+    record_mode            = _form_int('record_mode', 0)
+    client_uuid            = (form.get('client_uuid', '') or '').strip()[:64] or None
+
+    # Has this session already saved any shots? If so, the target is locked.
+    with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
+        cnt = cur.execute(
+            "SELECT COUNT(*) FROM apollo WHERE session_id = %s AND user_id = %s",
+            (session_id, user_id)
+        ).fetchone()
+        session_shot_count = cnt[0] if cnt else 0
+    target_locked = session_shot_count > 0
+
+    # Resolve the target exactly as /sesh does: accept the posted value only on
+    # the first shot, otherwise stick with the session's locked target.
+    if target_locked:
+        if session.get('target_id') is None:
+            with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
+                existing = cur.execute(
+                    "SELECT target_id FROM apollo WHERE session_id = %s AND user_id = %s LIMIT 1",
+                    (session_id, user_id)
+                ).fetchone()
+            if existing and existing[0] is not None:
+                session['target_id'] = existing[0]
+        target_id = session.get('target_id')
+    else:
+        posted = form.get('target_id', '').strip()
+        try:
+            target_id = int(posted) if posted else session.get('target_id')
+        except ValueError:
+            target_id = session.get('target_id')
+        # Only accept a target_id the current user actually owns.
+        if target_id is not None and get_target(target_id, user_id) is None:
+            target_id = None
+        if target_id is None:
+            default_row = get_default_target(user_id)
+            target_id = default_row['rowid'] if default_row is not None else None
+        if target_id is not None:
+            session['target_id'] = target_id
+
+    session['record_mode'] = record_mode
+
+    try:
+        quiver_size_int = int(quiver_size) if quiver_size else 0
+    except (TypeError, ValueError):
+        quiver_size_int = 0
+    quivers_completed   = session.get('quivers_completed', 0)
+    arrows_remaining    = session.get('arrows_remaining', 0)
+    current_quiver_size = session.get('current_quiver_size') or 0
+    mid_quiver = 0 < arrows_remaining < current_quiver_size
+
+    try:
+        (effective_quiver_size, arrows_remaining, quivers_completed,
+         past_shots) = _apply_shot(
+            user_id=user_id, session_id=session_id, bow=bow,
+            arrow_type=arrow_type, distance=distance,
+            session_notes=session_notes, session_tags=session_tags,
+            style_settings_session=style_settings_session,
+            x=x, y=y, is_precise=is_precise, record_mode=record_mode,
+            target_id=target_id, quiver_size_int=quiver_size_int,
+            mid_quiver=mid_quiver, current_quiver_size=current_quiver_size,
+            arrows_remaining=arrows_remaining,
+            quivers_completed=quivers_completed, client_uuid=client_uuid)
+    except _ShotRejected as e:
+        return jsonify(ok=False, msg=e.message), e.code
+    except SQLAlchemyError as e:
+        print(f"❌ Database error (record_shot): {e}")
+        return jsonify(ok=False, msg='Error saving entry'), 500
+
+    session['current_quiver_size'] = effective_quiver_size
+    session['arrows_remaining']    = arrows_remaining
+    session['quivers_completed']   = quivers_completed
+    print(f"✅ Entry saved (ajax) for session {session_id}")
+
+    quiver_size_locked = (
+        effective_quiver_size > 0
+        and 0 < arrows_remaining < effective_quiver_size
+    )
+    display_quiver_size = (str(effective_quiver_size)
+                           if effective_quiver_size > 0 else quiver_size)
+
+    return jsonify(
+        ok=True,
+        arrows_remaining=arrows_remaining,
+        quivers_completed=quivers_completed,
+        quiver_size_locked=quiver_size_locked,
+        display_quiver_size=display_quiver_size,
+        current_quiver_size=session.get('current_quiver_size') or 0,
+        target_locked=True,
+        target_id=session.get('target_id'),
+        past_shots=past_shots,
+    )
 
 
 @app.route('/api/target_config/<int:target_id>', methods=['GET'])

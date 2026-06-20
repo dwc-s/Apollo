@@ -210,10 +210,8 @@
         <!-- ── RIGHT: Session form ── -->
         <div class="form-panel form-panel-session">
 
-            <span class="form-label">Target
-                {% if target_locked %}
-                    <span style="color:#888;font-weight:400;font-size:0.85em;">(locked for this session)</span>
-                {% endif %}
+            <span class="form-label" id="target-label">Target
+                <span id="target-locked-note" style="color:#888;font-weight:400;font-size:0.85em;{% if not target_locked %}display:none;{% endif %}">(locked for this session)</span>
             </span>
             <select id="target_id" name="target_id" {% if target_locked %}disabled{% endif %}>
                 {% for t in targets_list %}
@@ -251,7 +249,7 @@
                user can adjust when an arrow breaks/gets lost. The server
                enforces the same rule and rejects mismatched POSTs. #}
             <input type="text" id="quiver_size" name="quiver_size" value="{{ quiver_size }}" inputmode="numeric" pattern="[0-9]*"{% if quiver_size_locked %} readonly{% endif %}>
-            {% if quiver_size_locked %}<div class="form-hint" style="font-size: 0.85em; color: #888;">locked until current quiver completes</div>{% endif %}
+            <div class="form-hint" id="quiver-lock-hint" style="font-size: 0.85em; color: #888;{% if not quiver_size_locked %}display:none;{% endif %}">locked until current quiver completes</div>
 
             <input type="hidden" id="arrows_remaining" name="arrows_remaining" value="{{ arrows_remaining }}">
 
@@ -659,6 +657,7 @@ function removePrecisionCursor() {
 function recordMiss() {
     xInput.value = 100000;
     yInput.value = 100000;
+    newShotToken();
     clearMarker();
     readout.innerHTML = '<span style="color:#c97a4a;font-weight:700;">MISSED TARGET</span>';
     form.submit();
@@ -893,6 +892,7 @@ stage.addEventListener('touchend', e => {
 
     xInput.value = cartX;
     yInput.value = cartY;
+    newShotToken();
     clearMarker();
     placeMarker(holdCx, holdCy, cartX, cartY);
     readout.innerHTML = '<span style="color:#2e7d32;font-weight:700;">SHOT RECORDED</span>';
@@ -931,6 +931,7 @@ stage.addEventListener('click', e => {
 
     xInput.value = cartX;
     yInput.value = cartY;
+    newShotToken();
     clearMarker();
     placeMarker(dx, dy, cartX, cartY);
 
@@ -1137,6 +1138,161 @@ document.addEventListener('keydown', evt => {
     if (evt.key === 'Escape' && leaveModal.classList.contains('open')) closeLeaveModal();
 });
 
+// ── AJAX shot submit ──────────────────────────────────────────────────────
+// Recording a shot used to be a full-page navigation POST to /sesh that
+// re-rendered the whole ~58 KB page. On iOS (notably iPad) a navigation POST
+// can be lost on a recycled keep-alive connection, and WebKit won't retry it —
+// the user lands on a 502 and has to refresh, sometimes repeatedly. Instead we
+// POST the shot to /api/record_shot with fetch(), update the DOM in place, and
+// retry on a network / 5xx failure. Retries are idempotent: each placed shot
+// carries a client_uuid the server uses to fold a duplicate insert into a
+// success, so a lost response can never double-record a shot.
+function _newUuid() {
+    if (window.crypto && crypto.randomUUID) return crypto.randomUUID();
+    // Fallback for older WebKit without crypto.randomUUID.
+    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+        const r = Math.random() * 16 | 0;
+        return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
+    });
+}
+
+// Idempotency key for the shot currently placed on the target. Minted fresh
+// each time a new shot is placed (click / hold-release / miss) so distinct
+// shots are unique, but reused across retries of the *same* shot. Declared as
+// a hoisted function so the placement handlers above can call it.
+let _shotToken = null;
+function newShotToken() { _shotToken = _newUuid(); }
+
+function csrfToken() {
+    const el = document.querySelector('input[name="csrf_token"]');
+    return el ? el.value : '';
+}
+
+function toggleQuiverLockHint(locked) {
+    const hint = document.getElementById('quiver-lock-hint');
+    if (hint) hint.style.display = locked ? '' : 'none';
+}
+
+// After the first saved shot the target is locked for the session: disable the
+// picker, mirror its value through a hidden input (disabled selects don't
+// submit), and reveal the "(locked …)" note — matching the server render.
+function lockTargetSelect(targetId) {
+    const sel = document.getElementById('target_id');
+    if (sel && !sel.disabled) {
+        sel.disabled = true;
+        if (!document.querySelector('input[type="hidden"][name="target_id"]')) {
+            const h = document.createElement('input');
+            h.type = 'hidden';
+            h.name = 'target_id';
+            h.value = (targetId != null ? targetId : sel.value);
+            sel.parentNode.insertBefore(h, sel.nextSibling);
+        }
+    }
+    const note = document.getElementById('target-locked-note');
+    if (note) note.style.display = '';
+}
+
+// Apply a successful /api/record_shot response to the page without a reload.
+function applyShotResult(p) {
+    const arDisp = document.getElementById('arrows-remaining-display');
+    if (arDisp) arDisp.textContent = p.arrows_remaining;
+    const arHidden = document.getElementById('arrows_remaining');
+    if (arHidden) arHidden.value = p.arrows_remaining;
+    const qcDisp = document.getElementById('quivers-completed-display');
+    if (qcDisp) qcDisp.textContent = p.quivers_completed;
+    const qcHidden = document.getElementById('quivers_completed');
+    if (qcHidden) qcHidden.value = p.quivers_completed;
+
+    const qsEl = document.getElementById('quiver_size');
+    if (qsEl) {
+        if (p.display_quiver_size) qsEl.value = p.display_quiver_size;
+        qsEl.readOnly = !!p.quiver_size_locked;
+    }
+    toggleQuiverLockHint(!!p.quiver_size_locked);
+    window.APOLLO_CURRENT_QS = p.current_quiver_size || 0;
+
+    if (p.target_locked) lockTargetSelect(p.target_id);
+
+    // Redraw the current quiver's dots from the server's authoritative list.
+    window.PAST_SHOTS = Array.isArray(p.past_shots) ? p.past_shots : [];
+    drawPastShots();
+
+    // Ready the canvas for the next shot. Clearing the coords + active marker
+    // is what stops a stray re-submit from replaying this shot — the landed
+    // arrow is already shown as a past-shot dot.
+    xInput.value = '';
+    yInput.value = '';
+    _shotToken = null;
+    clearMarker();
+    if (confirmBtn) { confirmBtn.style.display = 'none'; confirmBtn.textContent = 'Confirm shot'; }
+    readout.innerHTML = '<span style="color:#2e7d32;font-weight:700;">SHOT RECORDED</span>';
+}
+
+function showShotError(msg, retryable) {
+    readout.innerHTML = '<span style="color:#c97a4a;font-weight:700;">' +
+        String(msg).replace(/[<>&]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;'}[c])) +
+        '</span>';
+    // On a retryable (network) failure, surface a button so any device — not
+    // just touch — can re-fire the *same* shot; the retained _shotToken keeps
+    // that retry idempotent. A non-retryable 4xx (e.g. a rejected quiver size)
+    // gets no retry button, since re-sending the same data won't help.
+    if (retryable && confirmBtn) {
+        confirmBtn.style.display = '';
+        confirmBtn.textContent = 'Retry shot';
+    }
+}
+
+let _shotInFlight = false;
+async function submitShotAjax() {
+    // Guard against overlapping submits: concurrent requests would race on the
+    // session's quiver counters. Practice cadence is seconds per shot, so the
+    // sub-second in-flight window never blocks a genuine next shot.
+    if (_shotInFlight) return;
+    _shotInFlight = true;
+    try {
+        const fd = new FormData(form);
+        if (!_shotToken) newShotToken();
+        fd.set('client_uuid', _shotToken);
+
+        const MAX_ATTEMPTS = 4;
+        for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+            let retryable = false;
+            try {
+                const res = await fetch('/api/record_shot', {
+                    method: 'POST',
+                    body: fd,
+                    headers: { 'X-CSRFToken': csrfToken() },
+                    credentials: 'same-origin',
+                });
+                if (res.status >= 500) {
+                    retryable = true;   // gateway / server hiccup — retry
+                } else {
+                    let payload = {};
+                    try { payload = await res.json(); } catch (_) {}
+                    if (res.ok && payload.ok) {
+                        applyShotResult(payload);
+                        return;
+                    }
+                    // 4xx with a reason (bad quiver size, no session): not
+                    // retryable — surface it and stop.
+                    showShotError(payload.msg || 'Could not record shot.', false);
+                    return;
+                }
+            } catch (err) {
+                retryable = true;       // network failure — retry, same uuid
+            }
+            if (retryable && attempt < MAX_ATTEMPTS - 1) {
+                await new Promise(r => setTimeout(r, 400 * Math.pow(2, attempt)));
+            }
+        }
+        // Exhausted retries. Keep the placed marker, coords, and token so the
+        // user can re-fire the very same shot from the button without losing it.
+        showShotError('Network problem — shot not saved. Tap “Retry shot”.', true);
+    } finally {
+        _shotInFlight = false;
+    }
+}
+
 // ── Quiver-size guard ────────────────────────────────────────────────────
 // A submit with quiver_size empty/0 was previously bouncing off the server
 // with a plain-text 400. Intercept here, prompt for the value, then resume.
@@ -1205,22 +1361,27 @@ document.addEventListener('keydown', evt => {
         if (window.ApolloOffline && window.ApolloOffline.isOffline()) {
             evt.preventDefault();
             window.ApolloOffline.recordShot();
+            return;
         }
+        // Online: submit via AJAX instead of a full-page navigation POST. The
+        // native /sesh POST stays the no-JS fallback for clients that never
+        // run this handler.
+        evt.preventDefault();
+        submitShotAjax();
     });
-    const nativeSubmit = form.submit.bind(form);
     form.submit = function () {
         if (needsQuiverSize()) {
             openModal();
             return;
         }
         // Every JS-driven shot submit (tap, hold-release, confirm, miss,
-        // quiver-size modal) funnels through here. When offline, capture to
-        // the IndexedDB queue instead of POSTing; sync happens on reconnect.
+        // quiver-size modal) funnels through here. Offline → capture to the
+        // IndexedDB queue (synced on reconnect); online → AJAX record.
         if (window.ApolloOffline && window.ApolloOffline.isOffline()) {
             window.ApolloOffline.recordShot();
             return;
         }
-        nativeSubmit();
+        submitShotAjax();
     };
 })();
 
