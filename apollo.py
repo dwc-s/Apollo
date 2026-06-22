@@ -2530,6 +2530,21 @@ user_notes_table = Table('user_notes', metadata,
 )
 
 
+# Sticky form inputs — remembers the last selections a user made on a stateless
+# analysis form (/predict, /analyze) so the next visit pre-fills the same
+# options. One row per (user_id, form_key); ``payload`` is a JSON blob whose
+# shape is owned by each form's route. Logging forms don't use this — they
+# inherit from the user's shot history instead (see _last_shot_defaults).
+form_prefs_table = Table('form_prefs', metadata,
+    Column('id', Integer, primary_key=True, autoincrement=True),
+    Column('user_id', Integer, index=True, nullable=False),
+    Column('form_key', String(64), nullable=False),
+    Column('payload', Text),
+    Column('updated_at', DateTime),
+    UniqueConstraint('user_id', 'form_key', name='uq_form_prefs_user_key'),
+)
+
+
 # ─── Backend selector ────────────────────────────────────────────────────
 # Explicit manual switch — SQLite is the default in every case, and MySQL
 # only kicks in when APOLLO_BACKEND=mysql is set. A stray DATABASE_URL in
@@ -3302,6 +3317,63 @@ def set_app_setting(key, value):
         return True
     except SQLAlchemyError as e:
         print(f"❌ set_app_setting({key!r}) failed: {e}")
+        return False
+
+
+def get_form_prefs(user_id, form_key):
+    """Return the saved sticky-form payload for (user_id, form_key) as a dict.
+
+    Empty dict when there's no row, the payload is blank, or anything goes
+    wrong — callers merge it over their own defaults, so a missing/garbled
+    blob just means "no remembered selections yet."
+    """
+    try:
+        with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
+            row = cur.execute(
+                "SELECT payload FROM form_prefs "
+                "WHERE user_id = %s AND form_key = %s",
+                (user_id, form_key)
+            ).fetchone()
+        if row is None or not row['payload']:
+            return {}
+        data = json.loads(row['payload'])
+        return data if isinstance(data, dict) else {}
+    except (SQLAlchemyError, ValueError, TypeError):
+        return {}
+
+
+def save_form_prefs(user_id, form_key, payload):
+    """Upsert the sticky-form payload for (user_id, form_key). Returns True on success.
+
+    Mirrors set_app_setting's race-tolerant SELECT-then-INSERT-or-UPDATE; the
+    unique index on (user_id, form_key) is the real guard. Best-effort — a
+    failure to remember selections should never break the form itself.
+    """
+    try:
+        blob = json.dumps(payload)
+        with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
+            existing = cur.execute(
+                "SELECT id FROM form_prefs "
+                "WHERE user_id = %s AND form_key = %s",
+                (user_id, form_key)
+            ).fetchone()
+            now = _app_now()
+            if existing is None:
+                cur.execute(
+                    "INSERT INTO form_prefs (user_id, form_key, payload, updated_at) "
+                    "VALUES (%s, %s, %s, %s)",
+                    (user_id, form_key, blob, now)
+                )
+            else:
+                cur.execute(
+                    "UPDATE form_prefs SET payload = %s, updated_at = %s "
+                    "WHERE user_id = %s AND form_key = %s",
+                    (blob, now, user_id, form_key)
+                )
+            con.commit()
+        return True
+    except (SQLAlchemyError, ValueError, TypeError) as e:
+        print(f"❌ save_form_prefs({form_key!r}) failed: {e}")
         return False
 
 
@@ -5369,6 +5441,33 @@ def _last_session_bow_arrow(user_id, session_id):
     return (row[0] or '', row[1] or '')
 
 
+def _last_shot_defaults(user_id):
+    """Return the bow/arrow/distance/quiver from the user's most recent shot
+    *ever*, regardless of session, so a brand-new session can inherit the
+    last-used setup instead of resetting to the first dropdown option. This is
+    the cross-session fallback for the logging form — within a session,
+    _last_session_bow_arrow already restores the in-progress choices. Returns
+    a dict of empty strings when the user has no shots yet."""
+    out = {'bow': '', 'arrow_type': '', 'distance': '', 'quiver_size': ''}
+    if user_id is None:
+        return out
+    try:
+        with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
+            row = cur.execute(
+                "SELECT bow, arrow_type, distance, quiver_size FROM apollo "
+                "WHERE user_id = %s ORDER BY id DESC LIMIT 1",
+                (user_id,)
+            ).fetchone()
+    except SQLAlchemyError:
+        return out
+    if not row:
+        return out
+    for key in out:
+        val = row[key]
+        out[key] = '' if val is None else str(val)
+    return out
+
+
 def _insert_shot(cur, *, user_id, session_id, timestamp, bow, arrow_type,
                  quiver_size, arrows_remaining, distance, session_notes,
                  x, y, is_precise, record_mode, target_id,
@@ -5932,6 +6031,17 @@ def sesh():
     # doesn't snap the dropdowns back to their first option.
     get_bow, get_arrow_type = _last_session_bow_arrow(
         user_id, session['session_id'])
+    # Fresh session (no in-session shot yet): inherit the last-used setup from
+    # the user's most recent shot ever, so a new session opens with the same
+    # bow/arrow/distance/quiver they last shot with instead of resetting.
+    last_defaults = _last_shot_defaults(user_id)
+    if not get_bow:
+        get_bow = last_defaults['bow']
+    if not get_arrow_type:
+        get_arrow_type = last_defaults['arrow_type']
+    get_distance = last_defaults['distance']
+    if not get_quiver_size_display:
+        get_quiver_size_display = last_defaults['quiver_size']
     return render_template('session.html',
                            session_id=session['session_id'],
                            arrow_type=get_arrow_type,
@@ -5946,7 +6056,7 @@ def sesh():
                            session_notes='',
                            session_tags=_last_session_tags(user_id, session['session_id']),
                            tag_suggestions=_distinct_user_tags(user_id),
-                           distance='',
+                           distance=get_distance,
                            x_coord='',
                            y_coord='',
                            arrow_types=arrow_types,
@@ -14731,7 +14841,8 @@ def predict():
         'user_targets':   _predict_user_targets(user_id),
         'tag_inventory':  _tag_inventory(user_id),
         # Echo back POSTed selections so the form sticks across the
-        # render. On GET these are empty / defaulted.
+        # render. On GET, pre-fill from the user's last saved run so the
+        # form opens with the same options they chose last time.
         'form':           {},
         'error':          None,
         'payload':        None,
@@ -14740,6 +14851,7 @@ def predict():
     }
 
     if request.method != 'POST':
+        ctx['form'] = get_form_prefs(user_id, 'predict')
         return render_template('predict.html', **ctx)
 
     form = request.form
@@ -14761,6 +14873,9 @@ def predict():
         'score_target':     (form.get('score_target') or '').strip(),
         'n_runs':           (form.get('n_runs') or '').strip(),
     }
+    # Remember these selections so the next visit pre-fills them. Saved even
+    # when the run later errors out — the user still wants their choices back.
+    save_form_prefs(user_id, 'predict', ctx['form'])
 
     # Build the endpoint first so a bad endpoint is reported even when
     # the filters would also fail.
@@ -14815,6 +14930,7 @@ def predict():
 @login_required
 def analyze():
     """Data analysis page — pick reports, render their charts and tables."""
+    user_id = current_user_id()
     selected = []
     results = []
     error = None
@@ -14855,11 +14971,24 @@ def analyze():
             if spec.get('equipment_picker'):
                 bow_selections[k] = request.form.getlist(f'{k}_bows')
                 arrow_selections[k] = request.form.getlist(f'{k}_arrows')
+        # Remember the whole selection so the next visit replays it. The
+        # template renders entirely from these six structures, so reloading
+        # them on GET reproduces the last report exactly. Only persist when
+        # at least one report is checked — an empty submit is an error, not a
+        # deliberate "remember nothing," so it must not wipe a good selection.
+        if selected:
+            save_form_prefs(user_id, 'analyze', {
+                'selected':         selected,
+                'date_ranges':      date_ranges,
+                'categories':       categories,
+                'tag_selections':   tag_selections,
+                'bow_selections':   bow_selections,
+                'arrow_selections': arrow_selections,
+            })
         if not selected:
             error = 'Pick at least one report to generate.'
         else:
             try:
-                user_id = current_user_id()
                 for key in selected:
                     spec = REPORTS[key]
                     kwargs = {}
@@ -14918,6 +15047,21 @@ def analyze():
                 print(f"❌ Analyze read error: {e}")
                 error = 'Database error while building report.'
                 results = []
+    else:
+        # GET: replay the user's last analysis selections. These mirror the
+        # six structures the POST branch builds, so the template pre-fills the
+        # same reports and filters. Absent any saved prefs (first-ever GET),
+        # the dicts stay empty and the template's defaults take over (e.g.
+        # default_top_tags below). Validated against the current REPORTS so a
+        # stale saved key can't slip a removed report into `selected`.
+        prefs = get_form_prefs(user_id, 'analyze')
+        if prefs:
+            selected = [k for k in prefs.get('selected', []) if k in REPORTS]
+            date_ranges = prefs.get('date_ranges', {}) or {}
+            categories = prefs.get('categories', {}) or {}
+            tag_selections = prefs.get('tag_selections', {}) or {}
+            bow_selections = prefs.get('bow_selections', {}) or {}
+            arrow_selections = prefs.get('arrow_selections', {}) or {}
     catalog = [
         {
             'key': k,

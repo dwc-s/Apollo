@@ -425,28 +425,28 @@
             color: #4a6080;
         }
         /* Lightbox (lightGallery) view of a chart: blow the SVG up to fill
-           100% of the screen's longest axis. The charts render as vector
-           SVG, so this stays crisp at any size. Scoped via the
-           `lg-chart-fullaxis` class added in the lightGallery init, so only
-           the analyze chart galleries get this treatment — the inline
-           thumbnails are untouched. Landscape → fill width; portrait → fill
-           height; the other axis follows the aspect ratio. */
+           the viewport while keeping the *whole* chart on screen. The charts
+           render as vector SVG, so this stays crisp at any size. Scoped via
+           the `lg-chart-fullaxis` class added in the lightGallery init, so
+           only the analyze chart galleries get this treatment — the inline
+           thumbnails are untouched.
+
+           Filling the image wrap (`.lg-img-wrap`, which lightGallery already
+           sizes to the slide area *minus its toolbar*) and letting
+           `object-fit: contain` scale the chart fits any aspect ratio inside
+           both axes. Sizing to the viewport instead (100vw/100vh) overran the
+           wrap by the toolbar height, clipping the chart's bottom edge. The
+           even-earlier landscape/portrait split was worse: it filled one axis
+           with no cap on the other, so a square chart (e.g. "Shots per
+           target", figsize 7×7) on a wide window grew as tall as the screen
+           was *wide* and overflowed top and bottom. */
         .lg-chart-fullaxis .lg-img-wrap { padding: 0; }
-        @media (orientation: landscape) {
-            .lg-chart-fullaxis .lg-image {
-                width: 100vw !important;
-                max-width: 100vw !important;
-                height: auto !important;
-                max-height: none !important;
-            }
-        }
-        @media (orientation: portrait) {
-            .lg-chart-fullaxis .lg-image {
-                height: 100vh !important;
-                max-height: 100vh !important;
-                width: auto !important;
-                max-width: none !important;
-            }
+        .lg-chart-fullaxis .lg-image {
+            width: 100% !important;
+            height: 100% !important;
+            max-width: 100% !important;
+            max-height: 100% !important;
+            object-fit: contain !important;
         }
         .replay-block {
             text-align: center;
