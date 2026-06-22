@@ -194,6 +194,14 @@
             box-sizing: border-box;
         }
         #predict-histogram { display: block; }
+        .histogram-note {
+            font-family: "Quantico", sans-serif;
+            font-size: 0.78rem;
+            color: #5a6a82;
+            line-height: 1.4;
+            margin: 8px 2px 0 2px;
+        }
+        .histogram-note strong { color: #1a3a5c; }
         .stats-grid {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
@@ -526,6 +534,18 @@
     <div class="histogram-wrap">
         <canvas id="predict-histogram"></canvas>
     </div>
+    {% if payload.benchmarks %}
+    <div class="histogram-note">
+        Dashed lines are your simulated P10 / P50 / P90. Solid lines are
+        real-world references for this round:
+        {% if payload.benchmarks | selectattr('kind', 'equalto', 'mqs') | list %}
+        the <strong>USA Archery collegiate 60th-percentile</strong> qualifying
+        score (amber){% endif %}{% if payload.benchmarks | selectattr('kind', 'equalto', 'award') | list %}{% if payload.benchmarks | selectattr('kind', 'equalto', 'mqs') | list %} and {% else %}the {% endif %}<strong>World Archery Star award</strong> tiers (purple){% endif %}.
+        No governing body publishes a full score distribution per round, so
+        these are the closest published benchmarks, not true percentiles of the
+        whole field.
+    </div>
+    {% endif %}
     <div class="run-progress" id="run-progress">Starting…</div>
 
     <div class="stats-grid" id="stats-grid">

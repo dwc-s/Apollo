@@ -84,6 +84,8 @@
   const nRuns = payload.n_runs;
   const scoreTarget = payload.score_target;
   const endpointMax = payload.endpoint_max | 0;
+  // Published WA / USA Archery reference scores for this round (may be empty).
+  const benchmarks = Array.isArray(payload.benchmarks) ? payload.benchmarks : [];
 
   const shaftMm = Number(dist.shaft_mm);
   if (Number.isFinite(shaftMm) && shaftMm > 0) {
@@ -130,8 +132,74 @@
   }
   const binLabels = bins.map((_, i) => `${i * binWidth}–${(i + 1) * binWidth - 1}`);
 
+  // Dashed vertical markers on the histogram at the P10 / P50 / P90 of the
+  // simulated scores, so the spread reads at a glance. The x-axis is a
+  // category scale (one slot per bin), so a score maps to a fractional bin
+  // position: bin i is centred on score (i+0.5)·binWidth, hence
+  // coord = score/binWidth − 0.5 in category units, linearly interpolated to
+  // pixels from the first two category centres. Values come from
+  // updateStats(), which stashes them on chart.$apolloMarkers each batch.
+  const PCT_STYLE = [
+    { key: 'p10', label: 'P10', color: '#c0392b' },
+    { key: 'p50', label: 'P50', color: '#1a3a5c' },
+    { key: 'p90', label: 'P90', color: '#2e7d32' },
+  ];
+  // Real-world reference styling: USAA 60th-pct MQS in amber, WA Star tiers in
+  // purple — solid lines, to read distinctly from the dashed simulated ones.
+  const BENCH_COLOR = { mqs: '#b9770e', award: '#7d3c98' };
+  const percentileLines = {
+    id: 'percentileLines',
+    afterDatasetsDraw(chart) {
+      const x = chart.scales.x;
+      const area = chart.chartArea;
+      if (!x || !area) return;
+      const px0 = x.getPixelForValue(0);
+      const step = x.getPixelForValue(1) - px0;
+      if (!isFinite(step) || step === 0) return;
+      const ctx = chart.ctx;
+      const pixelFor = (score) => Math.max(area.left, Math.min(area.right,
+        px0 + (score / binWidth - 0.5) * step));
+      // One vertical rule + a short label. `slot` staggers the label so
+      // neighbours don't collide; labels anchor to the top or bottom edge.
+      function rule(score, color, text, dashed, slot, fromBottom) {
+        const px = pixelFor(score);
+        ctx.beginPath();
+        ctx.moveTo(px, area.top);
+        ctx.lineTo(px, area.bottom);
+        ctx.lineWidth = 1.5;
+        ctx.strokeStyle = color;
+        ctx.setLineDash(dashed ? [5, 4] : []);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.font = '600 10px "Quantico", sans-serif';
+        ctx.fillStyle = color;
+        ctx.textAlign = 'center';
+        const y = fromBottom ? area.bottom - 5 - slot * 12 : area.top + 11 + slot * 12;
+        ctx.fillText(text, px, y);
+      }
+      ctx.save();
+      // Real-world benchmarks (static) along the bottom.
+      benchmarks.forEach((b, i) => {
+        if (typeof b.score !== 'number') return;
+        rule(b.score, BENCH_COLOR[b.kind] || '#555',
+             `${b.label}: ${b.score}`, false, i, true);
+      });
+      // Simulated P10 / P50 / P90 (live) along the top.
+      const markers = chart.$apolloMarkers;
+      if (markers) {
+        PCT_STYLE.forEach((p, i) => {
+          const s = markers[p.key];
+          if (s === null || s === undefined || Number.isNaN(s)) return;
+          rule(s, p.color, `${p.label}: ${Math.round(s)}`, true, i, false);
+        });
+      }
+      ctx.restore();
+    },
+  };
+
   const chart = new Chart(canvas.getContext('2d'), {
     type: 'bar',
+    plugins: [percentileLines],
     data: {
       labels: binLabels,
       datasets: [{
@@ -210,9 +278,12 @@
     statEls.mean.textContent = fmt(mean);
     statEls.median.textContent = fmt(pct(0.5));
     statEls.std.textContent = fmt(std);
-    statEls.p10.textContent = fmt(pct(0.10));
-    statEls.p50.textContent = fmt(pct(0.50));
-    statEls.p90.textContent = fmt(pct(0.90));
+    const p10 = pct(0.10), p50 = pct(0.50), p90 = pct(0.90);
+    statEls.p10.textContent = fmt(p10);
+    statEls.p50.textContent = fmt(p50);
+    statEls.p90.textContent = fmt(p90);
+    // Hand the percentile score positions to the histogram marker plugin.
+    chart.$apolloMarkers = { p10, p50, p90 };
     statEls.min.textContent = String(min);
     statEls.max.textContent = String(max);
     if (statEls.p_target) {
@@ -269,8 +340,10 @@
       // Safety: cap each frame at ~16 ms even if batchSize was too generous.
       if (performance.now() - start > 16) break;
     }
-    updateChart();
+    // Stats first so the marker plugin sees the latest percentiles when the
+    // chart redraws.
     updateStats();
+    updateChart();
     if (progressEl) {
       progressEl.textContent = doneRuns < nRuns
         ? `Running… ${doneRuns} / ${nRuns}`

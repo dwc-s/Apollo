@@ -98,6 +98,24 @@ USAA_AWARDS = [
     (1000, "1000 Pin"),
 ]
 
+# ── USA Archery Collegiate Minimum Qualifying Scores ────────────────────────
+# The only real-world, percentile-grounded benchmark either WA or USAA
+# publishes: the collegiate MQS are set at the 60th percentile of national
+# scores (per USA Archery's collegiate awards page). One score per round per
+# gender — a single percentile point, NOT a full distribution (no governing
+# body publishes P10/P50/P90 per round). Used by the /predict histogram to
+# mark "where the 60th-percentile collegiate archer lands" on the same round.
+#   Source: usarchery.org/participate/collegiate/collegiate-awards (60th pct;
+#   outdoor adjusted to 72 arrows, indoor 60 arrows — matches Apollo's rounds).
+# Keyed by Apollo round_key → {gender: score}. Recurve/compound 720 (70/50 m)
+# and WA Indoor 18 m only; other rounds have no published collegiate MQS.
+USAA_COLLEGIATE_MQS = {
+    'wa_720_recurve':        {'male': 570, 'female': 520},
+    'wa_720_compound':       {'male': 630, 'female': 600},
+    'wa_indoor_18_recurve':  {'male': 302, 'female': 296},
+    'wa_indoor_18_compound': {'male': 346, 'female': 329},
+}
+
 # ── Apollo round metadata ──────────────────────────────────────────────────
 # Rounds shot indoors: use the scheme-standard 9.3 mm arrow for the handicap
 # model and the AGB *indoor* classification scheme.

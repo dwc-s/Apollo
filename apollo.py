@@ -14805,6 +14805,39 @@ def _build_predict_segments(form, user_id):
     return [seg], label, max_score
 
 
+def _predict_real_world_benchmarks(round_key, gender, max_score):
+    """Published WA / USA Archery reference scores to overlay on the predict
+    histogram, so the simulated distribution can be read against real archers.
+
+    Returns a list of ``{label, score, kind}`` markers:
+      * ``kind='mqs'``  — USA Archery collegiate Minimum Qualifying Score, set
+        at the 60th percentile of national scores (the only percentile-grounded
+        figure either body publishes), for this round + the archer's gender.
+      * ``kind='award'`` — World Archery Star award milestones for the 1440
+        rounds (skill tiers, not percentiles).
+
+    Empty for rounds with no published benchmark (NFAA, field, match, custom).
+    Markers above ``max_score`` are dropped so none sits off the chart. Gender
+    falls back to men's standard when not clearly female (matches the app's
+    default elsewhere)."""
+    out = []
+    g = 'female' if str(gender or '').lower().startswith('f') else 'male'
+    cap = max_score or 0
+    mqs = classifications.data.USAA_COLLEGIATE_MQS.get(round_key)
+    if mqs and mqs.get(g) is not None and mqs[g] <= cap:
+        out.append({
+            'label': f'USAA 60th pct ({"W" if g == "female" else "M"})',
+            'score': mqs[g],
+            'kind': 'mqs',
+        })
+    if round_key in classifications.data.WA_1440_ROUNDS:
+        for milestone, name in classifications.data.WA_STAR_AWARDS:
+            if milestone <= cap:
+                out.append({'label': f'WA {name}', 'score': milestone,
+                            'kind': 'award'})
+    return out
+
+
 @app.route('/tools', methods=['GET'])
 @login_required
 def tools():
@@ -14946,6 +14979,15 @@ def predict():
     except ValueError:
         score_target = None
 
+    # Real-world reference markers (USAA 60th-pct MQS, WA Star tiers) — only
+    # for the known-round endpoint; custom endpoints have no published round.
+    benchmarks = []
+    if ctx['form']['endpoint_mode'] == 'round' and ctx['form']['round_key']:
+        benchmarks = _predict_real_world_benchmarks(
+            ctx['form']['round_key'],
+            (current_user() or {}).get('gender'),
+            endpoint_max)
+
     ctx['payload'] = {
         'dist':          fit,
         'segments':      segments,
@@ -14953,6 +14995,7 @@ def predict():
         'score_target':  score_target,
         'endpoint_label': endpoint_label,
         'endpoint_max':  endpoint_max,
+        'benchmarks':    benchmarks,
     }
     ctx['endpoint_label'] = endpoint_label
     ctx['endpoint_max'] = endpoint_max
