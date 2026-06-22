@@ -18,7 +18,7 @@
             background-color: #b3c6e3;
             border-radius: 25px;
             padding: 22px 28px;
-            max-width: 880px;
+            max-width: 1232px;
             margin: 0 auto 24px auto;
         }
         .analyze-panel h3 {
@@ -30,7 +30,7 @@
            menu collapses so the results take center stage; clicking the
            summary expands it again to tweak picks and re-submit. */
         details.analyze-collapse {
-            max-width: 880px;
+            max-width: 1232px;
             margin: 0 auto 24px auto;
         }
         details.analyze-collapse > summary {
@@ -70,13 +70,24 @@
             border-radius: 6px;
             font-family: "Quantico", sans-serif;
             margin: 0 auto 16px auto;
-            max-width: 880px;
+            max-width: 1232px;
         }
         .report-options {
-            display: flex;
-            flex-direction: column;
+            /* Three columns so the long report list doesn't run off the
+               bottom. align-items:start keeps a short block from stretching to
+               match a taller (expanded) neighbour in the same row. Steps down
+               to two then one column as the viewport narrows. */
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            align-items: start;
             gap: 8px;
             margin: 12px 0 18px 0;
+        }
+        @media (max-width: 900px) {
+            .report-options { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+        }
+        @media (max-width: 640px) {
+            .report-options { grid-template-columns: 1fr; }
         }
         .report-option-block {
             background: rgba(255,255,255,0.35);

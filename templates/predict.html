@@ -433,7 +433,7 @@
                     {% for r in rounds %}
                     <option value="{{ r.key }}"
                         {% if form.round_key == r.key %}selected{% endif %}>
-                        {{ r.name }} ({{ r.org }})
+                        {{ r.name }}{% if r.distance %} — {{ r.distance }}{% endif %} ({{ r.org }})
                     </option>
                     {% endfor %}
                 </select>

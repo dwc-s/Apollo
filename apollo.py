@@ -1294,6 +1294,29 @@ def _round_segments(round_def):
     ]
 
 
+def _round_distance_label(round_def):
+    """Human-readable distance(s) for a round, e.g. '70m', '90/70/50/30m' or
+    '5–60m'.
+
+    Pulls the distinct distances (order preserved) from _round_segments, so it
+    handles single-distance, multi-segment (WA 1440) and course rounds alike.
+    Whole-number metres drop the trailing '.0'. Rounds with many distances
+    (field/course rounds shoot a dozen-plus) collapse to a min–max range so the
+    label stays short enough for a dropdown."""
+    def fmt(d):
+        return int(d) if float(d).is_integer() else d
+    seen = []
+    for seg in _round_segments(round_def):
+        d = fmt(seg['distance_m'])
+        if d not in seen:
+            seen.append(d)
+    if not seen:
+        return ''
+    if len(seen) > 4:
+        return f'{fmt(min(seen))}–{fmt(max(seen))}m'
+    return '/'.join(str(d) for d in seen) + 'm'
+
+
 # ── Handicap & classification adapters ─────────────────────────────────────
 # These bridge Apollo's faces/rounds to the pure handicap.py / classifications
 # modules. Handicaps are computed only for AGB-recognised target rounds, using
@@ -11392,7 +11415,7 @@ def _mm_pair(mm_x, mm_y, decimals=1):
     )
 
 
-def _archery_stats(xs, ys):
+def _archery_stats(xs, ys, with_extreme_spread=True):
     """Per-group accuracy + precision stats from a 2D shot cloud.
 
     Inputs are parallel x/y arrays in any consistent coordinate frame
@@ -11427,8 +11450,12 @@ def _archery_stats(xs, ys):
     ]
     mr = sum(dists_from_centroid) / n
     extreme_spread = 0.0
-    if n >= 2:
-        # Naive O(n²) pairwise — fine at the dataset sizes /analyze sees.
+    # Naive O(n²) pairwise. Fine for a single group (one target / session /
+    # quiver), but callers that re-stat an ever-growing cumulative cloud (the
+    # all-time rolling traces) pass with_extreme_spread=False to skip it —
+    # otherwise the quadratic recompute per session makes the report hang on
+    # large histories. extreme_spread is only read by the per-target report.
+    if n >= 2 and with_extreme_spread:
         for i in range(n):
             for j in range(i + 1, n):
                 d = math.sqrt((xs[i] - xs[j]) ** 2 + (ys[i] - ys[j]) ** 2)
@@ -12607,7 +12634,8 @@ def _report_accuracy_precision_traces(user_id, date_from=None, date_to=None,
             sess_dt = shots[0]['dt']
             xs_sess = [s['nx'] for s in shots]
             ys_sess = [s['ny'] for s in shots]
-            s_sess = _archery_stats(xs_sess, ys_sess)
+            s_sess = _archery_stats(xs_sess, ys_sess,
+                                    with_extreme_spread=False)
             if s_sess is None:
                 continue
             out['session'][0].append(sess_dt)
@@ -12630,7 +12658,8 @@ def _report_accuracy_precision_traces(user_id, date_from=None, date_to=None,
                 buf_x.append(shot['nx'])
                 buf_y.append(shot['ny'])
                 if len(buf_x) >= buf_size:
-                    s_q = _archery_stats(buf_x, buf_y)
+                    s_q = _archery_stats(buf_x, buf_y,
+                                         with_extreme_spread=False)
                     if s_q is not None:
                         out['quiver'][0].append(sess_dt)
                         out['quiver'][1].append(s_q['mpi'])
@@ -12640,7 +12669,8 @@ def _report_accuracy_precision_traces(user_id, date_from=None, date_to=None,
 
             rolling_xs.extend(xs_sess)
             rolling_ys.extend(ys_sess)
-            s_all = _archery_stats(rolling_xs, rolling_ys)
+            s_all = _archery_stats(rolling_xs, rolling_ys,
+                                   with_extreme_spread=False)
             if s_all is not None:
                 out['alltime'][0].append(sess_dt)
                 out['alltime'][1].append(s_all['mpi'])
@@ -14713,7 +14743,9 @@ def _build_predict_segments(form, user_id):
                 'target_physical_mm': phys,
                 'zones':              zones,
             })
-        return out, rd['name'], int(rd.get('max_score') or 0)
+        dist = _round_distance_label(rd)
+        label = f"{rd['name']} — {dist}" if dist else rd['name']
+        return out, label, int(rd.get('max_score') or 0)
 
     # Custom endpoint
     try:
@@ -14824,6 +14856,7 @@ def predict():
         {'key': k,
          'name': v['name'],
          'org':  v.get('org', ''),
+         'distance': _round_distance_label(v),
          'description': v.get('description', '')}
         for k, v in TOURNAMENT_ROUNDS.items()
     ]
