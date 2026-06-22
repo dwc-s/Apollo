@@ -158,13 +158,8 @@ self.addEventListener('fetch', (event) => {
   }
 
   // Same-origin static images/icons/target images: cache-first (large,
-  // immutable — no value in re-fetching every load). This also covers the
-  // vendored MediaPipe pose assets used by /form (vision_bundle.mjs, the
-  // /wasm/*.wasm fileset, and pose_landmarker_lite.task — none match the
-  // .css/.js rule above). They're ~25 MB total, so they are deliberately
-  // NOT in PRECACHE (no install-time cost for users who never open /form);
-  // the first online visit to /form populates the cache and analysis then
-  // works offline. Bump VERSION to force clients onto a newer model/bundle.
+  // immutable — no value in re-fetching every load). Not precached; the first
+  // online visit populates the cache so they're available offline afterward.
   if (sameOrigin && url.pathname.startsWith('/static/')) {
     event.respondWith(cacheFirst(req));
     return;

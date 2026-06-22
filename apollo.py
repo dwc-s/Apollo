@@ -41,7 +41,6 @@ import sys as _sys
 _sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import handicap
 import classifications
-import form_checkpoints
 
 # Ordered choice lists for the archer-profile form (classification category).
 ARCHER_GENDERS = ['male', 'female', 'open']
@@ -2531,30 +2530,6 @@ user_notes_table = Table('user_notes', metadata,
 )
 
 
-# Form-analysis captures from the /form motion-capture page. The raw video is
-# NEVER stored or transmitted — pose extraction and scoring run entirely in the
-# browser. Only the derived, anonymous numbers land here: the measured joint
-# angles (metrics_json) and the per-checkpoint scores (scores_json), plus the
-# overall score, the bowstyle the run was graded against, and which captured
-# key-frame ('anchor'/'follow_through') the angles came from. One row per saved
-# analysis, owned by user_id like every other per-user table.
-form_captures_table = Table('form_captures', metadata,
-    Column('id', Integer, primary_key=True, autoincrement=True),
-    Column('user_id', Integer, index=True, nullable=False),
-    Column('created_at', DateTime),
-    Column('bowstyle', String(32)),
-    Column('overall_score', Float),
-    Column('metrics_json', Text),
-    Column('scores_json', Text),
-    # Optional compact, downsampled pose sequence for replay — anonymous
-    # skeleton points only (no video, no image), so a saved shot can be
-    # re-watched as a silhouette with the angle lines drawn over it. Nullable:
-    # captures saved before replay existed (or when the payload is too big)
-    # simply have no replay.
-    Column('frames_json', Text),
-)
-
-
 # ─── Backend selector ────────────────────────────────────────────────────
 # Explicit manual switch — SQLite is the default in every case, and MySQL
 # only kicks in when APOLLO_BACKEND=mysql is set. A stray DATABASE_URL in
@@ -2722,7 +2697,7 @@ class CompatConnection:
 # single-user to multi-user. On a fresh DB metadata.create_all() handles
 # this; on an existing DB we ALTER TABLE ADD COLUMN at startup.
 _PER_USER_TABLES = ('apollo', 'arrows', 'bows', 'session_times', 'targets',
-                    'target_zones', 'form_captures')
+                    'target_zones')
 
 
 def _ensure_user_id_columns():
@@ -3107,24 +3082,6 @@ def _ensure_apollo_client_uuid_unique_index():
         print(f"⚠️  Could not add unique index on apollo(user_id, client_uuid): {e}")
 
 
-def _ensure_form_captures_columns():
-    """Add the frames_json column to form_captures on DBs that predate replay.
-
-    Idempotent: skips when the table doesn't exist yet (fresh DB → create_all
-    makes it with the column) or already has it. frames_json holds the optional
-    compact pose sequence used to replay a saved shot.
-    """
-    insp = sa_inspect(engine)
-    if 'form_captures' not in insp.get_table_names():
-        return
-    cols = {c['name'] for c in insp.get_columns('form_captures')}
-    if 'frames_json' in cols:
-        return
-    print("⚙️  Migrating: adding frames_json column to form_captures")
-    with engine.begin() as conn:
-        conn.execute(text("ALTER TABLE form_captures ADD COLUMN frames_json TEXT"))
-
-
 def _ensure_user_timezone_column():
     """Add the timezone column to users on DBs that predate timezone support.
 
@@ -3365,7 +3322,6 @@ def migrate_db():
     _ensure_shot_snapshot_columns()
     _ensure_session_tags_column()
     _ensure_client_uuid_column()
-    _ensure_form_captures_columns()
     _ensure_is_root_column()
     _ensure_user_timezone_column()
     _ensure_archer_profile_columns()
@@ -3835,22 +3791,17 @@ def _set_security_headers(response):
     #     jsdelivr (lightGallery / Plotly / Chart.js) are no longer referenced
     #     and everything else works fully same-origin (and offline).
     #
-    # 'wasm-unsafe-eval': the /form motion-capture page instantiates the
-    # vendored MediaPipe pose model (WebAssembly) in the browser. WASM
-    # compilation is blocked by a plain script-src, and this is the narrow,
-    # purpose-built token for it — it permits WebAssembly.instantiate only, NOT
-    # arbitrary string eval() (that would be 'unsafe-eval'). The model and wasm
-    # are same-origin under /static, so connect-src 'self' still covers fetch.
-    # worker-src allows the pose runner's blob-URL worker.
+    # worker-src 'self' keeps the same-origin PWA service worker (static/sw.js)
+    # working under an explicit directive rather than the default-src fallback.
     response.headers.setdefault(
         'Content-Security-Policy',
         "default-src 'self'; "
-        "script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' https://cdnjs.buymeacoffee.com; "
+        "script-src 'self' 'unsafe-inline' https://cdnjs.buymeacoffee.com; "
         "style-src 'self' 'unsafe-inline'; "
         "img-src 'self' data: blob: https:; "
         "font-src 'self' data:; "
         "connect-src 'self'; "
-        "worker-src 'self' blob:; "
+        "worker-src 'self'; "
         "frame-ancestors 'none'; "
         "base-uri 'self'; "
         "form-action 'self'"
@@ -4378,15 +4329,97 @@ def inject_template_globals():
         archer_bowstyles=ARCHER_BOWSTYLES,
     )
 
+def _splash_user_summary(user_id):
+    """Lifetime arrow count and total time shot for the splash dashboard.
+
+    Returned only for signed-in users. ``total_arrows`` counts every row the
+    user has ever logged (misses included). ``total_seconds`` sums each
+    session's length using the same rule as get_stats(): a manual length
+    override wins; otherwise it's end−begin; incomplete sessions (no end,
+    no override) contribute nothing. ``pretty_time`` is a human label.
+    """
+    if user_id is None:
+        return None
+    try:
+        with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
+            row = cur.execute(
+                "SELECT COUNT(*) FROM apollo WHERE user_id = %s",
+                (user_id,)
+            ).fetchone()
+            total_arrows = int(row[0]) if row else 0
+            time_rows = cur.execute(
+                "SELECT session_begin_time, session_end_time, "
+                "manual_session_length_minutes "
+                "FROM session_times WHERE user_id = %s",
+                (user_id,)
+            ).fetchall()
+    except SQLAlchemyError as e:
+        print(f"❌ Splash summary error: {e}")
+        return None
+
+    fmt_with_ms = '%Y-%m-%d %H:%M:%S.%f'
+    fmt_no_ms = '%Y-%m-%d %H:%M:%S'
+    def to_dt(val):
+        if val is None:
+            return None
+        if isinstance(val, datetime):
+            return val
+        val = str(val).strip()
+        for fmt in (fmt_with_ms, fmt_no_ms):
+            try:
+                return datetime.strptime(val, fmt)
+            except ValueError:
+                continue
+        return None
+
+    total_seconds = 0
+    for begin, end, manual in time_rows:
+        try:
+            manual_f = float(manual) if manual is not None else 0.0
+        except (TypeError, ValueError):
+            manual_f = 0.0
+        if manual_f > 0:
+            total_seconds += int(manual_f * 60)
+            continue
+        dt1, dt2 = to_dt(begin), to_dt(end)
+        if dt1 and dt2:
+            total_seconds += int(abs((dt2 - dt1).total_seconds()))
+
+    return {
+        'total_arrows': total_arrows,
+        'total_seconds': total_seconds,
+        'pretty_time': _pretty_duration(total_seconds),
+    }
+
+
+def _pretty_duration(total_seconds):
+    """Compact human label for a span in seconds, e.g. '3h 12m' or '0m'.
+
+    Days roll up into hours so a long history reads as one big hour count
+    rather than '4d 3h' — matches how archers think about time on the line.
+    """
+    total_seconds = max(0, int(total_seconds))
+    hours, rem = divmod(total_seconds, 3600)
+    minutes = rem // 60
+    if hours and minutes:
+        return f'{hours}h {minutes}m'
+    if hours:
+        return f'{hours}h'
+    return f'{minutes}m'
+
+
 @app.route('/', methods=['GET'])
 def index():
     """Render the splash/landing page.
 
     Public: the splash works for signed-out users too, showing a sign-up
     CTA. The template branches on ``current_user`` exposed by the context
-    processor above.
+    processor above. Signed-in users get a small dashboard (greeting, logo,
+    lifetime arrow count, total time shot) in place of the feature tour —
+    see ``_splash_user_summary``.
     """
-    return render_template('splash.html')
+    summary = _splash_user_summary(current_user_id())
+    return render_template('splash.html', splash_summary=summary)
 
 
 # ─── PWA: service worker + manifest ──────────────────────────────────────
@@ -14776,237 +14809,6 @@ def predict():
     ctx['endpoint_label'] = endpoint_label
     ctx['endpoint_max'] = endpoint_max
     return render_template('predict.html', **ctx)
-
-
-# ─── Form analysis (motion capture) ──────────────────────────────────────
-# Pose extraction and scoring happen entirely client-side (static/apollo-form.js
-# + a vendored markerless pose model). The server only (a) hands the page the
-# checkpoint reference spec for the chosen bowstyle, and (b) optionally persists
-# the derived numbers. No video ever reaches the server.
-
-def _form_payload(bowstyle):
-    """Build the JSON payload the /form page hands to the client analyzer."""
-    bs = (bowstyle or '').strip().lower()
-    return {
-        'bowstyle':    bs,
-        'checkpoints': form_checkpoints.checkpoints_for(bs),
-    }
-
-
-@app.route('/form', methods=['GET', 'POST'])
-@login_required
-def form_analysis():
-    """Motion-capture form analysis (analysis mode).
-
-    GET renders the capture/analyze page seeded with the checkpoint spec for
-    the requested (or the archer's default) bowstyle. POST persists a finished
-    analysis — only the derived angles + scores, never video — so the archer
-    can track form over time. The POST is fetch-based JSON from the client and
-    rides CSRFProtect via the X-CSRFToken header, same as /api/sync_shots.
-    """
-    user_id = current_user_id()
-    user = current_user()
-
-    if request.method == 'POST':
-        data = request.get_json(silent=True) or {}
-        bs = (data.get('bowstyle') or '').strip().lower()
-        metrics = data.get('metrics')
-        scores = data.get('scores')
-        overall = data.get('overall_score')
-        if not isinstance(metrics, dict) or not isinstance(scores, dict):
-            return jsonify(ok=False, msg='Expected metrics and scores objects.'), 400
-        try:
-            overall = float(overall)
-        except (TypeError, ValueError):
-            overall = None
-        # Optional replay payload: a compact pose sequence (anonymous skeleton
-        # points only — never video). Serialise it, but drop it rather than
-        # reject the save if it's implausibly large (keeps it under a TEXT
-        # column and guards against a runaway client).
-        frames = data.get('frames')
-        frames_json = None
-        if isinstance(frames, dict):
-            try:
-                candidate = json.dumps(frames, separators=(',', ':'))
-            except (TypeError, ValueError):
-                candidate = None
-            if candidate is not None and len(candidate) <= 60000:
-                frames_json = candidate
-        try:
-            with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
-                cur.execute(
-                    "INSERT INTO form_captures "
-                    "(user_id, created_at, bowstyle, overall_score, "
-                    " metrics_json, scores_json, frames_json) "
-                    "VALUES (%s, %s, %s, %s, %s, %s, %s)",
-                    (user_id, _app_now(), bs, overall,
-                     json.dumps(metrics), json.dumps(scores), frames_json)
-                )
-                con.commit()
-        except SQLAlchemyError as e:
-            print(f"❌ Form-capture save error: {e}")
-            return jsonify(ok=False, msg='Could not save analysis.'), 500
-        return jsonify(ok=True)
-
-    # GET — pick the bowstyle: explicit ?bowstyle=, else the archer's profile
-    # default, else recurve. The picker on the page re-fetches the spec on
-    # change without a round-trip (all profiles are embedded in the payload).
-    requested = (request.args.get('bowstyle') or '').strip().lower()
-    default_bs = requested or (user.get('default_bowstyle') if user else '') or 'recurve'
-    specs = {bs: form_checkpoints.checkpoints_for(bs)
-             for bs in form_checkpoints.all_bowstyles()}
-    payload = {
-        'bowstyle':     default_bs if default_bs in specs else 'recurve',
-        'specs':        specs,
-        'save_url':     url_for('form_analysis'),
-    }
-    shown_bs = payload['bowstyle']
-    return render_template(
-        'form.html',
-        payload=payload,
-        bowstyle_labels=BOWSTYLE_LABELS,
-        bowstyles=list(specs.keys()),
-        recent=_form_recent_captures(user_id),
-        consistency=_form_consistency(user_id, shown_bs, specs[shown_bs]),
-        consistency_bowstyle=shown_bs,
-    )
-
-
-def _form_consistency(user_id, bowstyle, checkpoints, limit=10):
-    """Shot-to-shot consistency: per-metric mean and (sample) standard deviation
-    across the archer's recent saved analyses for a bowstyle.
-
-    The lower the SD, the more repeatable that element of form is shot to shot —
-    which, for archery, matters more than any single perfect frame. Reads the
-    stored metrics_json (no video), needs ≥2 captures of a metric to report it,
-    and joins each to its checkpoint label/unit so the template can render a
-    table in checkpoint order. Returns [] when there isn't enough history.
-    """
-    try:
-        with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
-            rows = cur.execute(
-                "SELECT metrics_json FROM form_captures "
-                "WHERE user_id = %s AND bowstyle = %s "
-                "ORDER BY created_at DESC LIMIT %s",
-                (user_id, (bowstyle or '').strip().lower(), int(limit))
-            ).fetchall()
-    except SQLAlchemyError:
-        return []
-    series = {}
-    for r in rows or []:
-        try:
-            metrics = json.loads(r['metrics_json'] or '{}')
-        except (ValueError, TypeError):
-            continue
-        if not isinstance(metrics, dict):
-            continue
-        for key, val in metrics.items():
-            if isinstance(val, (int, float)):
-                series.setdefault(key, []).append(float(val))
-    out = []
-    for cp in checkpoints:
-        vals = series.get(cp['id'])
-        if not vals or len(vals) < 2:
-            continue
-        mean = sum(vals) / len(vals)
-        sd = (sum((x - mean) ** 2 for x in vals) / (len(vals) - 1)) ** 0.5
-        out.append({'label': cp['label'], 'unit': cp.get('unit', ''),
-                    'mean': mean, 'sd': sd, 'n': len(vals)})
-    return out
-
-
-def _form_recent_captures(user_id, limit=10):
-    """Most recent saved form analyses for the archer (for the history strip).
-
-    Includes the row id (so a click can fetch the full capture for replay) and a
-    has_replay flag (whether a pose sequence was stored).
-    """
-    try:
-        with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
-            rows = cur.execute(
-                # Test frames_json for presence in SQL rather than selecting the
-                # whole (potentially ~tens-of-KB) blob for every history row.
-                "SELECT id, created_at, bowstyle, overall_score, "
-                "(frames_json IS NOT NULL) AS has_replay "
-                "FROM form_captures WHERE user_id = %s "
-                "ORDER BY created_at DESC LIMIT %s",
-                (user_id, int(limit))
-            ).fetchall()
-    except SQLAlchemyError:
-        return []
-    return [{'id': r['id'], 'created_at': r['created_at'],
-             'bowstyle': r['bowstyle'], 'overall_score': r['overall_score'],
-             'has_replay': bool(r['has_replay'])} for r in (rows or [])]
-
-
-@app.route('/form/capture/<int:capture_id>', methods=['GET'])
-@login_required
-def form_capture(capture_id):
-    """Return one saved analysis as JSON for replay — scoped to the owner.
-
-    Hands back the stored derived data (bowstyle, scores, overall) plus the
-    compact pose sequence (frames) so the client can re-draw the shot as a
-    silhouette with the angle lines over it. 404s on a capture that isn't this
-    user's, so ids can't be enumerated across accounts.
-    """
-    user_id = current_user_id()
-    try:
-        with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
-            row = cur.execute(
-                "SELECT bowstyle, overall_score, metrics_json, scores_json, "
-                "frames_json FROM form_captures WHERE id = %s AND user_id = %s",
-                (capture_id, user_id)
-            ).fetchone()
-    except SQLAlchemyError:
-        row = None
-    if row is None:
-        return jsonify(ok=False, msg='Not found.'), 404
-
-    def _loads(raw, default):
-        try:
-            return json.loads(raw) if raw else default
-        except (ValueError, TypeError):
-            return default
-
-    return jsonify(
-        ok=True,
-        bowstyle=row['bowstyle'],
-        overall_score=row['overall_score'],
-        metrics=_loads(row['metrics_json'], {}),
-        scores=_loads(row['scores_json'], {}),
-        frames=_loads(row['frames_json'], None),
-    )
-
-
-@app.route('/form/author', methods=['GET'])
-@root_required
-def form_author():
-    """Learning mode (dev/admin only): capture a known-good archer to author
-    the reference checkpoint targets.
-
-    This is the *config-writing* half of the feature, deliberately gated to the
-    root user and kept separate from the user-facing analyzer so no user's form
-    can ever influence the reference. It reuses the same client pipeline but,
-    instead of scoring against the spec, it reports the raw measured angles so
-    the operator can transcribe tuned targets into form_checkpoints.py. v1 has
-    no write-back UI on purpose — editing the spec is a code change, reviewed
-    like any other.
-    """
-    specs = {bs: form_checkpoints.checkpoints_for(bs)
-             for bs in form_checkpoints.all_bowstyles()}
-    payload = {
-        'bowstyle': 'recurve',
-        'specs':    specs,
-        'author':   True,
-    }
-    return render_template(
-        'form.html',
-        payload=payload,
-        bowstyle_labels=BOWSTYLE_LABELS,
-        bowstyles=list(specs.keys()),
-        recent=[],
-        author_mode=True,
-    )
 
 
 @app.route('/analyze', methods=['GET', 'POST'])

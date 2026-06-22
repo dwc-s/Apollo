@@ -32,7 +32,8 @@ ENV_FILE = HERE / ".env"
 # Pure-Python packages — installed via pip inside the env. PyMySQL is
 # only pulled in for the server flavor since the local flavor talks to
 # SQLite via SQLAlchemy's bundled driver.
-BASE_PACKAGES = ["Flask", "Flask-WTF", "Pillow", "SQLAlchemy", "openpyxl", "resend", "matplotlib"]
+BASE_PACKAGES = ["Flask", "Flask-WTF", "Pillow", "SQLAlchemy", "openpyxl",
+                 "resend", "matplotlib"]
 SERVER_PACKAGES = ["PyMySQL"]
 
 # Resend's shared sandbox sender. Only delivers to verified test

@@ -84,6 +84,70 @@
         details.splash-section ul {
             margin: 0;
         }
+        /* Signed-in dashboard: greeting, logo, best/worst shot canvases. */
+        .splash-greeting {
+            text-align: center;
+            font-family: "Quantico", sans-serif;
+            color: #1a3a5c;
+            font-size: 1.6rem;
+            font-weight: 700;
+            margin: 12px auto 6px;
+        }
+        .splash-logo-dash {
+            display: block;
+            margin: 0 auto 20px;
+            width: 55%;
+            max-width: 320px;
+            height: auto;
+        }
+        .splash-dash {
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: center;
+            align-items: stretch;
+            gap: 22px;
+            max-width: 900px;
+            margin: 0 auto 18px;
+        }
+        .splash-card {
+            background-color: #b3c6e3;
+            border-radius: 25px;
+            padding: 16px 20px 18px;
+            font-family: "Quantico", sans-serif;
+            color: #1a3a5c;
+            text-align: center;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: flex-start;
+            flex: 0 1 240px;
+        }
+        .splash-card h3 {
+            margin: 0 0 12px;
+            font-weight: 700;
+            font-size: 1.05rem;
+            letter-spacing: 0.04em;
+        }
+        .splash-card.splash-total-card {
+            justify-content: center;
+            min-width: 180px;
+        }
+        .splash-card .splash-stat {
+            font-size: 3rem;
+            font-weight: 700;
+            line-height: 1.1;
+        }
+        .splash-card .splash-sub {
+            font-size: 0.95rem;
+            opacity: 0.85;
+            margin-top: 6px;
+        }
+        .splash-empty {
+            font-size: 0.95rem;
+            opacity: 0.85;
+            max-width: 200px;
+            margin: 12px 0;
+        }
     </style>
     <script defer src="{{ url_for('static', filename='apollo-nav.js') }}"></script>
 </head>
@@ -98,7 +162,6 @@
     <hr class="side-nav-divider">
     <a href="/analyze" class="side-nav-link"><span class="nav-badge">→</span>Analyze data</a>
     <a href="/predict" class="side-nav-link"><span class="nav-badge">→</span>Predict performance</a>
-    <a href="/form" class="side-nav-link"><span class="nav-badge">⤢</span>Form analysis</a>
     <a href="/tools" class="side-nav-link"><span class="nav-badge">⚙</span>Tools</a>
     <hr class="side-nav-divider">
     <a href="/add_bow" class="side-nav-link"><span class="nav-badge">→</span>Add bow</a>
@@ -137,6 +200,26 @@
     </div>
     {% endif %}
 </nav>
+{% if current_user %}
+    <p class="splash-greeting">Welcome back, {{ current_user.username }}!</p>
+    <img class="splash-logo-dash" src="{{ url_for('static', filename='logo.png') }}" alt="Apollo">
+
+    <div class="splash-dash">
+        <div class="splash-card splash-total-card">
+            <h3 class="quantico_light">Arrows shot</h3>
+            <div class="splash-stat">{{ '{:,}'.format(splash_summary.total_arrows if splash_summary else 0) }}</div>
+            <div class="splash-sub">all-time</div>
+        </div>
+        <div class="splash-card splash-total-card">
+            <h3 class="quantico_light">Time spent</h3>
+            <div class="splash-stat">{{ splash_summary.pretty_time if splash_summary else '0m' }}</div>
+            <div class="splash-sub">on the line</div>
+        </div>
+    </div>
+    {% if not splash_summary or splash_summary.total_arrows == 0 %}
+    <p class="splash-empty quantico_light"><a href="/sesh">Start a session &rarr;</a></p>
+    {% endif %}
+{% else %}
 <h1 class="title-splash">Apollo</h1>
 
     <h2 class="quantico_light">Apollo is an archery application for logging the data of shooting sessions and analyzing performance.</h2>
@@ -246,6 +329,7 @@
             <li>Touch-optimized controls and scaling target panel</li>
         </ul>
     </details>
+{% endif %}
 
     <h3 class="quantico_light">Apollo will always be free and <a href="https://github.com/dwc-s/Apollo">open source</a> (<a href="/docs/">documentation</a>), but it costs money to operate and develop. Please consider <a href="https://buymeacoffee.com/apolloshoots">putting a dollar or two in the hat</a>. Email me (Dave) <a href="mailto:dwcs@apolloshoots.org">here</a> or <a href="https://github.com/dwc-s/Apollo/issues">report issues on GitHub</a>.</h3>
     <h3 class="quantico_light">
