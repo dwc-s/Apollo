@@ -313,7 +313,7 @@ no DB hits, no server round-trips per keystroke.
 | **Arrow spine selector** | Easton-style adjusted bow weight (±5 lbs/in arrow length, ±1.5 lbs per 25 gr point weight, bow-type correction) → recommended spine band. |
 | **FOC** | Standard ATA `((balance − L/2)/L)·100` with low / target / hunting / EFOC band chips. |
 | **Arrow speed (fps)** | Two methods: **bow specs** (energy-storage model `v = √(2·η·k·F_peak·stroke / m)`, works for any bow type from peak weight, draw length, brace height, arrow mass) and **IBO/ATA rating** (compound-only delta-from-rating). |
-| **Kinetic energy & momentum** | `KE = mv²/450,240` (ft·lb), `momentum = mv/225,400` (slug·ft/s). |
+| **Kinetic energy & momentum** | `KE = mv²/450,240` (ft·lb), `momentum = mv/225,218` (slug·ft/s — 7000 gr/lb × 32.174 ft/s²). |
 
 (A *Slope compensator* card shipped earlier but was removed in v0.69 —
 the rifleman's-rule approximation fits a bullet better than an arrow's
