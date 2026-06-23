@@ -3480,6 +3480,40 @@ def get_target(target_id, user_id):
         return None
 
 
+def _last_session_target(user_id):
+    """target_id of the user's most recent shot, but only if that target still
+    exists and is active — so a new session opens on the same face the archer
+    last shot. Returns None when there's no usable last target (caller then
+    falls back to the marked-default)."""
+    if user_id is None:
+        return None
+    try:
+        with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
+            row = cur.execute(
+                "SELECT a.target_id FROM apollo a "
+                "INNER JOIN targets t "
+                "  ON t.id = a.target_id AND t.user_id = a.user_id "
+                "WHERE a.user_id = %s AND a.target_id IS NOT NULL "
+                "  AND t.is_active = 1 "
+                "ORDER BY a.id DESC LIMIT 1",
+                (user_id,)
+            ).fetchone()
+    except SQLAlchemyError:
+        return None
+    return int(row[0]) if row and row[0] is not None else None
+
+
+def _session_start_target_id(user_id):
+    """Target a fresh session should open on: the face from the most recent
+    shot when it's still active, else the user's marked-default target. None
+    only when the user has no targets at all."""
+    last_t = _last_session_target(user_id)
+    if last_t is not None:
+        return last_t
+    default_row = get_default_target(user_id)
+    return default_row['rowid'] if default_row is not None else None
+
+
 def _seed_user_default_target(user_id):
     """Ensure the user's default target is the WA 40cm 10-ring vector face.
 
@@ -5904,8 +5938,7 @@ def sesh():
             if target_id is not None and get_target(target_id, user_id) is None:
                 target_id = None
             if target_id is None:
-                default_row = get_default_target(user_id)
-                target_id = default_row['rowid'] if default_row is not None else None
+                target_id = _session_start_target_id(user_id)
             if target_id is not None:
                 session['target_id'] = target_id
 
@@ -6021,12 +6054,13 @@ def sesh():
                                    target_config=target_config)
 
     record_mode = session.get('record_mode', 0)
-    # GET path: pick the session's locked target if any, else the chosen
-    # one stashed in the cookie, else fall back to the default target.
+    # GET path: pick the session's locked target if any, else the chosen one
+    # stashed in the cookie, else open a fresh session on the last-shot face
+    # (falling back to the marked-default target).
     if session.get('target_id') is None:
-        default_row = get_default_target(user_id)
-        if default_row is not None:
-            session['target_id'] = default_row['rowid']
+        start_t = _session_start_target_id(user_id)
+        if start_t is not None:
+            session['target_id'] = start_t
     target_config = target_to_config(get_target(session.get('target_id'), user_id))
     if target_config is not None:
         target_config['zone_radii_mm'] = _zone_radii_for_target(
@@ -6173,8 +6207,7 @@ def api_record_shot():
         if target_id is not None and get_target(target_id, user_id) is None:
             target_id = None
         if target_id is None:
-            default_row = get_default_target(user_id)
-            target_id = default_row['rowid'] if default_row is not None else None
+            target_id = _session_start_target_id(user_id)
         if target_id is not None:
             session['target_id'] = target_id
 
@@ -10141,17 +10174,25 @@ def export_data():
 
 # ─── Import ────────────────────────────────────────────────────────────────
 # /import_data accepts the same three formats /export_data emits (sql / csv-
-# zip / xlsx). Per-row strategy is "merge, not replace":
-#   * `id` is always dropped — the DB autoincrements, so old ids never
-#     collide with whatever the user already has.
+# zip / xlsx). Strategy is an *idempotent additive merge* — only genuinely-new
+# rows are inserted, so re-importing the same file (or a partially-overlapping
+# one, e.g. round-tripping web ↔ local) adds nothing and never duplicates:
+#   * `id` is always dropped — the DB autoincrements.
 #   * `user_id` is always overridden with the importer's id, so a file
-#     exported from another account still lands as the current user's data.
-#   * `session_id` is shifted by MAX(session_id) of the current user so the
-#     imported sessions sit *after* whatever's already there. session_times
-#     and apollo share the same offset so cross-table references stay
-#     coherent.
-#   * targets get a fresh id; apollo.target_id is rewritten through a map
-#     of old_target_id → new_target_id built as the targets insert.
+#     exported from another account lands as the current user's data.
+#   * Shots (apollo) dedupe on (user_id, client_uuid): a shot already present
+#     is skipped, not re-inserted (and not aborted on).
+#   * Inventory dedupes on its natural name key — targets on `name`, bows on
+#     `bow_model`, arrows on `arrow`. A matching target is *reused* (its id is
+#     mapped for apollo/zones and its zones are left as-is); a matching bow /
+#     arrow is skipped. apollo stores bow/arrow as a name string, so skipping
+#     inventory never strands a shot.
+#   * Sessions dedupe on `session_begin_time`: a continued session merges into
+#     the existing one (shots attach to its id) instead of splitting; otherwise
+#     a fresh session id is minted as MAX+1.. The unique index on
+#     session_times(user_id, session_id) makes that mint race-safe — a
+#     collision with concurrent recording / a second import retries the whole
+#     merge (see _apply_import). target_id is rewritten old → new throughout.
 
 def _split_sql_statements(text_in):
     """Split a SQL dump into individual statements at unquoted semicolons.
@@ -10397,109 +10438,306 @@ def _safe_ident(name):
     return isinstance(name, str) and bool(_SAFE_SQL_IDENT_RE.match(name))
 
 
+def _to_int(v):
+    """Best-effort int from an import cell ('5', '5.0', 5.0); None on blank/bad."""
+    if v in (None, '', 'NULL'):
+        return None
+    try:
+        return int(float(v))
+    except (TypeError, ValueError):
+        return None
+
+
+def _dt_key(v):
+    """Canonical string for a datetime cell (session begin-time, shot
+    timestamp) so an import row and the existing DB row compare equal
+    regardless of datetime-vs-string form. Returns None when there is no
+    usable timestamp (so NULLs never collapse two distinct rows into one)."""
+    if v in (None, '', 'NULL'):
+        return None
+    dt = v if isinstance(v, datetime) else _coerce_value(
+        'session_times', 'session_begin_time', v)
+    if isinstance(dt, datetime):
+        return dt.strftime('%Y-%m-%d %H:%M:%S.%f')
+    s = str(v).strip()
+    return s or None
+
+
+def _num_key(v):
+    """Stable string for a coordinate so '1' and '1.0' compare equal; a
+    non-numeric value (e.g. the miss sentinel) falls back to its stripped
+    string. None for blanks."""
+    if v in (None, '', 'NULL'):
+        return None
+    try:
+        return repr(float(v))
+    except (TypeError, ValueError):
+        return str(v).strip()
+
+
+def _clean_import_row(table, raw, user_id):
+    """Filter a parsed row to valid, safely-named columns, coerce each value to
+    its column type, drop the old primary key, and stamp the current user."""
+    valid_cols = {c.name for c in metadata.tables[table].columns}
+    clean = {}
+    for k, v in raw.items():
+        # k is intersected with the schema, but it reaches the INSERT f-string
+        # as an identifier (DBAPI can't bind names), so re-validate its shape.
+        if k == 'id' or k not in valid_cols or not _safe_ident(k):
+            continue
+        clean[k] = _coerce_value(table, k, v)
+    clean['user_id'] = user_id
+    return clean
+
+
+def _insert_import_row(cur, table, clean):
+    """INSERT one cleaned row, returning its new id. ``table`` is re-validated
+    against an identifier regex even though every caller passes a literal —
+    it is interpolated into the statement, not bound."""
+    if not _safe_ident(table):
+        raise ValueError(f"refusing to import into unsafe table name: {table!r}")
+    cols = list(clean.keys())
+    placeholders = ', '.join(['%s'] * len(cols))
+    cur.execute(
+        f"INSERT INTO {table} ({', '.join(cols)}) VALUES ({placeholders})",
+        [clean[c] for c in cols]
+    )
+    return cur.lastrowid
+
+
 def _apply_import(data, user_id):
-    """Merge parsed rows into the current user's data.
-    Returns {table: inserted_count}.
+    """Idempotent additive merge of parsed rows into the current user's data.
+    Returns ``{table: inserted_count}``.
 
-    The whole import runs in a single transaction: a failure mid-loop
-    triggers a rollback so the caller never sees a partially-imported
-    state where (say) targets landed but their zones didn't.
+    Re-importing the same file is a no-op (see the module comment above for the
+    per-table dedupe keys). New session ids are minted as MAX+1.. inside the
+    transaction; if a shot recorded — or a second import — concurrently claims
+    an id (or a colliding client_uuid / target name) first, the relevant unique
+    index raises and the whole merge is retried. Because each attempt rolls
+    back fully and re-reads existing keys before re-running, a retry just
+    re-dedupes against the now-committed row — it can't double-insert. A
+    genuinely-deterministic constraint failure still surfaces, after the cap.
+    Each attempt is one all-or-nothing transaction.
     """
-    counts = {t: 0 for t in IMPORT_TABLES}
-    target_id_map = {}
+    last_err = None
+    for _ in range(5):
+        try:
+            return _apply_import_once(data, user_id)
+        except DBIntegrityError as e:
+            # A unique-index collision with concurrent recording / a second
+            # import is recoverable: the next attempt re-reads existing keys
+            # and dedupes the now-present row. Retry up to the cap, then let
+            # a persistent (non-transient) failure surface.
+            last_err = e
+    raise last_err
 
+
+def _apply_import_once(data, user_id):
+    counts = {t: 0 for t in IMPORT_TABLES}
     with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
       try:
-        # session_id offset — pick max across both tables so apollo and
-        # session_times stay aligned even if one is ahead of the other.
+        # ── Pre-load existing natural keys (all user-scoped) for dedupe ─────
+        def _name_set(col, table):
+            return {
+                str(r[0]).strip()
+                for r in cur.execute(
+                    f"SELECT {col} FROM {table} WHERE user_id = %s", (user_id,)
+                ).fetchall()
+                if r[0] is not None and str(r[0]).strip()
+            }
+        existing_target_names = _name_set('name', 'targets')
+        existing_bow_models = _name_set('bow_model', 'bows')
+        existing_arrow_names = _name_set('arrow', 'arrows')
+        existing_target_id_by_name = {}
+        for r in cur.execute(
+            "SELECT id, name FROM targets WHERE user_id = %s", (user_id,)
+        ).fetchall():
+            if r[1] is not None:
+                existing_target_id_by_name.setdefault(str(r[1]).strip(), int(r[0]))
+        existing_uuids = {
+            r[0] for r in cur.execute(
+                "SELECT client_uuid FROM apollo "
+                "WHERE user_id = %s AND client_uuid IS NOT NULL", (user_id,)
+            ).fetchall() if r[0]
+        }
+        # Natural keys for every existing shot, so uuid-less (pre-client_uuid)
+        # shots can be deduped too. Key = (session begin-time, shot timestamp,
+        # x, y) — stable across the session-id renumbering an import does.
+        existing_shot_keys = set()
+        for r in cur.execute(
+            "SELECT st.session_begin_time, a.timestamp, a.x_coord, a.y_coord "
+            "FROM apollo a LEFT JOIN session_times st "
+            "  ON st.session_id = a.session_id AND st.user_id = a.user_id "
+            "WHERE a.user_id = %s", (user_id,)
+        ).fetchall():
+            existing_shot_keys.add(
+                (_dt_key(r[0]), _dt_key(r[1]), _num_key(r[2]), _num_key(r[3])))
+        existing_session_id_by_begin = {}
+        for r in cur.execute(
+            "SELECT session_id, session_begin_time FROM session_times "
+            "WHERE user_id = %s", (user_id,)
+        ).fetchall():
+            b = _dt_key(r[1])
+            if b is not None:
+                existing_session_id_by_begin.setdefault(b, int(r[0]))
+
         res = cur.execute(
             "SELECT MAX(session_id) FROM apollo WHERE user_id = %s", (user_id,)
         ).fetchone()
-        max_apollo = (res[0] if res and res[0] is not None else 0) or 0
+        max_apollo = int(res[0]) if res and res[0] is not None else 0
         res = cur.execute(
             "SELECT MAX(session_id) FROM session_times WHERE user_id = %s",
             (user_id,)
         ).fetchone()
-        max_st = (res[0] if res and res[0] is not None else 0) or 0
-        session_offset = max(int(max_apollo or 0), int(max_st or 0))
+        max_st = int(res[0]) if res and res[0] is not None else 0
+        next_session_id = max(max_apollo, max_st) + 1
 
-        for table in IMPORT_TABLES:
-            # Belt-and-braces: table comes from a hardcoded literal list,
-            # but the next line interpolates it into raw SQL — re-validate
-            # against an identifier regex so a future refactor can't make
-            # this an injection point.
-            if not _safe_ident(table):
-                raise ValueError(f"refusing to import into unsafe table name: {table!r}")
-            rows = data.get(table) or []
-            valid_cols = {c.name for c in metadata.tables[table].columns}
-            for raw in rows:
-                clean = {}
-                for k, v in raw.items():
-                    if k == 'id' or k not in valid_cols:
-                        continue
-                    # Defense-in-depth: k is already in valid_cols (which
-                    # comes from the SQLAlchemy schema), but the column
-                    # name reaches the f-string below as an identifier.
-                    # Reject anything that isn't a plain SQL identifier.
-                    if not _safe_ident(k):
-                        continue
-                    clean[k] = _coerce_value(table, k, v)
-                clean['user_id'] = user_id
+        # ── targets: reuse on name match, else insert (only new get zones) ──
+        target_id_map = {}      # old target id → resolved (new or existing) id
+        new_target_old_ids = set()
+        for raw in data.get('targets') or []:
+            old_id = _to_int(raw.get('id'))
+            namekey = str(raw.get('name') or '').strip()
+            if namekey and namekey in existing_target_names:
+                if old_id is not None:
+                    target_id_map[old_id] = existing_target_id_by_name.get(namekey)
+                continue
+            clean = _clean_import_row('targets', raw, user_id)
+            # Refuse attacker-controlled image_filename: import is the one place
+            # a string lands here without going through _safe_target_filename,
+            # so a crafted dump could otherwise store '../../apollo.py' and have
+            # a later /edit_targets delete remove arbitrary files.
+            fn = clean.get('image_filename')
+            if fn is not None and not _is_safe_target_image_filename(fn):
+                clean['image_filename'] = None
+            new_id = _insert_import_row(cur, 'targets', clean)
+            counts['targets'] += 1
+            if namekey:
+                existing_target_names.add(namekey)
+                if new_id is not None:
+                    existing_target_id_by_name[namekey] = int(new_id)
+            if old_id is not None and new_id is not None:
+                target_id_map[old_id] = int(new_id)
+                new_target_old_ids.add(old_id)
 
-                if 'session_id' in clean and clean['session_id'] is not None:
-                    try:
-                        clean['session_id'] = int(clean['session_id']) + session_offset
-                    except (TypeError, ValueError):
-                        clean['session_id'] = None
+        # ── target_zones: only for freshly-created targets (a reused target
+        #    already carries its zones); remap target_id, drop orphans ───────
+        for raw in data.get('target_zones') or []:
+            old_t = _to_int(raw.get('target_id'))
+            if old_t is None or old_t not in new_target_old_ids:
+                continue
+            new_t = target_id_map.get(old_t)
+            if new_t is None:
+                continue
+            clean = _clean_import_row('target_zones', raw, user_id)
+            clean['target_id'] = new_t
+            _insert_import_row(cur, 'target_zones', clean)
+            counts['target_zones'] += 1
 
-                if table in ('apollo', 'target_zones'):
-                    old_t = raw.get('target_id')
-                    if old_t in (None, '', 'NULL'):
-                        clean['target_id'] = None
-                    else:
-                        try:
-                            clean['target_id'] = target_id_map.get(int(float(old_t)))
-                        except (TypeError, ValueError):
-                            clean['target_id'] = None
-                    # A zone whose target_id failed to remap would be an
-                    # orphan; drop it rather than insert a stranded row.
-                    if table == 'target_zones' and clean.get('target_id') is None:
-                        continue
+        # ── bows / arrows: skip rows whose natural name key already exists ──
+        for raw in data.get('bows') or []:
+            key = str(raw.get('bow_model') or '').strip()
+            if key and key in existing_bow_models:
+                continue
+            _insert_import_row(cur, 'bows', _clean_import_row('bows', raw, user_id))
+            counts['bows'] += 1
+            if key:
+                existing_bow_models.add(key)
+        for raw in data.get('arrows') or []:
+            key = str(raw.get('arrow') or '').strip()
+            if key and key in existing_arrow_names:
+                continue
+            _insert_import_row(cur, 'arrows', _clean_import_row('arrows', raw, user_id))
+            counts['arrows'] += 1
+            if key:
+                existing_arrow_names.add(key)
 
-                # Refuse attacker-controlled image_filename: an import is the
-                # one place a string can land in this column without going
-                # through _safe_target_filename, so without this guard a
-                # crafted SQL/CSV dump could store '../../apollo.py' and have
-                # a later /edit_targets delete remove arbitrary files. NULL
-                # out anything that doesn't match the known-safe shapes; the
-                # row still imports but its replay just won't render.
-                if table == 'targets':
-                    fn = clean.get('image_filename')
-                    if fn is not None and not _is_safe_target_image_filename(fn):
-                        clean['image_filename'] = None
+        # session_times by old id — built up-front so a uuid-less (legacy) shot
+        # can be keyed by its session's begin-time for dedupe.
+        st_by_old_sid = {}
+        for raw in data.get('session_times') or []:
+            sid = _to_int(raw.get('session_id'))
+            if sid is not None:
+                st_by_old_sid[sid] = raw
 
-                col_names = list(clean.keys())
-                placeholders = ', '.join(['%s'] * len(col_names))
-                cur.execute(
-                    f"INSERT INTO {table} ({', '.join(col_names)}) "
-                    f"VALUES ({placeholders})",
-                    [clean[c] for c in col_names]
-                )
-                counts[table] += 1
+        def _shot_natkey(raw):
+            sid = _to_int(raw.get('session_id'))
+            st = st_by_old_sid.get(sid)
+            begin = _dt_key(st.get('session_begin_time')) if st else None
+            return (begin, _dt_key(raw.get('timestamp')),
+                    _num_key(raw.get('x_coord')), _num_key(raw.get('y_coord')))
 
-                if table == 'targets':
-                    old_id = raw.get('id')
-                    new_id = cur.lastrowid
-                    if old_id not in (None, '') and new_id is not None:
-                        try:
-                            target_id_map[int(float(old_id))] = int(new_id)
-                        except (TypeError, ValueError):
-                            pass
+        # ── shots: dedupe modern shots on client_uuid, legacy (uuid-less)
+        #    shots on their natural key, so re-importing pre-client_uuid data
+        #    is idempotent too. Sessions follow the shots that survive. ───────
+        seen_uuids = set()
+        seen_natkeys = set()
+        insertable_apollo = []
+        needed_sessions = set()
+        for raw in data.get('apollo') or []:
+            uuid = str(raw.get('client_uuid') or '').strip() or None
+            if uuid:
+                if uuid in existing_uuids or uuid in seen_uuids:
+                    continue    # already have this shot (or a dup in the file)
+                seen_uuids.add(uuid)
+            else:
+                key = _shot_natkey(raw)
+                if key in existing_shot_keys or key in seen_natkeys:
+                    continue
+                seen_natkeys.add(key)
+            insertable_apollo.append(raw)
+            sid = _to_int(raw.get('session_id'))
+            if sid is not None:
+                needed_sessions.add(sid)
+
+        # Empty sessions (a session_times row with no shots anywhere in the
+        # file) still import, deduped by begin-time. A session whose shots were
+        # all deduped is NOT re-imported — its shots already exist, so it does.
+        file_apollo_sids = {
+            _to_int(r.get('session_id')) for r in (data.get('apollo') or [])
+        }
+        file_apollo_sids.discard(None)
+        for sid, st in st_by_old_sid.items():
+            if sid in needed_sessions or sid in file_apollo_sids:
+                continue
+            begin = _dt_key(st.get('session_begin_time'))
+            if begin is not None and begin in existing_session_id_by_begin:
+                continue
+            needed_sessions.add(sid)
+
+        # Map every needed old session id → a target session id: reuse the
+        # existing session when begin-times match (a continued session merges
+        # instead of splitting), else mint a fresh id and write session_times.
+        session_id_map = {}
+        for old_sid in sorted(needed_sessions):
+            st = st_by_old_sid.get(old_sid)
+            begin = _dt_key(st.get('session_begin_time')) if st else None
+            if begin is not None and begin in existing_session_id_by_begin:
+                session_id_map[old_sid] = existing_session_id_by_begin[begin]
+                continue
+            session_id_map[old_sid] = next_session_id
+            if st is not None:
+                clean = _clean_import_row('session_times', st, user_id)
+                clean['session_id'] = next_session_id
+                _insert_import_row(cur, 'session_times', clean)
+                counts['session_times'] += 1
+                if begin is not None:
+                    existing_session_id_by_begin[begin] = next_session_id
+            next_session_id += 1
+
+        for raw in insertable_apollo:
+            clean = _clean_import_row('apollo', raw, user_id)
+            sid = _to_int(raw.get('session_id'))
+            clean['session_id'] = session_id_map.get(sid) if sid is not None else None
+            old_t = _to_int(raw.get('target_id'))
+            clean['target_id'] = target_id_map.get(old_t) if old_t is not None else None
+            _insert_import_row(cur, 'apollo', clean)
+            counts['apollo'] += 1
+
         con.commit()
       except Exception:
-        # Any failure mid-import (constraint violation, parse error, etc.)
-        # rolls back the whole batch so the user never sees a partial state
-        # — earlier-table rows committed, later-table rows missing.
+        # Any failure mid-merge rolls back the whole batch so the user never
+        # sees a partial state. _apply_import retries session-id collisions.
         try:
             con.rollback()
         except SQLAlchemyError:
