@@ -339,12 +339,54 @@
     <p class="tool-note">KE (ft·lb) = mass × velocity² ÷ 450,240. Momentum (slug·ft/s) = mass × velocity ÷ 225,400.</p>
 </details>
 
+<!-- ── Bow-hand elevation ─────────────────────────────────────────────── -->
+<details class="tool-panel" id="tool-elev">
+    <summary><h3>Bow-hand elevation</h3></summary>
+    <p class="tool-desc">Launch angle to put an arrow on target, solved with air drag rather than a vacuum lob. Read how far above horizontal your bow hand sits, and enter a compare distance to see how much you raise or lower between the two — the change that builds a sight tape. Air density is worked out from temperature and elevation, and drag from your fletching, so you never have to guess a raw coefficient.</p>
+    <div class="tool-row">
+        <label><span>Distance (<span class="elev-u-len">ft</span>)</span><input type="number" id="elev-dist" value="164.04" min="0.1" step="1"></label>
+        <label><span>Height difference (<span class="elev-u-len">ft</span>)</span><input type="number" id="elev-height" value="0" step="0.5"></label>
+        <label><span>Arrow speed (<span class="elev-u-spd">fps</span>)</span><input type="number" id="elev-speed" value="200" min="1" step="1"></label>
+        <label><span>Arrow mass (<span class="elev-u-mass">gr</span>)</span><input type="number" id="elev-mass" value="350" min="1" step="1"></label>
+        <label><span>Shaft OD (<span id="elev-arrow-dia-unit-label">in</span>)</span><input type="number" id="elev-arrow-dia" value="0.217" min="0.05" max="25" step="0.001"></label>
+        <label><span>Compare distance (<span class="elev-u-len">ft</span>)</span><input type="number" id="elev-dist2" value="131.23" min="0" step="1"></label>
+    </div>
+    <p class="tool-desc" style="margin:8px 0 8px 0;">Conditions — set what you know; air density is computed for you.</p>
+    <div class="tool-row">
+        <label><span>Temperature (<span class="elev-u-temp">°F</span>)</span><input type="number" id="elev-temp" value="59" step="1"></label>
+        <label><span>Elevation ASL (<span class="elev-u-len">ft</span>)</span><input type="number" id="elev-alt" value="0" step="50"></label>
+        <label>Fletching
+            <select id="elev-fletch">
+                <option value="1.2">Bare shaft (no fletching)</option>
+                <option value="1.8">Target — low-profile / spin vanes</option>
+                <option value="2.2" selected>Target — standard 2″ vanes</option>
+                <option value="2.6">Field / 3D — large vanes</option>
+                <option value="3.0">Feather fletched</option>
+                <option value="custom">Custom Cd…</option>
+            </select>
+        </label>
+        <label id="elev-cd-wrap" style="display:none;">Drag coefficient<input type="number" id="elev-cd" value="2.2" min="0" step="0.1"></label>
+    </div>
+    <div class="tool-row" style="align-items:center; gap:10px;">
+        <button type="button" class="tool-btn" id="elev-geo-btn" style="margin-top:0;">📍 Use my location</button>
+        <span id="elev-geo-status" style="font-size:0.78rem; color:#2c4a6b;"></span>
+    </div>
+    <div class="tool-result" id="elev-result">—</div>
+    <p class="tool-note">Height difference is target minus arrow: positive uphill, negative downhill. Air density comes from temperature and elevation (dry-air ISA model), or from live temperature, pressure and humidity when you use your location. Fletching sets an effective drag coefficient on the shaft cross-section — these presets are approximate, so trust the distance-to-distance change far more than the absolute degrees. Pick “Custom Cd” and enter 0 for a textbook vacuum angle. Weather by <a href="https://open-meteo.com" target="_blank" rel="noopener" style="color:#2c4a6b;">Open-Meteo</a>.</p>
+</details>
+
 <script>
 (function () {
     'use strict';
 
     const fmt = (v, d) => Number.isFinite(v) ? v.toFixed(d) : '—';
     const $ = (id) => document.getElementById(id);
+    const gv = (id) => parseFloat($(id).value);
+    const ELEV_G = 9.81;  // gravity (m/s²); declared up here because the units
+                          // toggle's initial recalcElev() runs before the
+                          // elevation section, and a const can't be in its TDZ.
+    let elevGeo = null;   // measured {pPa, rh} from the location lookup, or null
+                          // (same TDZ reason — recalcElev reads it at init).
 
     // ── Wind drift ───────────────────────────────────────────────────
     // Drag-based lateral drift. Wind² in the drag formula means a 1.5×
@@ -418,29 +460,71 @@
     // The math always operates in inches; we just convert at the display
     // boundary so the user can think in whichever system they prefer.
     const UNITS_KEY = 'apollo_units';
-    const odInput   = $('wind-arrow-dia');
-    const odLabel   = $('wind-arrow-dia-unit-label');
     const toggleBtn = $('units-toggle');
-    let odDisplayUnit = (localStorage.getItem(UNITS_KEY) === 'imperial') ? 'in' : 'mm';
-    // Initial render: HTML value is in inches; convert to mm if the user is metric.
-    if (odDisplayUnit === 'mm') {
-        const v = parseFloat(odInput.value);
-        if (Number.isFinite(v)) odInput.value = (v * 25.4).toFixed(2);
+    // Shaft-OD inputs (mm ⇄ in) on the wind and elevation tools; their math
+    // always works in inches and we convert only at the display boundary.
+    const odFields = [
+        { input: $('wind-arrow-dia'), label: $('wind-arrow-dia-unit-label') },
+        { input: $('elev-arrow-dia'), label: $('elev-arrow-dia-unit-label') },
+    ];
+    // The elevation tool's other dimensioned inputs. HTML values are authored
+    // in imperial; we convert to metric on load and on every toggle. Each group
+    // lists its inputs, the unit-label class, the unit strings, the metric⇄
+    // imperial conversions, and the display decimals to use per system.
+    const elevUnitGroups = [
+        { ids: ['elev-dist', 'elev-height', 'elev-dist2', 'elev-alt'], cls: 'elev-u-len',
+          met: 'm', imp: 'ft', toMet: v => v * 0.3048, toImp: v => v / 0.3048, dM: 1, dI: 1 },
+        { ids: ['elev-speed'], cls: 'elev-u-spd',
+          met: 'm/s', imp: 'fps', toMet: v => v * 0.3048, toImp: v => v / 0.3048, dM: 1, dI: 0 },
+        { ids: ['elev-mass'], cls: 'elev-u-mass',
+          met: 'g', imp: 'gr', toMet: v => v * 0.06479891, toImp: v => v / 0.06479891, dM: 1, dI: 0 },
+        { ids: ['elev-temp'], cls: 'elev-u-temp',
+          met: '°C', imp: '°F', toMet: v => (v - 32) * 5 / 9, toImp: v => v * 9 / 5 + 32, dM: 1, dI: 0 },
+    ];
+    function setElevLabels(metric) {
+        elevUnitGroups.forEach(g => {
+            document.querySelectorAll('.' + g.cls)
+                .forEach(el => { el.textContent = metric ? g.met : g.imp; });
+        });
     }
-    function refreshUnits() {
-        const wanted = (localStorage.getItem(UNITS_KEY) === 'imperial') ? 'in' : 'mm';
-        toggleBtn.textContent = (wanted === 'in') ? '⇄ Metric' : '⇄ Imperial';
-        if (wanted !== odDisplayUnit) {
-            const v = parseFloat(odInput.value);
+    function convertElevFields(toMetric) {
+        elevUnitGroups.forEach(g => g.ids.forEach(id => {
+            const el = $(id), v = parseFloat(el.value);
             if (Number.isFinite(v)) {
-                odInput.value = (wanted === 'in')
-                    ? (v / 25.4).toFixed(3)   // mm → in
-                    : (v * 25.4).toFixed(2);  // in → mm
+                el.value = toMetric ? g.toMet(v).toFixed(g.dM) : g.toImp(v).toFixed(g.dI);
             }
+        }));
+    }
+    let odDisplayUnit = (localStorage.getItem(UNITS_KEY) === 'imperial') ? 'in' : 'mm';
+    // Initial render: authored values are imperial; convert to metric if needed.
+    if (odDisplayUnit === 'mm') {
+        odFields.forEach(({ input }) => {
+            const v = parseFloat(input.value);
+            if (Number.isFinite(v)) input.value = (v * 25.4).toFixed(2);
+        });
+        convertElevFields(true);
+    }
+    setElevLabels(odDisplayUnit === 'mm');
+    function refreshUnits() {
+        const imperial = (localStorage.getItem(UNITS_KEY) === 'imperial');
+        const wanted = imperial ? 'in' : 'mm';
+        toggleBtn.textContent = imperial ? '⇄ Metric' : '⇄ Imperial';
+        if (wanted !== odDisplayUnit) {
+            odFields.forEach(({ input }) => {
+                const v = parseFloat(input.value);
+                if (Number.isFinite(v)) {
+                    input.value = (wanted === 'in')
+                        ? (v / 25.4).toFixed(3)   // mm → in
+                        : (v * 25.4).toFixed(2);  // in → mm
+                }
+            });
+            convertElevFields(!imperial);
             odDisplayUnit = wanted;
         }
-        odLabel.textContent = wanted;
+        odFields.forEach(({ label }) => { label.textContent = wanted; });
+        setElevLabels(!imperial);
         recalcWind();
+        recalcElev();
     }
     toggleBtn.addEventListener('click', () => {
         const current = localStorage.getItem(UNITS_KEY) || 'metric';
@@ -700,6 +784,234 @@
     ['ke-weight', 'ke-speed']
         .forEach(id => $(id).addEventListener('input', recalcKe));
     recalcKe();
+
+    // ── Bow-hand elevation ───────────────────────────────────────────
+    // Vertical-plane point-mass trajectory with quadratic drag. We RK4 the
+    // arc for a trial launch angle, read the height where it crosses the
+    // target's horizontal distance, and bisect on the angle until the arc
+    // passes through the target. Drag depends on the ballistic coefficient
+    // m/(Cd·A), so mass, diameter, air density and Cd all matter; zeroing
+    // Cd (or air density) collapses this to the vacuum angle-of-reach case.
+
+    // Height (m) where the arc launched at `theta` (rad) crosses x = targetX,
+    // with flight time and velocity there. k = 0.5·ρ·Cd·A / m (drag per mass).
+    // Returns null if the arrow never reaches targetX (range too short).
+    function elevSim(theta, v0, targetX, k) {
+        const dt = 0.001, maxT = 15;  // s; no realistic archery shot flies longer
+        let x = 0, y = 0, vx = v0 * Math.cos(theta), vy = v0 * Math.sin(theta), t = 0;
+        const ax = (ux, uy) => -k * Math.hypot(ux, uy) * ux;
+        const ay = (ux, uy) => -ELEV_G - k * Math.hypot(ux, uy) * uy;
+        let px = x, py = y, pvx = vx, pvy = vy, pt = t;
+        while (x < targetX && t < maxT && vx > 0) {
+            px = x; py = y; pvx = vx; pvy = vy; pt = t;
+            const k1vx = ax(vx, vy), k1vy = ay(vx, vy);
+            const v2x = vx + k1vx*dt/2, v2y = vy + k1vy*dt/2;
+            const k2vx = ax(v2x, v2y), k2vy = ay(v2x, v2y);
+            const v3x = vx + k2vx*dt/2, v3y = vy + k2vy*dt/2;
+            const k3vx = ax(v3x, v3y), k3vy = ay(v3x, v3y);
+            const v4x = vx + k3vx*dt, v4y = vy + k3vy*dt;
+            const k4vx = ax(v4x, v4y), k4vy = ay(v4x, v4y);
+            x  += dt/6 * (vx + 2*v2x + 2*v3x + v4x);
+            y  += dt/6 * (vy + 2*v2y + 2*v3y + v4y);
+            vx += dt/6 * (k1vx + 2*k2vx + 2*k3vx + k4vx);
+            vy += dt/6 * (k1vy + 2*k2vy + 2*k3vy + k4vy);
+            t  += dt;
+        }
+        if (x < targetX) return null;
+        const f = (targetX - px) / (x - px);
+        return {
+            y:  py  + (y  - py)  * f,
+            t:  pt  + (t  - pt)  * f,
+            vx: pvx + (vx - pvx) * f,
+            vy: pvy + (vy - pvy) * f,
+        };
+    }
+
+    // Bisect for the launch angle whose arc passes through (targetX, targetY).
+    // Arrival height rises monotonically with angle over the reachable band,
+    // so we scan for the sign change, then bisect inside it.
+    function elevSolve(v0, targetX, targetY, k) {
+        const deg = Math.PI / 180;
+        let loA = null, hiA = null, reached = false;
+        // Wide enough to cover steep field/3D shots in either direction; the
+        // scan breaks as soon as the arrival height crosses the target.
+        for (let d = -80; d <= 85; d += 1) {
+            const r = elevSim(d * deg, v0, targetX, k);
+            if (!r) { if (reached) break; else continue; }
+            reached = true;
+            if (r.y - targetY > 0) { hiA = d * deg; break; }
+            loA = d * deg;
+        }
+        // No reachable angle lofts the arc up to the target height: the
+        // target is out of range (too far) or simply too high to reach.
+        if (loA === null || hiA === null) return { error: true };
+        let lo = loA, hi = hiA;
+        for (let i = 0; i < 24; i++) {
+            const mid = 0.5 * (lo + hi);
+            const r = elevSim(mid, v0, targetX, k);
+            if (r && r.y - targetY > 0) hi = mid; else lo = mid;
+        }
+        const theta = 0.5 * (lo + hi);
+        return { theta, sim: elevSim(theta, v0, targetX, k) };
+    }
+
+    function recalcElev() {
+        const metric = (localStorage.getItem(UNITS_KEY) !== 'imperial');
+        const dist   = gv('elev-dist');
+        const height = gv('elev-height');
+        const speed  = gv('elev-speed');
+        const mass   = gv('elev-mass');
+        const diaRaw = gv('elev-arrow-dia');
+        const dist2  = gv('elev-dist2');
+        const temp   = gv('elev-temp');
+        const alt    = gv('elev-alt');
+        const fl     = $('elev-fletch').value;
+        const cd     = (fl === 'custom') ? gv('elev-cd') : parseFloat(fl);
+        const out = $('elev-result');
+
+        // Convert the current display values to SI for the physics.
+        const dist_m   = metric ? dist   : dist   * 0.3048;
+        const dist2_m  = metric ? dist2  : dist2  * 0.3048;
+        const height_m = metric ? height : height * 0.3048;
+        const v0       = metric ? speed  : speed  * 0.3048;          // m/s
+        const mass_kg  = metric ? mass / 1000 : mass * 6.479891e-5;  // kg
+        const dia_m    = (odDisplayUnit === 'mm') ? diaRaw / 1000 : diaRaw * 0.0254;
+        const tempC    = metric ? temp : (temp - 32) * 5 / 9;        // °C
+        const alt_m    = metric ? alt : alt * 0.3048;                // m
+        const lenU = metric ? 'm' : 'ft';
+        const spdU = metric ? 'm/s' : 'fps';
+
+        if (!(dist_m > 0) || !Number.isFinite(height_m) || !(v0 > 0)
+            || !(mass_kg > 0) || !(dia_m > 0) || !Number.isFinite(tempC)
+            || !Number.isFinite(alt_m) || !(cd >= 0)) {
+            out.textContent = '—';
+            return;
+        }
+
+        // Air density: from measured pressure + humidity when a location lookup
+        // is active (more accurate), otherwise the dry-air ISA model from
+        // temperature + elevation. Temperature stays live in both paths.
+        const T_K = tempC + 273.15;
+        let rho, airSrc;
+        if (elevGeo) {
+            const psat = 610.94 * Math.exp(17.625 * tempC / (tempC + 243.04)); // Pa (Tetens)
+            const pv = (elevGeo.rh / 100) * psat;
+            rho = (elevGeo.pPa - pv) / (287.05 * T_K) + pv / (461.495 * T_K);
+            airSrc = 'measured ' + fmt(elevGeo.pPa / 100, 0) + ' hPa, ' + fmt(elevGeo.rh, 0) + '% RH';
+        } else {
+            const p = 101325 * Math.pow(Math.max(1 - 2.25577e-5 * alt_m, 1e-6), 5.25588);
+            rho = p / (287.05 * T_K);
+            airSrc = fmt(temp, 0) + '°' + (metric ? 'C' : 'F') + ', ' + fmt(alt, 0) + ' ' + lenU + ' ASL';
+        }
+        if (!(T_K > 0) || !(rho >= 0)) { out.textContent = '—'; return; }
+
+        const area = Math.PI * (dia_m / 2) * (dia_m / 2);
+        const k    = 0.5 * rho * cd * area / mass_kg;
+
+        const sol = elevSolve(v0, dist_m, height_m, k);
+        if (sol.error) {
+            out.textContent = 'Out of range — no bow-hand angle reaches ' + fmt(dist, 1) +
+                ' ' + lenU + (Math.abs(height_m) > 1e-9 ? ' at that height' : '') +
+                ' at this speed.';
+            return;
+        }
+        const deg      = sol.theta * 180 / Math.PI;
+        const arr_ms   = Math.hypot(sol.sim.vx, sol.sim.vy);
+        const arr_disp = metric ? arr_ms : arr_ms / 0.3048;
+        // Speed change: usually a loss to drag, but a steep downhill shot can
+        // arrive faster than it launched (gravity adds kinetic energy).
+        const dv       = (1 - arr_ms / v0) * 100;
+        const dvStr    = dv >= 0 ? '−' + fmt(dv, 0) + '% loss' : '+' + fmt(-dv, 0) + '% gain';
+
+        let deltaLine = '';
+        if (dist2_m > 0 && Math.abs(dist2_m - dist_m) > 1e-6) {
+            const sol2 = elevSolve(v0, dist2_m, height_m, k);
+            if (sol2.error) {
+                deltaLine = '<div class="result-sub">Compare distance ' + fmt(dist2, 1) +
+                    ' ' + lenU + ' is out of range.</div>';
+            } else {
+                const deg2 = sol2.theta * 180 / Math.PI;
+                const dd   = deg2 - deg;
+                const verb = dd >= 0 ? 'Raise' : 'Lower';
+                deltaLine =
+                    '<div class="result-line"><strong>' + verb + ' bow hand ' +
+                        fmt(Math.abs(dd), 3) + '°</strong> going ' + fmt(dist, 1) +
+                        ' → ' + fmt(dist2, 1) + ' ' + lenU + '</div>' +
+                    '<div class="result-sub">Elevation at ' + fmt(dist2, 1) + ' ' + lenU +
+                        ': ' + fmt(deg2, 3) + '° above horizontal</div>';
+            }
+        }
+        out.innerHTML =
+            '<div class="result-line"><strong>Elevation:</strong> ' + fmt(deg, 3) +
+                '° above horizontal</div>' +
+            deltaLine +
+            '<div class="result-sub">Air density ' + fmt(rho, 3) + ' kg/m³ (' +
+                airSrc + ') · drag Cd ' + fmt(cd, 2) + '</div>' +
+            '<div class="result-sub">Flight time ' + fmt(sol.sim.t, 2) + ' s · ' +
+                'arrival speed ' + fmt(arr_disp, metric ? 1 : 0) + ' ' + spdU +
+                ' (' + dvStr + ')</div>';
+    }
+    ['elev-dist', 'elev-height', 'elev-speed', 'elev-mass', 'elev-arrow-dia',
+     'elev-dist2', 'elev-temp', 'elev-alt', 'elev-cd']
+        .forEach(id => $(id).addEventListener('input', recalcElev));
+    $('elev-fletch').addEventListener('change', () => {
+        $('elev-cd-wrap').style.display = ($('elev-fletch').value === 'custom') ? '' : 'none';
+        recalcElev();
+    });
+
+    // Location → live conditions. Opt-in (only on click): pulls real temperature
+    // + measured surface pressure + humidity from Open-Meteo (free, no API key,
+    // CORS-enabled) and computes density from the measured pressure — more
+    // accurate than the altitude model. Sending coordinates to Open-Meteo is the
+    // cost of real weather; the browser can't read local conditions itself.
+    const geoBtn = $('elev-geo-btn'), geoStatus = $('elev-geo-status');
+    function clearGeo() {
+        elevGeo = null;
+        $('elev-alt').disabled = false;
+        geoStatus.textContent = '';
+        geoBtn.textContent = '📍 Use my location';
+        recalcElev();
+    }
+    geoBtn.addEventListener('click', () => {
+        if (elevGeo) { clearGeo(); return; }
+        if (!navigator.geolocation) {
+            geoStatus.textContent = 'Location not available on this device.';
+            return;
+        }
+        geoStatus.textContent = 'Locating…';
+        navigator.geolocation.getCurrentPosition(pos => {
+            const lat = pos.coords.latitude.toFixed(3), lon = pos.coords.longitude.toFixed(3);
+            geoStatus.textContent = 'Fetching conditions…';
+            fetch('https://api.open-meteo.com/v1/forecast?latitude=' + lat + '&longitude=' + lon +
+                  '&current=temperature_2m,surface_pressure,relative_humidity_2m')
+                .then(r => r.ok ? r.json() : Promise.reject(r.status))
+                .then(d => {
+                    const c = d && d.current;
+                    if (!c || !Number.isFinite(c.surface_pressure) || !Number.isFinite(c.temperature_2m)) {
+                        return Promise.reject('no data');
+                    }
+                    elevGeo = {
+                        pPa: c.surface_pressure * 100,
+                        rh: Number.isFinite(c.relative_humidity_2m) ? c.relative_humidity_2m : 50,
+                    };
+                    // Fill the temperature field in the current display unit.
+                    const metric = (localStorage.getItem(UNITS_KEY) !== 'imperial');
+                    $('elev-temp').value = metric ? c.temperature_2m.toFixed(1)
+                                                  : (c.temperature_2m * 9 / 5 + 32).toFixed(0);
+                    $('elev-alt').disabled = true;  // density now comes from measured pressure
+                    geoBtn.textContent = '✕ Clear location';
+                    // Pressure/RH are unit-agnostic, so this line stays correct
+                    // after a later units toggle (temperature lives in its field).
+                    geoStatus.textContent = '📍 From your location · ' +
+                        c.surface_pressure.toFixed(0) + ' hPa · ' + elevGeo.rh.toFixed(0) + '% RH';
+                    recalcElev();
+                })
+                .catch(() => { geoStatus.textContent = 'Weather lookup failed — enter conditions manually.'; });
+        }, () => { geoStatus.textContent = 'Location denied — enter conditions manually.'; },
+        { timeout: 10000, maximumAge: 600000 });
+    });
+    // Initial recalcElev() runs from refreshUnits() above — the unit state it
+    // closes over must be initialized first.
 })();
 </script>
 </body>

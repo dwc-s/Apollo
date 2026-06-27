@@ -3919,6 +3919,10 @@ def _set_security_headers(response):
     #     heatmap is a server-rendered matplotlib SVG — so Google Fonts,
     #     jsdelivr (lightGallery / Plotly / Chart.js) are no longer referenced
     #     and everything else works fully same-origin (and offline).
+    #   api.open-meteo.com (connect-src) — the Bow-hand elevation tool's
+    #     opt-in "Use my location" button fetches current weather (temperature,
+    #     surface pressure, humidity) to compute air density. Only contacted on
+    #     an explicit click; everything else on the page stays same-origin.
     #
     # worker-src 'self' keeps the same-origin PWA service worker (static/sw.js)
     # working under an explicit directive rather than the default-src fallback.
@@ -3929,7 +3933,7 @@ def _set_security_headers(response):
         "style-src 'self' 'unsafe-inline'; "
         "img-src 'self' data: blob: https:; "
         "font-src 'self' data:; "
-        "connect-src 'self'; "
+        "connect-src 'self' https://api.open-meteo.com; "
         "worker-src 'self'; "
         "frame-ancestors 'none'; "
         "base-uri 'self'; "
