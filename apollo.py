@@ -1179,6 +1179,406 @@ TOURNAMENT_ROUNDS = {
 }
 
 
+# ── USA Archery pin shoots (JOAD + Adult Achievement) ──────────────────────
+# A "pin shoot" is the achievement-program scoring round USA Archery clubs
+# run: an archer shoots a fixed 30-arrow (indoor) or 36-arrow (outdoor)
+# round at a chosen distance + target face, and the resulting score earns
+# the highest-coloured pin whose threshold they meet. Pins are universally
+# referred to by COLOUR (green → … → gold), so that is the identity Apollo
+# surfaces. Requirements transcribed from the Rapids Archery JOAD published
+# scoring matrices (rev. 2024-01-30):
+#   https://rapidsarcheryjoad.org/resources/pin-requirements/
+#
+# Apollo models each shootable (program, environment, equipment, distance,
+# target) combination as a normal fixed TOURNAMENT_ROUNDS entry — so the
+# whole live-canvas / scoresheet / practice-scorecard / results machinery
+# scores them with zero special-casing. The only pin-specific logic is the
+# award lookup (_pin_shoot_result) shown on completion and the grouped
+# selector (PIN_SHOOT_SELECTOR) that folds the many combinations behind a
+# distance/target dropdown per program × environment × bow type.
+
+# Pin levels in ascending order of difficulty. (id, display name, swatch
+# colour). The last three — bronze/silver/gold — are the "Olympian"
+# medallion pins; at those levels the archer must shoot the distance/target
+# for their age class (Apollo does not enforce age class).
+PIN_LEVELS = [
+    ('green',  'Green',  '#2e8b57'),
+    ('purple', 'Purple', '#7a4fa3'),
+    ('gray',   'Gray',   '#9aa0a6'),
+    ('white',  'White',  '#e9e9ec'),
+    ('black',  'Black',  '#23272b'),
+    ('blue',   'Blue',   '#2f6fb5'),
+    ('red',    'Red',    '#cc2b2b'),
+    ('yellow', 'Yellow', '#f2c200'),
+    ('bronze', 'Bronze', '#cd7f32'),
+    ('silver', 'Silver', '#b6bcc6'),
+    ('gold',   'Gold',   '#d4af37'),
+]
+PIN_ORDER = {pid: i for i, (pid, _l, _c) in enumerate(PIN_LEVELS)}
+_PIN_DISPLAY = {pid: {'id': pid, 'name': name, 'color': color}
+                for (pid, name, color) in PIN_LEVELS}
+
+# Face → short, user-facing label used in pin round names and the selector.
+_PIN_FACE_LABEL = {
+    'wa_60':          '60cm',
+    'wa_40':          '40cm',
+    'wa_40_compound': '40cm',
+    'wa_122':         '122cm',
+    'wa_80':          '80cm full',
+    'wa_80_6ring':    '80cm 6-ring',
+}
+
+_PIN_PROGRAMS = {
+    'joad': {'short': 'JOAD',
+             'full':  'USA Archery JOAD (Junior Olympic Archery Development)'},
+    'aap':  {'short': 'Adult Achievement',
+             'full':  'USA Archery Adult Achievement Program'},
+}
+_PIN_ENVIRONMENTS = {
+    'indoor':  {'arrows': 30, 'arrows_per_end': 3, 'label': 'Indoor — 30 arrows'},
+    'outdoor': {'arrows': 36, 'arrows_per_end': 3, 'label': 'Outdoor — 36 arrows'},
+}
+_PIN_EQUIPMENT = {
+    'barebow':  {'short': 'Barebow', 'label': 'Barebow / Basic Compound'},
+    'recurve':  {'short': 'Recurve', 'label': 'Recurve / Para Recurve Open'},
+    'compound': {'short': 'Compound',
+                 'label': 'Compound / Para Compound Open / W1 / Fixed Pins'},
+}
+
+# Per (program, environment, equipment): each pin's qualifying rows as
+# (distance_m, face_key, min_score). A pin with two/three rows can be
+# earned at any one of those distance/target setups. Compound indoor uses
+# inner-10 scoring (the wa_40_compound face: only the X-ring scores 10);
+# compound outdoor 6-ring uses the wa_80_6ring face. Verified row-by-row
+# against the four published matrix images.
+_PIN_SOURCE = {
+    ('joad', 'indoor', 'barebow'): {
+        'green':  [(9, 'wa_60', 40)],
+        'purple': [(9, 'wa_60', 75),  (18, 'wa_60', 30)],
+        'gray':   [(9, 'wa_60', 110), (18, 'wa_60', 50)],
+        'white':  [(9, 'wa_60', 145), (18, 'wa_60', 100)],
+        'black':  [(18, 'wa_60', 140)],
+        'blue':   [(18, 'wa_60', 185), (18, 'wa_40', 175)],
+        'red':    [(18, 'wa_60', 230), (18, 'wa_40', 220)],
+        'yellow': [(18, 'wa_60', 255), (18, 'wa_40', 240)],
+        'bronze': [(18, 'wa_60', 265), (18, 'wa_40', 250)],
+        'silver': [(18, 'wa_60', 275), (18, 'wa_40', 260)],
+        'gold':   [(18, 'wa_60', 280), (18, 'wa_40', 270)],
+    },
+    ('joad', 'indoor', 'recurve'): {
+        'green':  [(9, 'wa_60', 50)],
+        'purple': [(9, 'wa_60', 100), (18, 'wa_60', 30)],
+        'gray':   [(9, 'wa_60', 150), (18, 'wa_60', 50)],
+        'white':  [(9, 'wa_60', 200), (18, 'wa_60', 100)],
+        'black':  [(18, 'wa_60', 150)],
+        'blue':   [(18, 'wa_60', 200), (18, 'wa_40', 190)],
+        'red':    [(18, 'wa_60', 250), (18, 'wa_40', 240)],
+        'yellow': [(18, 'wa_60', 270), (18, 'wa_40', 260)],
+        'bronze': [(18, 'wa_60', 285), (18, 'wa_40', 280)],
+        'silver': [(18, 'wa_60', 290), (18, 'wa_40', 285)],
+        'gold':   [(18, 'wa_60', 295), (18, 'wa_40', 290)],
+    },
+    ('joad', 'indoor', 'compound'): {
+        'green':  [(9, 'wa_40_compound', 50)],
+        'purple': [(9, 'wa_40_compound', 100), (18, 'wa_40_compound', 30)],
+        'gray':   [(9, 'wa_40_compound', 150), (18, 'wa_40_compound', 50)],
+        'white':  [(9, 'wa_40_compound', 200), (18, 'wa_40_compound', 100)],
+        'black':  [(18, 'wa_40_compound', 150)],
+        'blue':   [(18, 'wa_40_compound', 200)],
+        'red':    [(18, 'wa_40_compound', 240)],
+        'yellow': [(18, 'wa_40_compound', 260)],
+        'bronze': [(18, 'wa_40_compound', 288)],
+        'silver': [(18, 'wa_40_compound', 292)],
+        'gold':   [(18, 'wa_40_compound', 295)],
+    },
+    ('joad', 'outdoor', 'barebow'): {
+        'green':  [(15, 'wa_122', 130)],
+        'purple': [(20, 'wa_122', 155)],
+        'gray':   [(25, 'wa_122', 180)],
+        'white':  [(30, 'wa_122', 205)],
+        'black':  [(30, 'wa_122', 225), (40, 'wa_122', 215)],
+        'blue':   [(30, 'wa_122', 245), (50, 'wa_122', 225)],
+        'red':    [(30, 'wa_122', 260), (50, 'wa_122', 240)],
+        'yellow': [(30, 'wa_122', 275), (50, 'wa_122', 250)],
+        'bronze': [(30, 'wa_122', 290), (50, 'wa_122', 270)],
+        'silver': [(30, 'wa_122', 300), (50, 'wa_122', 280)],
+        'gold':   [(30, 'wa_122', 310), (50, 'wa_122', 290)],
+    },
+    ('joad', 'outdoor', 'recurve'): {
+        'green':  [(15, 'wa_122', 155)],
+        'purple': [(20, 'wa_122', 180)],
+        'gray':   [(25, 'wa_122', 205)],
+        'white':  [(30, 'wa_122', 230)],
+        'black':  [(30, 'wa_122', 245), (40, 'wa_122', 240)],
+        'blue':   [(30, 'wa_122', 275), (40, 'wa_122', 250),
+                   (60, 'wa_122', 240), (70, 'wa_122', 240)],
+        'red':    [(30, 'wa_122', 300), (40, 'wa_122', 275),
+                   (60, 'wa_122', 275), (70, 'wa_122', 260)],
+        'yellow': [(30, 'wa_122', 315), (40, 'wa_122', 300),
+                   (60, 'wa_122', 290), (70, 'wa_122', 280)],
+        'bronze': [(30, 'wa_122', 335), (40, 'wa_122', 315),
+                   (60, 'wa_122', 310), (70, 'wa_122', 300)],
+        'silver': [(30, 'wa_122', 340), (40, 'wa_122', 325),
+                   (60, 'wa_122', 325), (70, 'wa_122', 310)],
+        'gold':   [(30, 'wa_122', 345), (40, 'wa_122', 335),
+                   (60, 'wa_122', 335), (70, 'wa_122', 320)],
+    },
+    ('joad', 'outdoor', 'compound'): {
+        'green':  [(15, 'wa_80', 180), (15, 'wa_122', 200)],
+        'purple': [(20, 'wa_80', 205), (20, 'wa_122', 220)],
+        'gray':   [(25, 'wa_80', 230), (25, 'wa_122', 240)],
+        'white':  [(25, 'wa_80', 230), (30, 'wa_80', 245), (30, 'wa_122', 260)],
+        'black':  [(25, 'wa_80', 260), (30, 'wa_80', 265),
+                   (40, 'wa_80', 250), (40, 'wa_122', 280)],
+        'blue':   [(30, 'wa_80_6ring', 285), (40, 'wa_80', 270),
+                   (50, 'wa_80_6ring', 235), (50, 'wa_122', 300)],
+        'red':    [(30, 'wa_80_6ring', 305), (40, 'wa_80_6ring', 295),
+                   (50, 'wa_80_6ring', 265)],
+        'yellow': [(30, 'wa_80_6ring', 320), (40, 'wa_80_6ring', 310),
+                   (50, 'wa_80_6ring', 300)],
+        'bronze': [(30, 'wa_80_6ring', 345), (40, 'wa_80_6ring', 335),
+                   (50, 'wa_80_6ring', 330)],
+        'silver': [(30, 'wa_80_6ring', 350), (40, 'wa_80_6ring', 345),
+                   (50, 'wa_80_6ring', 340)],
+        'gold':   [(30, 'wa_80_6ring', 355), (40, 'wa_80_6ring', 350),
+                   (50, 'wa_80_6ring', 345)],
+    },
+    ('aap', 'indoor', 'barebow'): {
+        'green':  [(18, 'wa_40', 70)],  'purple': [(18, 'wa_40', 100)],
+        'gray':   [(18, 'wa_40', 120)], 'white':  [(18, 'wa_40', 150)],
+        'black':  [(18, 'wa_40', 175)], 'blue':   [(18, 'wa_40', 200)],
+        'red':    [(18, 'wa_40', 225)], 'yellow': [(18, 'wa_40', 240)],
+        'bronze': [(18, 'wa_40', 250)], 'silver': [(18, 'wa_40', 260)],
+        'gold':   [(18, 'wa_40', 270)],
+    },
+    ('aap', 'indoor', 'recurve'): {
+        'green':  [(18, 'wa_40', 90)],  'purple': [(18, 'wa_40', 140)],
+        'gray':   [(18, 'wa_40', 190)], 'white':  [(18, 'wa_40', 210)],
+        'black':  [(18, 'wa_40', 230)], 'blue':   [(18, 'wa_40', 250)],
+        'red':    [(18, 'wa_40', 265)], 'yellow': [(18, 'wa_40', 270)],
+        'bronze': [(18, 'wa_40', 285)], 'silver': [(18, 'wa_40', 290)],
+        'gold':   [(18, 'wa_40', 295)],
+    },
+    ('aap', 'indoor', 'compound'): {
+        'green':  [(18, 'wa_40_compound', 125)], 'purple': [(18, 'wa_40_compound', 150)],
+        'gray':   [(18, 'wa_40_compound', 175)], 'white':  [(18, 'wa_40_compound', 200)],
+        'black':  [(18, 'wa_40_compound', 220)], 'blue':   [(18, 'wa_40_compound', 240)],
+        'red':    [(18, 'wa_40_compound', 260)], 'yellow': [(18, 'wa_40_compound', 270)],
+        'bronze': [(18, 'wa_40_compound', 280)], 'silver': [(18, 'wa_40_compound', 285)],
+        'gold':   [(18, 'wa_40_compound', 290)],
+    },
+    ('aap', 'outdoor', 'barebow'): {
+        'green':  [(30, 'wa_122', 160)],
+        'purple': [(30, 'wa_122', 170)],
+        'gray':   [(30, 'wa_122', 180)],
+        'white':  [(50, 'wa_122', 190)],
+        'black':  [(50, 'wa_122', 200)],
+        'blue':   [(50, 'wa_122', 230), (60, 'wa_122', 200)],
+        'red':    [(50, 'wa_122', 245), (60, 'wa_122', 210)],
+        'yellow': [(50, 'wa_122', 255), (60, 'wa_122', 220)],
+        'bronze': [(50, 'wa_122', 270), (60, 'wa_122', 230)],
+        'silver': [(50, 'wa_122', 280), (60, 'wa_122', 240)],
+        'gold':   [(50, 'wa_122', 285), (60, 'wa_122', 250)],
+    },
+    ('aap', 'outdoor', 'recurve'): {
+        'green':  [(30, 'wa_122', 185)],
+        'purple': [(30, 'wa_122', 235)],
+        'gray':   [(30, 'wa_122', 260)],
+        'white':  [(50, 'wa_122', 270)],
+        'black':  [(50, 'wa_122', 280)],
+        'blue':   [(60, 'wa_122', 280), (70, 'wa_122', 280)],
+        'red':    [(60, 'wa_122', 290), (70, 'wa_122', 290)],
+        'yellow': [(60, 'wa_122', 300), (70, 'wa_122', 300)],
+        'bronze': [(60, 'wa_122', 310), (70, 'wa_122', 310)],
+        'silver': [(60, 'wa_122', 315), (70, 'wa_122', 315)],
+        'gold':   [(60, 'wa_122', 320), (70, 'wa_122', 320)],
+    },
+    ('aap', 'outdoor', 'compound'): {
+        'green':  [(30, 'wa_80_6ring', 200), (30, 'wa_80', 215)],
+        'purple': [(30, 'wa_80_6ring', 225), (30, 'wa_80', 240)],
+        'gray':   [(30, 'wa_80_6ring', 250), (30, 'wa_80', 265)],
+        'white':  [(50, 'wa_80_6ring', 270), (50, 'wa_80', 280)],
+        'black':  [(50, 'wa_80_6ring', 280), (50, 'wa_80', 290)],
+        'blue':   [(50, 'wa_80_6ring', 295), (50, 'wa_80', 300)],
+        'red':    [(50, 'wa_80_6ring', 310), (50, 'wa_80', 315)],
+        'yellow': [(50, 'wa_80_6ring', 320), (50, 'wa_80', 325)],
+        'bronze': [(50, 'wa_80_6ring', 335)],
+        'silver': [(50, 'wa_80_6ring', 345)],
+        'gold':   [(50, 'wa_80_6ring', 350)],
+    },
+}
+
+
+def _pin_round_key(program, env, equipment, dist_m, face_key):
+    return f'pin_{program}_{env}_{equipment}_{int(dist_m)}m_{face_key}'
+
+
+# Populated by _build_pin_shoots(): round_key → pin metadata
+# ({program, env, equipment, distance_m, face_key, *_label, thresholds}).
+# thresholds is a list of (pin_id, min_score) sorted by ascending score.
+PIN_ROUND_META = {}
+# Nested structure the selector template renders: one entry per program,
+# each holding its environments, each holding its equipment groups, each
+# holding the selectable distance/target combos (→ concrete round_key).
+PIN_SHOOT_SELECTOR = []
+
+
+def _build_pin_shoots():
+    """Expand _PIN_SOURCE into concrete TOURNAMENT_ROUNDS entries plus the
+    PIN_ROUND_META lookup and PIN_SHOOT_SELECTOR tree. Idempotent."""
+    PIN_ROUND_META.clear()
+    PIN_SHOOT_SELECTOR.clear()
+    # program → env → equipment → list of combo dicts (preserve source order)
+    tree = {}
+    for (program, env, equipment), pins in _PIN_SOURCE.items():
+        env_def = _PIN_ENVIRONMENTS[env]
+        arrows = env_def['arrows']
+        ape = env_def['arrows_per_end']
+        # Invert pin → rows into (distance, face) combo → {pin: min_score}.
+        combos = {}        # (dist, face) → {pin_id: score}
+        combo_order = []   # preserve first-seen order for a stable UI
+        for pid, _name, _color in PIN_LEVELS:
+            for (dist_m, face_key, score) in pins.get(pid, []):
+                ckey = (dist_m, face_key)
+                if ckey not in combos:
+                    combos[ckey] = {}
+                    combo_order.append(ckey)
+                # Keep the easiest (lowest) qualifying score if a pin lists
+                # the same distance/target twice (defensive; shouldn't happen).
+                if pid not in combos[ckey] or score < combos[ckey][pid]:
+                    combos[ckey][pid] = score
+        group_combos = []
+        for (dist_m, face_key) in sorted(combo_order):
+            pin_scores = combos[(dist_m, face_key)]
+            thresholds = sorted(
+                ((pid, pin_scores[pid]) for pid in pin_scores),
+                key=lambda t: (t[1], PIN_ORDER[t[0]]))
+            face = TOURNAMENT_FACES[face_key]
+            max_per_arrow = max((pv for pv, _r, _c in face['zones']), default=10)
+            face_label = _PIN_FACE_LABEL.get(face_key, face.get('name', face_key))
+            rkey = _pin_round_key(program, env, equipment, dist_m, face_key)
+            prog = _PIN_PROGRAMS[program]
+            equip = _PIN_EQUIPMENT[equipment]
+            dist_label = f'{int(dist_m)}m'
+            name = (f"{prog['short']} Pin — {equip['short']} · "
+                    f"{dist_label} · {face_label}")
+            TOURNAMENT_ROUNDS[rkey] = {
+                'org':             'USA Archery',
+                'name':            name,
+                'face_key':        face_key,
+                'distance_m':      dist_m,
+                'arrows_per_end':  ape,
+                'ends':            arrows // ape,
+                'total_arrows':    arrows,
+                'max_score':       arrows * max_per_arrow,
+                'end_time_s':      0,
+                'equipment_class': equipment,
+                'description':     (
+                    f"{prog['full']} pin shoot — {arrows} arrows at "
+                    f"{dist_label} on the {face_label} face "
+                    f"({equip['label']}). Your score earns the highest "
+                    f"colour pin you qualify for."),
+                'segments':        None,
+                'pin_shoot':       True,
+            }
+            meta = {
+                'round_key':       rkey,
+                'program':         program,
+                'program_short':   prog['short'],
+                'program_full':    prog['full'],
+                'environment':     env,
+                'equipment':       equipment,
+                'equipment_label': equip['label'],
+                'distance_m':      dist_m,
+                'distance_label':  dist_label,
+                'face_key':        face_key,
+                'face_label':      face_label,
+                'arrows':          arrows,
+                'thresholds':      thresholds,
+            }
+            PIN_ROUND_META[rkey] = meta
+            group_combos.append({
+                'round_key':  rkey,
+                'label':      f'{dist_label} · {face_label}',
+            })
+        (tree.setdefault(program, {})
+             .setdefault(env, {})[equipment]) = group_combos
+
+    # Flatten the tree into the ordered list the template iterates.
+    for program in ('joad', 'aap'):
+        if program not in tree:
+            continue
+        prog = _PIN_PROGRAMS[program]
+        envs_out = []
+        for env in ('indoor', 'outdoor'):
+            if env not in tree[program]:
+                continue
+            groups_out = []
+            for equipment in ('barebow', 'recurve', 'compound'):
+                combos = tree[program][env].get(equipment)
+                if not combos:
+                    continue
+                groups_out.append({
+                    'equipment':       equipment,
+                    'equipment_label': _PIN_EQUIPMENT[equipment]['label'],
+                    'combos':          combos,
+                })
+            envs_out.append({
+                'environment': env,
+                'label':       _PIN_ENVIRONMENTS[env]['label'],
+                'groups':      groups_out,
+            })
+        PIN_SHOOT_SELECTOR.append({
+            'program':       program,
+            'program_short': prog['short'],
+            'program_full':  prog['full'],
+            'environments':  envs_out,
+        })
+
+
+_build_pin_shoots()
+
+
+def _pin_shoot_result(round_key, total_score):
+    """For a completed pin-shoot round, return the earned pin (highest
+    colour met), the next pin up, and the full threshold ladder. Returns
+    None for non-pin rounds or a missing score."""
+    meta = PIN_ROUND_META.get(round_key)
+    if not meta or total_score is None:
+        return None
+    thresholds = meta['thresholds']
+    earned_pid = None
+    next_entry = None
+    for (pid, score) in thresholds:
+        if total_score >= score:
+            # Keep the highest-ranked pin among those met (thresholds are
+            # score-then-rank ordered, so a later met entry always ranks
+            # at least as high).
+            if earned_pid is None or PIN_ORDER[pid] > PIN_ORDER[earned_pid]:
+                earned_pid = pid
+        elif next_entry is None:
+            next_entry = {'pin': _PIN_DISPLAY[pid], 'score': score,
+                          'needed': score - total_score}
+    return {
+        'earned':          _PIN_DISPLAY[earned_pid] if earned_pid else None,
+        'next':            next_entry,
+        'program_full':    meta['program_full'],
+        'program_short':   meta['program_short'],
+        'equipment_label': meta['equipment_label'],
+        'distance_label':  meta['distance_label'],
+        'face_label':      meta['face_label'],
+        'ladder':          [
+            {'pin': _PIN_DISPLAY[pid], 'score': score,
+             'met': total_score >= score}
+            for (pid, score) in thresholds
+        ],
+    }
+
+
+def _is_pin_shoot_round(round_key):
+    return round_key in PIN_ROUND_META
+
+
 def _tournament_round_def(round_key):
     return TOURNAMENT_ROUNDS.get(round_key)
 
@@ -1403,11 +1803,14 @@ def _round_bowstyle(round_def):
 
 
 def _session_handicap_awards(round_key, total_score, session_tags=None):
-    """Return ``{'handicap': int|None, 'awards': [...]}`` for a finished round."""
+    """Return ``{'handicap': int|None, 'awards': [...], 'pin': {...}|None}``
+    for a finished round. ``pin`` is the earned-pin summary for USA Archery
+    pin shoots (None for every other round)."""
     hc_val = _session_handicap(round_key, total_score)
     category = _archer_category(session_tags)
     awards = classifications.resolve_awards(round_key, total_score, hc_val, category)
-    return {'handicap': hc_val, 'awards': awards}
+    return {'handicap': hc_val, 'awards': awards,
+            'pin': _pin_shoot_result(round_key, total_score)}
 
 
 def _segment_for_shot(segments, shot_index):
@@ -6589,9 +6992,14 @@ def tournament():
         session['tournament_round_key'] = active_round_key
 
     if request.method == 'GET' and active_round_key is None:
-        # Round selector page. Group by org for the UI.
+        # Round selector page. Group by org for the UI. Pin shoots are
+        # excluded here and rendered from their own grouped selector
+        # (PIN_SHOOT_SELECTOR) so the many distance/target variants fold
+        # behind a per-bowtype dropdown instead of flooding the card list.
         by_org = {}
         for key, rd in TOURNAMENT_ROUNDS.items():
+            if rd.get('pin_shoot'):
+                continue
             is_course = bool(rd.get('course'))
             is_multi  = bool(rd.get('segments'))
             by_org.setdefault(rd['org'], []).append({
@@ -6611,6 +7019,8 @@ def tournament():
             'tournament.html',
             view='selector',
             rounds_by_org=by_org,
+            pin_shoots=PIN_SHOOT_SELECTOR,
+            pin_levels=PIN_LEVELS,
         )
 
     # From here on we expect a round_key. POSTs use the cookie's cached
@@ -7900,6 +8310,11 @@ def _participant_scorecard(user_id, session_id, round_def, round_key=None,
         info = _session_handicap_awards(round_key, progress['total_score'])
         handicap = info['handicap']
         awards = info['awards']
+    # The earned pin IS the point of recording a pin shoot, so surface it
+    # for both real and practice scorecards once the round is complete.
+    pin = None
+    if round_key and progress.get('is_complete'):
+        pin = _pin_shoot_result(round_key, progress['total_score'])
     return {
         'total_score': progress['total_score'],
         'x_count':     progress['x_count'],
@@ -7908,6 +8323,7 @@ def _participant_scorecard(user_id, session_id, round_def, round_key=None,
         'ends':        ends_out,
         'handicap':    handicap,
         'awards':      awards,
+        'pin':         pin,
     }
 
 

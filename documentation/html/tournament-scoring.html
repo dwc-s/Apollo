@@ -310,6 +310,35 @@ are <code>/tournament/match</code> (setup form, collects archer names + emails) 
   points wins, and a 5–5 tie is flagged for a single-arrow shoot-off
   (WA 12.1.4.1).</li>
 </ul>
+<h2 id="usa-archery-pin-shoots">USA Archery pin shoots</h2>
+<p>The selector's <strong>USA Archery — Pin shoots</strong> section records achievement-program
+pin shoots for both <strong>JOAD</strong> (Junior Olympic Archery Development) and the
+<strong>Adult Achievement Program</strong>. A pin shoot is a fixed 30-arrow (indoor) or
+36-arrow (outdoor) round shot at a chosen distance and target face; the
+resulting score earns the highest-coloured pin whose published threshold the
+archer meets. Pins are always referred to by <strong>colour</strong> — in ascending order:
+green, purple, gray, white, black, blue, red, yellow, then the "Olympian"
+medallion pins bronze, silver, and gold.</p>
+<ul>
+<li><strong>Picking a shoot.</strong> Each program × environment × bow type (Barebow/Basic
+  Compound, Recurve/Para Recurve Open, Compound/Para Compound/W1/Fixed Pins)
+  is one card. The distance + target dropdown lists exactly the
+  distance/face combinations the matrix defines for that bow type — e.g. JOAD
+  indoor recurve offers 9m·60cm, 18m·60cm and 18m·40cm.</li>
+<li><strong>Scoring.</strong> Each combination is an ordinary fixed round under the hood, so
+  it scores through the same live-canvas, scoresheet, and practice-scorecard
+  paths as any other round. Compound indoor uses inner-10 scoring (only the
+  X-ring scores 10, via the 40cm compound face); compound outdoor 6-ring
+  shoots use the 80cm 6-ring face.</li>
+<li><strong>The earned pin.</strong> When the round completes (live shoot, scoresheet, or
+  practice scorecard) Apollo shows the colour pin earned plus how many points
+  remain to the next pin up. Pin requirements are transcribed from the USA
+  Archery JOAD / Adult Achievement scoring matrices and live in
+  <code>_PIN_SOURCE</code> in <code>apollo.py</code>; <code>_pin_shoot_result</code> resolves a score to a pin.</li>
+<li><strong>Age class is not enforced.</strong> At the bronze/silver/gold levels the archer
+  is expected to shoot the distance/target for their age class — Apollo
+  records whatever distance/target you pick but does not check age eligibility.</li>
+</ul>
 <h2 id="what-apollos-tournament-mode-does-not-do">What Apollo's tournament mode does NOT do</h2>
 <p>By design, tournament mode is a personal-tracking layer over /sesh —
 not a sanctioned-event tool. It deliberately leaves out:</p>

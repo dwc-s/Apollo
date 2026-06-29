@@ -188,6 +188,36 @@ are `/tournament/match` (setup form, collects archer names + emails) and
   points wins, and a 5–5 tie is flagged for a single-arrow shoot-off
   (WA 12.1.4.1).
 
+## USA Archery pin shoots
+
+The selector's **USA Archery — Pin shoots** section records achievement-program
+pin shoots for both **JOAD** (Junior Olympic Archery Development) and the
+**Adult Achievement Program**. A pin shoot is a fixed 30-arrow (indoor) or
+36-arrow (outdoor) round shot at a chosen distance and target face; the
+resulting score earns the highest-coloured pin whose published threshold the
+archer meets. Pins are always referred to by **colour** — in ascending order:
+green, purple, gray, white, black, blue, red, yellow, then the "Olympian"
+medallion pins bronze, silver, and gold.
+
+- **Picking a shoot.** Each program × environment × bow type (Barebow/Basic
+  Compound, Recurve/Para Recurve Open, Compound/Para Compound/W1/Fixed Pins)
+  is one card. The distance + target dropdown lists exactly the
+  distance/face combinations the matrix defines for that bow type — e.g. JOAD
+  indoor recurve offers 9m·60cm, 18m·60cm and 18m·40cm.
+- **Scoring.** Each combination is an ordinary fixed round under the hood, so
+  it scores through the same live-canvas, scoresheet, and practice-scorecard
+  paths as any other round. Compound indoor uses inner-10 scoring (only the
+  X-ring scores 10, via the 40cm compound face); compound outdoor 6-ring
+  shoots use the 80cm 6-ring face.
+- **The earned pin.** When the round completes (live shoot, scoresheet, or
+  practice scorecard) Apollo shows the colour pin earned plus how many points
+  remain to the next pin up. Pin requirements are transcribed from the USA
+  Archery JOAD / Adult Achievement scoring matrices and live in
+  `_PIN_SOURCE` in `apollo.py`; `_pin_shoot_result` resolves a score to a pin.
+- **Age class is not enforced.** At the bronze/silver/gold levels the archer
+  is expected to shoot the distance/target for their age class — Apollo
+  records whatever distance/target you pick but does not check age eligibility.
+
 ## What Apollo's tournament mode does NOT do
 
 By design, tournament mode is a personal-tracking layer over /sesh —

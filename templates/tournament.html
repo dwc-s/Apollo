@@ -1,3 +1,33 @@
+{# Earned-pin summary for a completed USA Archery pin shoot. `pin` is the
+   dict from _pin_shoot_result(); `dark` styles it for the dark completion
+   banner (white text) vs. the light results page. #}
+{% macro pin_earned_banner(pin, dark=true) %}
+{% set txt = '#fff' if dark else '#1a3a5c' %}
+<div style="margin-top:8px;color:{{ txt }};">
+    {% if pin.earned %}
+    <span style="display:inline-flex;align-items:center;gap:8px;font-family:'Quantico',sans-serif;font-weight:700;">
+        <span style="display:inline-block;width:18px;height:18px;border-radius:50%;
+                     background:{{ pin.earned.color }};border:1px solid rgba(0,0,0,0.4);
+                     box-shadow:0 0 0 2px rgba(255,255,255,0.5);"></span>
+        Pin earned: {{ pin.earned.name }}
+    </span>
+    {% else %}
+    <span style="font-family:'Quantico',sans-serif;font-weight:700;">
+        No pin earned yet at this distance/target.
+    </span>
+    {% endif %}
+    {% if pin.next %}
+    <span style="font-size:0.82em;opacity:0.9;margin-left:8px;">
+        Next: {{ pin.next.pin.name }} at {{ pin.next.score }}
+        (need {{ pin.next.needed }} more)
+    </span>
+    {% endif %}
+    <div style="font-size:0.74em;opacity:0.85;margin-top:2px;">
+        {{ pin.program_short if pin.program_short else pin.program_full }} ·
+        {{ pin.equipment_label }} · {{ pin.distance_label }} · {{ pin.face_label }}
+    </div>
+</div>
+{% endmacro %}
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -197,6 +227,53 @@
             font-size: 0.95rem;
             color: #1a3a5c;
         }
+        /* Pin-shoot selector: program → environment → bow-type cards. */
+        .pin-program-header {
+            font-family: "Quantico", sans-serif;
+            font-weight: 700;
+            color: #1a3a5c;
+            font-size: 1.2rem;
+            max-width: 1100px;
+            margin: 22px auto 2px auto;
+        }
+        .pin-env-header {
+            font-family: "Quantico", sans-serif;
+            color: #1a3a5c;
+            font-size: 0.95rem;
+            opacity: 0.85;
+            max-width: 1100px;
+            margin: 8px auto 6px auto;
+        }
+        .round-card select {
+            font-family: "Quantico", sans-serif;
+            font-size: 0.85rem;
+            padding: 7px 8px;
+            border-radius: 6px;
+            border: 1px solid #757a9c;
+            width: 100%;
+            margin-bottom: 8px;
+            background: #fff;
+            color: #1a3a5c;
+        }
+        .pin-legend {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px 12px;
+            max-width: 1100px;
+            margin: 4px auto 4px auto;
+            font-family: "Quantico", sans-serif;
+            font-size: 0.78rem;
+            color: #1a3a5c;
+        }
+        .pin-dot {
+            display: inline-block;
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            border: 1px solid rgba(0,0,0,0.35);
+            vertical-align: -1px;
+            margin-right: 4px;
+        }
     </style>
     {% endif %}
     <script>
@@ -321,6 +398,58 @@
 </div>
 {% endfor %}
 
+{% if pin_shoots %}
+<div class="org-header" style="margin-top:28px;">USA Archery — Pin shoots</div>
+<p class="selector-intro" style="margin-bottom:8px;">
+    Achievement-program pin shoots. Pick your distance and target face for the
+    program and bow type, then shoot the round (or enter a paper scorecard).
+    Your score earns the highest-colour pin you qualify for — the earned pin is
+    shown when the round completes. Requirements follow the USA Archery
+    JOAD / Adult Achievement scoring matrices.
+</p>
+<div class="pin-legend">
+    {% for pid, pname, pcolor in pin_levels %}
+    <span><span class="pin-dot" style="background:{{ pcolor }};"></span>{{ pname }}</span>
+    {% endfor %}
+</div>
+{% for prog in pin_shoots %}
+<div class="pin-program-header" title="{{ prog.program_full }}">{{ prog.program_full }}</div>
+{% for env in prog.environments %}
+<div class="pin-env-header">{{ env.label }}</div>
+<div class="round-grid">
+    {% for g in env.groups %}
+    <div class="round-card">
+        <h4>{{ g.equipment_label }}</h4>
+        <form method="POST" class="round-start-form">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <label style="display:block;font-family:'Quantico',sans-serif;font-size:0.8rem;margin-bottom:4px;">
+                Distance &amp; target:
+            </label>
+            <select name="round_key" required>
+                {% for c in g.combos %}
+                <option value="{{ c.round_key }}">{{ c.label }}</option>
+                {% endfor %}
+            </select>
+            <button type="submit" formaction="/tournament/start"
+                    title="Shoot the pin round on this device — tap the target after every arrow.">
+                Shoot pin round
+            </button>
+            <button type="submit" formaction="/tournament/score_sheet/setup"
+                    title="Already shot it? Type each arrow's ring number from your paper scorecard to record the result.">
+                Enter scoresheet
+            </button>
+            <button type="submit" formaction="/tournament/practice_scorecard/setup"
+                    title="Log a practice attempt — type ring numbers with flexible end sizes.">
+                Enter practice scorecard
+            </button>
+        </form>
+    </div>
+    {% endfor %}
+</div>
+{% endfor %}
+{% endfor %}
+{% endif %}
+
 {% endif %}
 
 {% if view == 'shoot' %}
@@ -416,6 +545,9 @@
     · <strong title="The Archery GB 2023 handicap implied by this single round's score — a per-round figure, not a running or cumulative handicap, and not affected by practice scorecards. Lower is better.">Handicap {{ handicap_info.handicap }}</strong>
     {% endif %}
     <a href="/end_session" data-no-warn="1" style="color:#fff;text-decoration:underline;">Finalize and view stats →</a>
+    {% if handicap_info and handicap_info.pin %}
+    {{ pin_earned_banner(handicap_info.pin) }}
+    {% endif %}
     {% if handicap_info and handicap_info.awards %}
     <div style="margin-top:6px;display:flex;flex-wrap:wrap;gap:6px;align-items:center;">
         {% for a in handicap_info.awards %}
@@ -2393,6 +2525,9 @@ applyUnits();
             {% endif %}
         </div>
     </div>
+    {% if r.scorecard.pin %}
+    {{ pin_earned_banner(r.scorecard.pin, dark=false) }}
+    {% endif %}
     {% if r.scorecard.awards %}
     <div style="margin-top:10px;display:flex;flex-wrap:wrap;gap:6px;align-items:center;">
         {% for a in r.scorecard.awards %}
