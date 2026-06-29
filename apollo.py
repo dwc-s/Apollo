@@ -1539,29 +1539,57 @@ def _build_pin_shoots():
 _build_pin_shoots()
 
 
-def _pin_shoot_result(round_key, total_score):
-    """For a completed pin-shoot round, return the earned pin (highest
-    colour met), the next pin up, and the full threshold ladder. Returns
-    None for non-pin rounds or a missing score."""
+def _pin_shoot_result(round_key, total_score, prev_pin=None):
+    """For a completed pin-shoot round, return the earned pin, the next pin
+    up, and the full threshold ladder. Returns None for non-pin rounds or a
+    missing score.
+
+    ``prev_pin`` is the optional "advance one step at a time" override the
+    archer supplies for the program:
+      * ``None``     — no cap; award the highest colour the score met.
+      * ``'none'``   — the archer has no pins yet; cap the award to the
+                       first/lowest colour (PIN_ORDER 0).
+      * a pin id     — cap the award to one step above that colour.
+    USA Archery achievement pins are earned one colour at a time, so a high
+    score can't skip straight to gold when an override is given."""
     meta = PIN_ROUND_META.get(round_key)
     if not meta or total_score is None:
         return None
     thresholds = meta['thresholds']
-    earned_pid = None
+
+    # Translate the override into the highest PIN_ORDER the archer may earn.
+    max_order = None
+    if prev_pin == 'none':
+        max_order = 0
+    elif prev_pin in PIN_ORDER:
+        max_order = PIN_ORDER[prev_pin] + 1
+
+    earned_pid = None          # highest colour actually awarded (post-cap)
+    raw_pid = None             # highest colour the raw score met (pre-cap)
     next_entry = None
     for (pid, score) in thresholds:
         if total_score >= score:
             # Keep the highest-ranked pin among those met (thresholds are
             # score-then-rank ordered, so a later met entry always ranks
             # at least as high).
-            if earned_pid is None or PIN_ORDER[pid] > PIN_ORDER[earned_pid]:
-                earned_pid = pid
-        elif next_entry is None:
+            if raw_pid is None or PIN_ORDER[pid] > PIN_ORDER[raw_pid]:
+                raw_pid = pid
+            if max_order is None or PIN_ORDER[pid] <= max_order:
+                if earned_pid is None or PIN_ORDER[pid] > PIN_ORDER[earned_pid]:
+                    earned_pid = pid
+    capped = bool(raw_pid and earned_pid and PIN_ORDER[raw_pid] > PIN_ORDER[earned_pid])
+    # The "next" pin is the first ladder entry ranked above what was awarded
+    # (so it stays consistent when the award was capped below the raw score).
+    earned_order = PIN_ORDER[earned_pid] if earned_pid else -1
+    for (pid, score) in thresholds:
+        if PIN_ORDER[pid] > earned_order:
             next_entry = {'pin': _PIN_DISPLAY[pid], 'score': score,
-                          'needed': score - total_score}
+                          'needed': max(score - total_score, 0)}
+            break
     return {
         'earned':          _PIN_DISPLAY[earned_pid] if earned_pid else None,
         'next':            next_entry,
+        'capped':          capped,
         'program_full':    meta['program_full'],
         'program_short':   meta['program_short'],
         'equipment_label': meta['equipment_label'],
@@ -1612,6 +1640,31 @@ def _round_key_from_tags(tags):
             key = t.split(':', 1)[1].strip()
             if key in TOURNAMENT_ROUNDS:
                 return key
+    return None
+
+
+def _prev_pin_from_tags(tags):
+    """Recover the optional ``pinprev:<pid>`` pin-shoot override from a
+    comma-separated session-tag string. Returns the stored pin id (or the
+    literal ``'none'`` for "no pins yet"), or None when no override was set."""
+    if not tags:
+        return None
+    for part in str(tags).split(','):
+        part = part.strip()
+        if part.startswith('pinprev:'):
+            return part.split(':', 1)[1].strip() or None
+    return None
+
+
+def _normalize_pin_prev(raw):
+    """Validate a pin-shoot "current pin" override from form input. Returns
+    ``'none'`` (archer has no pins), a valid pin id, or None (no override —
+    award the highest colour as before)."""
+    v = (raw or '').strip().lower()
+    if v == 'none':
+        return 'none'
+    if v in PIN_ORDER:
+        return v
     return None
 
 
@@ -1810,7 +1863,8 @@ def _session_handicap_awards(round_key, total_score, session_tags=None):
     category = _archer_category(session_tags)
     awards = classifications.resolve_awards(round_key, total_score, hc_val, category)
     return {'handicap': hc_val, 'awards': awards,
-            'pin': _pin_shoot_result(round_key, total_score)}
+            'pin': _pin_shoot_result(round_key, total_score,
+                                     _prev_pin_from_tags(session_tags))}
 
 
 def _segment_for_shot(segments, shot_index):
@@ -7124,6 +7178,11 @@ def tournament():
     _bs_override = session.get('tournament_bowstyle')
     if _bs_override:
         tournament_tag += f', bowstyle:{_bs_override}'
+    # Optional pin-shoot "current pin" override — carried on each shot so the
+    # earned-pin award can be capped to one step above it at completion.
+    _pin_prev = session.get('tournament_pin_prev')
+    if _pin_prev:
+        tournament_tag += f', pinprev:{_pin_prev}'
     if match_id and active_archer:
         tournament_tag += f', match:{match_id}, participant:{active_archer.get("name","")}'
         if active_archer.get('email'):
@@ -7447,6 +7506,13 @@ def tournament_start():
             session['tournament_bowstyle'] = bs
         else:
             session.pop('tournament_bowstyle', None)
+    # Optional pin-shoot override: cap the earned pin to one step above the
+    # archer's stated current pin (pins are earned one colour at a time).
+    pin_prev = _normalize_pin_prev(request.form.get('pin_prev'))
+    if pin_prev:
+        session['tournament_pin_prev'] = pin_prev
+    else:
+        session.pop('tournament_pin_prev', None)
     return redirect(url_for('tournament'))
 
 
@@ -7703,6 +7769,7 @@ def tournament_score_sheet_setup():
         owner_name=owner_name,
         owner_email=owner_email,
         today_iso=_app_now().strftime('%Y-%m-%d'),
+        pin_prev=_normalize_pin_prev(request.form.get('pin_prev')) or '',
         **_scorecard_equipment_ctx(user_id),
     )
 
@@ -7956,6 +8023,11 @@ def tournament_score_sheet_submit():
                 forced_bs = _round_bowstyle(round_def)
                 if forced_bs:
                     tag += f', bowstyle:{forced_bs}'
+                # Optional pin-shoot "current pin" override (solitary round,
+                # so the single form value applies to the one participant).
+                pin_prev = _normalize_pin_prev(request.form.get('pin_prev'))
+                if pin_prev:
+                    tag += f', pinprev:{pin_prev}'
                 # Competition-level meta — stored on every shot row so
                 # the results page and report generators can recover it
                 # without a new table. URL-encode the values so commas in
@@ -8074,6 +8146,7 @@ def tournament_practice_scorecard_setup():
         default_ends=int(primary['ends']),
         owner_name=owner_name,
         today_iso=_app_now().strftime('%Y-%m-%d'),
+        pin_prev=_normalize_pin_prev(request.form.get('pin_prev')) or '',
         **_scorecard_equipment_ctx(user_id),
     )
 
@@ -8131,6 +8204,9 @@ def tournament_practice_scorecard_submit():
     forced_bs = _round_bowstyle(round_def)
     if forced_bs:
         tag += f', bowstyle:{forced_bs}'
+    pin_prev = _normalize_pin_prev(request.form.get('pin_prev'))
+    if pin_prev:
+        tag += f', pinprev:{pin_prev}'
     if comp_name:
         tag += f', competition_name:{quote(comp_name, safe="")}'
     if comp_date:
@@ -8314,7 +8390,8 @@ def _participant_scorecard(user_id, session_id, round_def, round_key=None,
     # for both real and practice scorecards once the round is complete.
     pin = None
     if round_key and progress.get('is_complete'):
-        pin = _pin_shoot_result(round_key, progress['total_score'])
+        prev_pin = _prev_pin_from_tags(_last_session_tags(user_id, session_id))
+        pin = _pin_shoot_result(round_key, progress['total_score'], prev_pin)
     return {
         'total_score': progress['total_score'],
         'x_count':     progress['x_count'],
@@ -8817,6 +8894,10 @@ def previous_sessions():
                 session_data[session_id]['round_name'] = rdef.get('name')
                 session_data[session_id]['handicap'] = info['handicap']
                 session_data[session_id]['awards'] = info['awards']
+                # Earned pin for a USA Archery pin shoot (None otherwise) —
+                # surfaced as a badge so the history mirrors the completion
+                # banner. The override cap is already applied via tags0.
+                session_data[session_id]['pin'] = info['pin']
 
     # Dropdown options for the filter bar — derived from every shot the
     # user has ever recorded, so the dropdowns surface the full history
@@ -8963,7 +9044,7 @@ def delete_session(session_id):
         for k in ('session_id', 'quivers_completed', 'arrows_remaining',
                   'record_mode', 'target_id', 'current_quiver_size',
                   'tournament_round_key', 'tournament_segment_idx', 'tournament_bowstyle',
-                  'tournament_practice',
+                  'tournament_pin_prev', 'tournament_practice',
                   'match_id', 'match_archers', 'match_idx'):
             session.pop(k, None)
     return redirect(url_for('previous_sessions'))
@@ -9200,7 +9281,7 @@ def end_session():
                 for k in ('session_id', 'quivers_completed', 'arrows_remaining',
                           'record_mode', 'target_id', 'current_quiver_size',
                   'tournament_round_key', 'tournament_segment_idx', 'tournament_practice',
-                  'tournament_bowstyle',
+                  'tournament_bowstyle', 'tournament_pin_prev',
                   'match_id', 'match_archers', 'match_idx'):
                     session.pop(k, None)
                 return render_template('splash.html')
@@ -9316,7 +9397,7 @@ def end_session():
     for k in ('session_id', 'quivers_completed', 'arrows_remaining',
               'record_mode', 'target_id', 'current_quiver_size',
                   'tournament_round_key', 'tournament_segment_idx', 'tournament_practice',
-                  'tournament_bowstyle',
+                  'tournament_bowstyle', 'tournament_pin_prev',
                   'match_id', 'match_archers', 'match_idx'):
         session.pop(k, None)
     return render_template('end_session.html', stats=stats, session_id=None,
@@ -9396,7 +9477,7 @@ def end_session_silent():
     for k in ('session_id', 'quivers_completed', 'arrows_remaining',
               'record_mode', 'target_id', 'current_quiver_size',
                   'tournament_round_key', 'tournament_segment_idx', 'tournament_practice',
-                  'tournament_bowstyle',
+                  'tournament_bowstyle', 'tournament_pin_prev',
                   'match_id', 'match_archers', 'match_idx'):
         session.pop(k, None)
     return redirect(next_url)

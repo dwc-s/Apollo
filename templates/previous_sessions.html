@@ -499,6 +499,17 @@
               {% elif is_practice.v %}
                 <span class="practice-badge" title="Flagged as practice.">Practice</span>
               {% endif %}
+              {# Earned-pin badge for a USA Archery pin shoot — shown for both
+                 live and practice-scorecard entries (independent of the
+                 practice/competition branch above). #}
+              {% if data.pin is defined and data.pin and data.pin.earned %}
+                <span class="practice-badge" style="background:#2a2f45;display:inline-flex;align-items:center;gap:6px;"
+                      title="USA Archery pin earned for this round{% if data.pin.capped %} (capped to the next colour — pins advance one step at a time){% endif %}.">
+                    <span style="display:inline-block;width:11px;height:11px;border-radius:50%;
+                                 background:{{ data.pin.earned.color }};border:1px solid rgba(255,255,255,0.55);"></span>
+                    Pin: {{ data.pin.earned.name }}{% if data.pin.capped %} ▲{% endif %}
+                </span>
+              {% endif %}
               &nbsp;&nbsp;|&nbsp;&nbsp;
               {{ stats['arrows_shot'] }} arrows &nbsp;&mdash;&nbsp;
               {{ stats['hit_shots'] }} hit ({{ stats['percent_hit'] }}%),

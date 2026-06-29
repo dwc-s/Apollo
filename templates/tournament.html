@@ -19,8 +19,13 @@
     {% if pin.next %}
     <span style="font-size:0.82em;opacity:0.9;margin-left:8px;">
         Next: {{ pin.next.pin.name }} at {{ pin.next.score }}
-        (need {{ pin.next.needed }} more)
+        {% if pin.next.needed > 0 %}(need {{ pin.next.needed }} more){% else %}(earn it on your next shoot){% endif %}
     </span>
+    {% endif %}
+    {% if pin.capped %}
+    <div style="font-size:0.78em;opacity:0.9;margin-top:2px;">
+        Capped to the next pin — achievement pins advance one colour at a time.
+    </div>
     {% endif %}
     <div style="font-size:0.74em;opacity:0.85;margin-top:2px;">
         {{ pin.program_short if pin.program_short else pin.program_full }} ·
@@ -220,6 +225,32 @@
             max-width: 1100px;
             margin: 12px auto 6px auto;
         }
+        /* Collapsible org sections — same disclosure treatment as the
+           bow-style settings collapse, but sized for the org headers. */
+        .org-collapsible {
+            max-width: 1100px;
+            margin: 12px auto 16px auto;
+        }
+        .org-collapsible > summary {
+            cursor: pointer;
+            font-family: "Quantico", sans-serif;
+            font-weight: 700;
+            color: #1a3a5c;
+            font-size: 1.2rem;
+            list-style: none;
+            user-select: none;
+            padding: 4px 0;
+        }
+        .org-collapsible > summary::-webkit-details-marker { display: none; }
+        .org-collapsible > summary::before {
+            content: "▸";
+            display: inline-block;
+            margin-right: 8px;
+            color: #5a6c8a;
+            transition: transform 0.15s ease;
+        }
+        .org-collapsible[open] > summary::before { transform: rotate(90deg); }
+        .org-collapsible > .round-grid { margin-top: 8px; }
         .selector-intro {
             max-width: 1100px;
             margin: 0 auto 16px auto;
@@ -344,7 +375,8 @@
 </p>
 
 {% for org, rounds in rounds_by_org.items() %}
-<div class="org-header">{{ org }}</div>
+<details class="org-collapsible">
+<summary>{{ org }}</summary>
 <div class="round-grid">
     {% for r in rounds %}
     <div class="round-card">
@@ -396,10 +428,12 @@
     </div>
     {% endfor %}
 </div>
+</details>
 {% endfor %}
 
 {% if pin_shoots %}
-<div class="org-header" style="margin-top:28px;">USA Archery — Pin shoots</div>
+<details class="org-collapsible" style="margin-top:28px;">
+<summary>USA Archery — Pin shoots</summary>
 <p class="selector-intro" style="margin-bottom:8px;">
     Achievement-program pin shoots. Pick your distance and target face for the
     program and bow type, then shoot the round (or enter a paper scorecard).
@@ -430,6 +464,17 @@
                 <option value="{{ c.round_key }}">{{ c.label }}</option>
                 {% endfor %}
             </select>
+            <label style="display:block;font-family:'Quantico',sans-serif;font-size:0.8rem;margin-bottom:4px;"
+                   title="Pins are earned one colour at a time. Pick your current pin to cap this shoot's award to the next colour up. Leave on 'Highest earned' to award whatever your score qualifies for.">
+                Current pin (optional):
+            </label>
+            <select name="pin_prev">
+                <option value="">Highest earned (no cap)</option>
+                <option value="none">No pins yet</option>
+                {% for pid, pname, pcolor in pin_levels %}
+                <option value="{{ pid }}">Current: {{ pname }}</option>
+                {% endfor %}
+            </select>
             <button type="submit" formaction="/tournament/start"
                     title="Shoot the pin round on this device — tap the target after every arrow.">
                 Shoot pin round
@@ -448,6 +493,7 @@
 </div>
 {% endfor %}
 {% endfor %}
+</details>
 {% endif %}
 
 {% endif %}
@@ -1582,7 +1628,9 @@ applyUnits();
         </div>
     </div>
 
+    {% if not round_def.get('pin_shoot') %}
     <button type="button" id="add-archer" class="add-archer-btn">+ Add another archer</button>
+    {% endif %}
 
     <div style="margin:24px 0;text-align:center;">
         <button type="submit" class="submit-btn">Start match</button>
@@ -1608,6 +1656,7 @@ applyUnits();
     const LETTERS = 'ABCDEFGH';
     const list = document.getElementById('archers-list');
     const addBtn = document.getElementById('add-archer');
+    if (!addBtn) return;  // solitary round (e.g. pin shoot) — no add button
 
     function renumber() {
         list.querySelectorAll('.archer-card').forEach((card, i) => {
@@ -1801,14 +1850,20 @@ applyUnits();
 <p class="selector-intro" style="font-family:'Quantico',sans-serif;">
     Type each arrow's ring value into the grid. Use <code>X</code> for
     an inner-10 (or inner-X on Field), <code>M</code> for a miss, or
-    the printed ring number. Empty cells count as misses. Add a row
-    for each archer who shot this round — Apollo will email each
+    the printed ring number. Empty cells count as misses.
+    {% if not round_def.get('pin_shoot') %}
+    Add a row for each archer who shot this round — Apollo will email each
     competitor their own PDF / CSV / Excel scorecard when you submit.
+    {% else %}
+    A pin shoot is scored for one archer; your earned pin is shown when
+    you submit.
+    {% endif %}
 </p>
 
 <form action="/tournament/score_sheet" method="POST" id="score-sheet-form">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <input type="hidden" name="round_key" value="{{ round_key }}">
+    <input type="hidden" name="pin_prev" value="{{ pin_prev }}">
 
     <div class="score-card competition-meta-card" style="text-align:left;">
         <div class="meta-grid">
@@ -1855,7 +1910,9 @@ applyUnits();
         </div>
     </div>
 
+    {% if not round_def.get('pin_shoot') %}
     <button type="button" id="add-participant" class="add-archer-btn">+ Add another archer</button>
+    {% endif %}
 
     <p style="font-size:0.85rem;opacity:0.8;">
         Total arrows in this round: <strong>{{ total_arrows }}</strong>.
@@ -2116,7 +2173,8 @@ applyUnits();
             .addEventListener('input', renumberParticipants);
     }
 
-    document.getElementById('add-participant').addEventListener('click', addParticipant);
+    const addParticipantBtn = document.getElementById('add-participant');
+    if (addParticipantBtn) addParticipantBtn.addEventListener('click', addParticipant);
     bootstrapFirstCard();
     renumberParticipants();
 })();
@@ -2216,6 +2274,7 @@ applyUnits();
 <form action="/tournament/practice_scorecard" method="POST" id="practice-scorecard-form">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <input type="hidden" name="round_key" value="{{ round_key }}">
+    <input type="hidden" name="pin_prev" value="{{ pin_prev }}">
     <input type="hidden" name="end_count" id="end-count" value="0">
 
     <div class="score-card">
@@ -2559,7 +2618,7 @@ applyUnits();
 {% endfor %}
 
 <div style="margin-top:24px;text-align:center;">
-    {% if not is_practice %}
+    {% if not is_practice and not round_def.get('pin_shoot') %}
     <form action="/tournament/match/{{ match_id }}/email" method="POST" id="email-form">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         {% if email_enabled %}
@@ -2591,6 +2650,7 @@ applyUnits();
 .download-btn:hover { background:#2a5a8c; }
 </style>
 
+{% if not round_def.get('pin_shoot') %}
 <script>
 (function(){
     const f = document.getElementById('email-form');
@@ -2621,6 +2681,7 @@ applyUnits();
     });
 })();
 </script>
+{% endif %}
 {% endif %}
 
 
