@@ -1842,6 +1842,19 @@ applyUnits();
         cursor: pointer;
     }
     .submit-btn:hover { background: #2a5a8c; }
+    /* Narrow phones: the form is sized to the wide score grid (max-content),
+       which pushes the meta inputs off-screen and overflows the page.
+       Constrain the form, stack the label/field pairs, and let the wide
+       6-arrow score grid scroll horizontally inside its own card. */
+    @media (max-width: 480px) {
+        #score-sheet-form { max-width: 100%; padding: 0 8px; }
+        .meta-grid, .participant-fields { grid-template-columns: minmax(0, 1fr); row-gap: 4px; }
+        .meta-grid label, .participant-fields label { margin-top: 6px; }
+        .meta-grid input, .meta-grid textarea,
+        .participant-fields input, .participant-fields textarea { width: 100%; box-sizing: border-box; }
+        .score-card { display: block; padding: 14px 10px; overflow-x: auto; }
+        .score-card table.end-table { border-spacing: 6px 4px; }
+    }
 </style>
 
 <h2 class="quantico" style="text-align:center;color:#1a3a5c;">
@@ -2257,6 +2270,14 @@ applyUnits();
     .add-end-btn:hover, .submit-btn:hover { background: #2a5a8c; }
     .submit-btn { font-size: 1.05rem; padding: 10px 28px; }
     .grand-summary { margin-top: 12px; font-size: 1.05rem; text-align: right; color: #1a3a5c; }
+    /* Narrow phones: the score grid's generous border-spacing + card padding
+       pushes the table past the viewport. Tighten both so all columns
+       (incl. the running total and remove-end button) stay on screen. */
+    @media (max-width: 480px) {
+        .score-card { padding: 14px 10px; }
+        table.end-table { border-spacing: 4px 6px; }
+        table.end-table th, table.end-table td { padding: 4px 3px; }
+    }
 </style>
 
 <h2 class="quantico" style="text-align:center;color:#1a3a5c;">

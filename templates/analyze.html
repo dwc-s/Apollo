@@ -87,7 +87,13 @@
             .report-options { grid-template-columns: repeat(2, minmax(0, 1fr)); }
         }
         @media (max-width: 640px) {
-            .report-options { grid-template-columns: 1fr; }
+            /* minmax(0, 1fr) — not a bare 1fr — so the single track can't
+               grow to the block's min-content width. A bare 1fr is
+               minmax(auto, 1fr), whose auto floor includes each block's
+               padding + border (box-sizing: content-box), pushing the
+               track ~15px wider than the container and making every
+               report box overrun its panel on narrow phones. */
+            .report-options { grid-template-columns: minmax(0, 1fr); }
         }
         .report-option-block {
             background: rgba(255,255,255,0.35);
