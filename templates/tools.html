@@ -985,7 +985,8 @@
             const lat = pos.coords.latitude.toFixed(3), lon = pos.coords.longitude.toFixed(3);
             geoStatus.textContent = 'Fetching conditions…';
             fetch('https://api.open-meteo.com/v1/forecast?latitude=' + lat + '&longitude=' + lon +
-                  '&current=temperature_2m,surface_pressure,relative_humidity_2m')
+                  '&current=temperature_2m,surface_pressure,relative_humidity_2m',
+                  { cache: 'no-store' })  // never serve a stale cached reading
                 .then(r => r.ok ? r.json() : Promise.reject(r.status))
                 .then(d => {
                     const c = d && d.current;
@@ -1010,7 +1011,7 @@
                 })
                 .catch(() => { geoStatus.textContent = 'Weather lookup failed — enter conditions manually.'; });
         }, () => { geoStatus.textContent = 'Location denied — enter conditions manually.'; },
-        { timeout: 10000, maximumAge: 600000 });
+        { timeout: 10000, maximumAge: 0 });  // maximumAge:0 → fresh fix, not a cached location
     });
     // Initial recalcElev() runs from refreshUnits() above — the unit state it
     // closes over must be initialized first.

@@ -1,0 +1,132 @@
+{# One or more report cards. Rendered standalone by the /analyze/report/<key>
+   streaming endpoint (which passes `results` = one report's normalized dicts
+   plus the per-key filter maps for the download links). The /analyze page
+   itself renders spinner placeholders and swaps these fragments in via JS. #}
+{% macro render_panel(p, title) %}
+    <div class="panel-row" data-lg-gallery="true">
+        <div class="panel-text">
+            <div class="report-table-wrapper">
+                <table class="report-table">
+                    <thead>
+                        <tr>
+                            {% for c in p.columns %}<th>{{ c }}</th>{% endfor %}
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for row in p.rows %}
+                        <tr>
+                            {% for cell in row %}<td>{{ cell }}</td>{% endfor %}
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        <div class="panel-aside">
+            {% if p.svg_b64 %}
+            <a class="chart-thumb"
+               href="data:image/svg+xml;base64,{{ p.svg_b64 }}"
+               data-src="data:image/svg+xml;base64,{{ p.svg_b64 }}"
+               data-sub-html="<h4>{{ title }}</h4>">
+                <img src="data:image/svg+xml;base64,{{ p.svg_b64 }}"
+                     alt="{{ title }}">
+            </a>
+            <span class="thumb-zoom-hint">Click to zoom</span>
+            {% endif %}
+            {% if p.replay %}
+            <div class="replay-block">
+                <div class="shot-replay"
+                        data-shots='{{ p.replay.shots | tojson }}'
+                        data-record-mode="{{ p.replay.record_mode }}"
+                        data-face-render='{{ p.replay.face_render | tojson }}'
+                        data-target-image="{{ p.replay.target_image_url }}"
+                        data-target-width-mm="{{ p.replay.target_width_mm }}"></div>
+                <div class="replay-label">
+                    {% if p.replay.target_name %}{{ p.replay.target_name }}{% endif %}
+                </div>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+{% endmacro %}
+
+{% for r in results %}
+<section class="report-card" data-report-key="{{ r.key }}">
+    <h3>{{ r.title }}</h3>
+    {% if r.intro_html %}{{ r.intro_html }}{% endif %}
+    {% if r.empty %}
+        <p class="report-empty">{{ r.empty_reason or 'No data yet — shoot a session first.' }}</p>
+    {% elif r.panels %}
+        {% for p in r.panels %}
+            <h4 style="font-family:Quantico,sans-serif;color:#1a3a5c;margin:18px 0 8px 0;">
+                {{ p.title }}
+            </h4>
+            {{ render_panel(p, p.title) }}
+        {% endfor %}
+        {% set dr = date_ranges.get(r.key) or {} %}
+        {% set cats = categories.get(r.key) or [] %}
+        {% set tags = tag_selections.get(r.key) %}
+        {% set bows = bow_selections.get(r.key) %}
+        {% set arrows = arrow_selections.get(r.key) %}
+        {% set nums = numeric_options.get(r.key) or {} %}
+        {# Only one numeric option exists today (rolling_window). When
+           adding more, prefer precomputing the URL in the view than
+           growing this list — Jinja can't ** unpack into url_for. #}
+        <div class="download-row">
+            <a href="{{ url_for('analyze_export', report=r.key, format='csv',
+                                 date_from=dr.get('date_from') or none,
+                                 date_to=dr.get('date_to')   or none,
+                                 categories=cats or none,
+                                 tags=tags or none,
+                                 bows=bows or none,
+                                 arrows=arrows or none,
+                                 rolling_window=nums.get('rolling_window') or none) }}">
+                ⬇ Download CSV
+            </a>
+            <a href="{{ url_for('analyze_export', report=r.key, format='xlsx',
+                                 date_from=dr.get('date_from') or none,
+                                 date_to=dr.get('date_to')   or none,
+                                 categories=cats or none,
+                                 tags=tags or none,
+                                 bows=bows or none,
+                                 arrows=arrows or none,
+                                 rolling_window=nums.get('rolling_window') or none) }}">
+                ⬇ Download Excel
+            </a>
+        </div>
+    {% else %}
+        {{ render_panel(r, r.title) }}
+        {% set dr = date_ranges.get(r.key) or {} %}
+        {% set cats = categories.get(r.key) or [] %}
+        {% set tags = tag_selections.get(r.key) %}
+        {% set bows = bow_selections.get(r.key) %}
+        {% set arrows = arrow_selections.get(r.key) %}
+        {% set nums = numeric_options.get(r.key) or {} %}
+        {# Only one numeric option exists today (rolling_window). When
+           adding more, prefer precomputing the URL in the view than
+           growing this list — Jinja can't ** unpack into url_for. #}
+        <div class="download-row">
+            <a href="{{ url_for('analyze_export', report=r.key, format='csv',
+                                 date_from=dr.get('date_from') or none,
+                                 date_to=dr.get('date_to')   or none,
+                                 categories=cats or none,
+                                 tags=tags or none,
+                                 bows=bows or none,
+                                 arrows=arrows or none,
+                                 rolling_window=nums.get('rolling_window') or none) }}">
+                ⬇ Download CSV
+            </a>
+            <a href="{{ url_for('analyze_export', report=r.key, format='xlsx',
+                                 date_from=dr.get('date_from') or none,
+                                 date_to=dr.get('date_to')   or none,
+                                 categories=cats or none,
+                                 tags=tags or none,
+                                 bows=bows or none,
+                                 arrows=arrows or none,
+                                 rolling_window=nums.get('rolling_window') or none) }}">
+                ⬇ Download Excel
+            </a>
+        </div>
+    {% endif %}
+</section>
+{% endfor %}

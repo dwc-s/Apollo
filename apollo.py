@@ -20,6 +20,7 @@ import io
 import math
 import secrets
 import time
+import threading
 import zipfile
 from contextlib import closing
 from functools import wraps
@@ -16473,6 +16474,77 @@ def predict():
     return render_template('predict.html', **ctx)
 
 
+# Serializes matplotlib rendering within a process. pyplot keeps global state
+# (the "current" figure, etc.) that concurrent threads would corrupt, and the
+# streaming endpoint below can be hit several times at once. Separate worker
+# *processes* still render in parallel — only in-process threads are serialized,
+# which the GIL effectively does anyway.
+_MPL_RENDER_LOCK = threading.Lock()
+
+
+def _run_report(user_id, key, *, date_ranges=None, categories=None,
+                tag_selections=None, bow_selections=None,
+                arrow_selections=None):
+    """Build one analyze report → its normalized list of result-dicts.
+
+    Extracted from the old POST loop and now the single place a report runs;
+    the streaming endpoint (analyze_report) calls it once per HTTP request.
+    ``key`` must already be validated against REPORTS. Each selection map
+    mirrors a structure the /analyze form builds and is consulted only when
+    this report's spec opts into that picker. A report fn returns one
+    result-dict, a list of them (head-to-head splits per-kind), or None (not
+    enough data); all three normalize to a list here.
+    """
+    date_ranges = date_ranges or {}
+    categories = categories or {}
+    tag_selections = tag_selections or {}
+    bow_selections = bow_selections or {}
+    arrow_selections = arrow_selections or {}
+    spec = REPORTS[key]
+    kwargs = {}
+    if spec.get('accepts_date_range'):
+        dr = date_ranges.get(key) or {}
+        kwargs['date_from'] = dr.get('date_from') or None
+        kwargs['date_to'] = dr.get('date_to') or None
+    if spec.get('categories'):
+        kwargs['categories'] = categories.get(key)
+    if spec.get('tag_picker'):
+        # Submitted list is the source of truth — an empty list means "user
+        # picked no tags", not "use defaults".
+        kwargs['tag_filter'] = tag_selections.get(key, [])
+    if spec.get('equipment_picker'):
+        # Empty lists forwarded as-is — the report fn's contract is
+        # "empty = no filter, include every bow / arrow."
+        kwargs['bow_filter'] = bow_selections.get(key, [])
+        kwargs['arrow_filter'] = arrow_selections.get(key, [])
+    with _MPL_RENDER_LOCK:
+        out = spec['fn'](user_id, **kwargs)
+    if out is None:
+        return [{
+            'key': key,
+            'title': REPORTS[key]['label'],
+            'svg_b64': None,
+            'columns': [],
+            'rows': [],
+            'empty': True,
+        }]
+    # Reports may return a single result-dict OR a list of them. Normalize so
+    # each item gets the same post-processing.
+    results = []
+    items = out if isinstance(out, list) else [out]
+    for item in items:
+        if item.get('empty'):
+            # Report ran but found nothing worth rendering and supplied its own
+            # diagnostic message — pass it through with sensible defaults.
+            item.setdefault('title', REPORTS[key]['label'])
+            item.setdefault('key', key)
+            results.append(item)
+        else:
+            item['empty'] = False
+            results.append(item)
+    return results
+
+
 @app.route('/analyze', methods=['GET', 'POST'])
 @login_required
 def analyze():
@@ -16534,66 +16606,11 @@ def analyze():
             })
         if not selected:
             error = 'Pick at least one report to generate.'
-        else:
-            try:
-                for key in selected:
-                    spec = REPORTS[key]
-                    kwargs = {}
-                    if spec.get('accepts_date_range'):
-                        dr = date_ranges.get(key) or {}
-                        kwargs['date_from'] = dr.get('date_from') or None
-                        kwargs['date_to']   = dr.get('date_to') or None
-                    if spec.get('categories'):
-                        kwargs['categories'] = categories.get(key)
-                    if spec.get('tag_picker'):
-                        # Submitted list is the source of truth — even an
-                        # empty list means "user picked no tags" (no
-                        # default fill-in here; the template handles the
-                        # first-GET case by pre-checking the top-N).
-                        kwargs['tag_filter'] = tag_selections.get(key, [])
-                    if spec.get('equipment_picker'):
-                        # Empty submitted lists are forwarded as-is — the
-                        # report fn's contract is "empty = no filter,
-                        # include every bow / arrow," which matches the
-                        # "default to all shots ever" behavior the user
-                        # asked for on the quiver_spread report.
-                        kwargs['bow_filter'] = bow_selections.get(key, [])
-                        kwargs['arrow_filter'] = arrow_selections.get(key, [])
-                    out = spec['fn'](user_id, **kwargs)
-                    if out is None:
-                        results.append({
-                            'key': key,
-                            'title': REPORTS[key]['label'],
-                            'svg_b64': None,
-                            'columns': [],
-                            'rows': [],
-                            'empty': True,
-                        })
-                        continue
-                    # Reports may return a single result-dict OR a list of
-                    # them (head-to-head splits per-kind sections). Normalize
-                    # so each item gets the same post-processing.
-                    items = out if isinstance(out, list) else [out]
-                    for item in items:
-                        if item.get('empty'):
-                            # Report ran but found nothing worth rendering
-                            # and supplied its own diagnostic message — pass
-                            # it through with sensible defaults.
-                            item.setdefault('title', REPORTS[key]['label'])
-                            item.setdefault('key', key)
-                            results.append(item)
-                        else:
-                            item['empty'] = False
-                            results.append(item)
-            except ImportError as e:
-                print(f"❌ Analyze missing dependency: {e}")
-                error = ('matplotlib is not installed. Install it with '
-                         '`pip install matplotlib` and retry.')
-                results = []
-            except SQLAlchemyError as e:
-                print(f"❌ Analyze read error: {e}")
-                error = 'Database error while building report.'
-                results = []
+        # On success the reports are NOT built here. The template renders one
+        # spinner card per selected key and the browser streams each report in
+        # from /analyze/report/<key> (see _run_report + analyze_report). That
+        # keeps this POST snappy and lets reports render in parallel across
+        # workers instead of blocking on the whole batch here.
     else:
         # GET: replay the user's last analysis selections. These mirror the
         # six structures the POST branch builds, so the template pre-fills the
@@ -16654,8 +16671,57 @@ def analyze():
                            bow_inventory=bow_inventory,
                            arrow_inventory=arrow_inventory,
                            numeric_options={},
+                           report_labels={k: v['label']
+                                          for k, v in REPORTS.items()},
                            results=results,
                            error=error)
+
+
+@app.route('/analyze/report/<key>', methods=['GET'])
+@login_required
+def analyze_report(key):
+    """Render one analyze report as an HTML fragment for the streaming page.
+
+    /analyze POSTs the selection, saves it, and renders a spinner card per
+    report; the browser then fetches each report here and swaps in the
+    fragment. One report per request means a multi-worker host builds them in
+    parallel, and the archer sees results land one by one instead of waiting on
+    the whole batch. Filters are reloaded from the same saved prefs the GET
+    branch replays, so a fetched report matches what was just submitted.
+    """
+    user_id = current_user_id()
+    if key not in REPORTS:
+        return "Unknown report", 404
+    prefs = get_form_prefs(user_id, 'analyze') or {}
+    date_ranges = prefs.get('date_ranges', {}) or {}
+    categories = prefs.get('categories', {}) or {}
+    tag_selections = prefs.get('tag_selections', {}) or {}
+    bow_selections = prefs.get('bow_selections', {}) or {}
+    arrow_selections = prefs.get('arrow_selections', {}) or {}
+    try:
+        results = _run_report(
+            user_id, key,
+            date_ranges=date_ranges, categories=categories,
+            tag_selections=tag_selections, bow_selections=bow_selections,
+            arrow_selections=arrow_selections)
+    except ImportError as e:
+        print(f"❌ Analyze missing dependency: {e}")
+        results = [{'key': key, 'title': REPORTS[key]['label'], 'svg_b64': None,
+                    'columns': [], 'rows': [], 'empty': True,
+                    'empty_reason': 'matplotlib is not installed on the server.'}]
+    except SQLAlchemyError as e:
+        print(f"❌ Analyze read error: {e}")
+        results = [{'key': key, 'title': REPORTS[key]['label'], 'svg_b64': None,
+                    'columns': [], 'rows': [], 'empty': True,
+                    'empty_reason': 'Database error while building this report.'}]
+    return render_template('_report_card.html',
+                           results=results,
+                           date_ranges=date_ranges,
+                           categories=categories,
+                           tag_selections=tag_selections,
+                           bow_selections=bow_selections,
+                           arrow_selections=arrow_selections,
+                           numeric_options={})
 
 
 @app.route('/notes', methods=['GET', 'POST'])

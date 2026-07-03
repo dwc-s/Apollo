@@ -77,7 +77,10 @@
                 fetch('https://api.open-meteo.com/v1/forecast?latitude=' + lat +
                       '&longitude=' + lon +
                       '&current=temperature_2m,relative_humidity_2m,surface_pressure,' +
-                      'wind_speed_10m,wind_gusts_10m,wind_direction_10m')
+                      'wind_speed_10m,wind_gusts_10m,wind_direction_10m',
+                      // no-store: never let the browser serve a stale cached
+                      // reading for these coordinates on the first capture.
+                      { cache: 'no-store' })
                     .then(r => r.ok ? r.json() : Promise.reject(r.status))
                     .then(function (d) {
                         const c = d && d.current;
@@ -102,7 +105,13 @@
                     });
             }, function () {
                 status.textContent = 'Location denied — weather not captured.';
-            }, { timeout: 10000, maximumAge: 600000 });
+            }, {
+                // maximumAge: 0 forces a fresh GPS fix. A cached position (the
+                // old 10-min allowance) could be from the drive over, so the
+                // first capture of a session would fetch weather for the wrong
+                // place — the "stale until re-captured" bug.
+                timeout: 10000, maximumAge: 0,
+            });
         });
     });
 })();
