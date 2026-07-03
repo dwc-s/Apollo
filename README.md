@@ -22,10 +22,16 @@ python install.py
 2. Picking a flavor — `local` (SQLite) or `server` (MySQL)
 3. Installing the Python packages it needs into that env
 4. Collecting env vars (`SECRET_KEY`, `RESEND_API_KEY`, and — for
-   server — `DATABASE_URL`, `APOLLO_BASE_URL`, and the root account)
+   server — `DATABASE_URL`, `APOLLO_BASE_URL`, and the root account).
+   If you opt into practice reminders it **generates a VAPID keypair
+   for you** (run inside the target env, where `pywebpush` was just
+   installed) and mints a `CRON_SECRET` — no keys to paste by hand.
 5. Writing those env vars to `.env` next to `apollo.py` (chmod 600).
-   For the server flavor it also writes `wsgi_snippet.py`, a ready-to-
-   paste WSGI configuration file with your real values filled in.
+   If you say you're deploying under a WSGI server (PythonAnywhere,
+   gunicorn, mod_wsgi) it also writes `wsgi_snippet.py`, a ready-to-
+   paste WSGI configuration file with your real values filled in —
+   offered for either flavor, since the worker reads `os.environ`
+   rather than `.env`.
 
 Then to run locally:
 
@@ -115,7 +121,7 @@ the app.
 | `APOLLO_ROOT_PASSWORD` | Server bootstrap  | Used only when the root account doesn't exist yet. Safe to remove from `.env` after first boot. |
 | `RESEND_API_KEY`       | Optional          | Powers password-reset email. If unset, Apollo prints reset links to the server log. |
 | `RESEND_FROM`          | Optional          | Sender address. Must be on a Resend-verified domain to mail real users.   |
-| `VAPID_PUBLIC_KEY`     | Optional          | Web-Push public key (base64url). Both VAPID keys must be set for practice-reminder push to be offered; unset ⇒ the feature hides itself. |
+| `VAPID_PUBLIC_KEY`     | Optional          | Web-Push public key (base64url) — `install.py` generates the pair when you enable reminders. Both VAPID keys must be set for practice-reminder push to be offered; unset ⇒ the feature hides itself. |
 | `VAPID_PRIVATE_KEY`    | Optional          | Web-Push private key (base64url). Pair with `VAPID_PUBLIC_KEY`.            |
 | `VAPID_CONTACT`        | Optional          | `mailto:` the push services can reach you at (VAPID `sub` claim). Defaults to a placeholder. |
 | `CRON_SECRET`          | Optional          | Guards `/cron/reminders`. Unset ⇒ the endpoint returns 403 to everyone (fail-closed). Hit it daily: `GET /cron/reminders?key=<CRON_SECRET>`. |
@@ -421,8 +427,9 @@ single-round lookup).
   notification when you've gone quiet. Subscriptions are stored per device;
   `/cron/reminders` (guarded by `CRON_SECRET`, hit daily by an external
   scheduler such as a PythonAnywhere task) pushes anyone past their idle
-  threshold, once per lapse. Needs `VAPID_*` keys set — otherwise the feature
-  hides itself and the endpoint stays fail-closed.
+  threshold, once per lapse. Needs `VAPID_*` keys set — `install.py` generates
+  them (and the `CRON_SECRET`) when you enable reminders; without them the
+  feature hides itself and the endpoint stays fail-closed.
 
 ---
 
