@@ -446,13 +446,23 @@ def main():
             "  • Any existing data from a pre-multi-user install will be\n"
             "    claimed automatically by the very first account you create."
         )
-    if flavor == "server":
-        # On PythonAnywhere (and most WSGI hosts) the worker process won't
-        # read .env on its own — apollo.py reads from os.environ directly.
-        # The reliable fix is to set the vars inside the WSGI config file
-        # before the app is imported. Write a ready-to-paste snippet with
-        # the actual values filled in so the user doesn't have to retype
-        # secrets.
+    # A WSGI deployment (PythonAnywhere, gunicorn, mod_wsgi) reads env vars from
+    # os.environ at import time — the worker never sources .env. So this is
+    # offered independent of the SQLite/MySQL flavor (a venv on PythonAnywhere
+    # can run either), defaulting on for the server flavor. .env is still written
+    # above for console runs (`source .env && python apollo.py`); the two paths
+    # coexist.
+    wants_wsgi = yes_no(
+        "\nWill you run Apollo under a WSGI server (PythonAnywhere, gunicorn, "
+        "mod_wsgi)?\n"
+        "It reads env vars from os.environ, not .env, so I'll write a "
+        "paste-ready snippet with your values",
+        default=(flavor == "server"),
+    )
+    if wants_wsgi:
+        # apollo.py reads os.environ directly, so the vars must be set inside the
+        # WSGI config file before the app is imported. Write a ready-to-paste
+        # snippet with the actual values so nothing has to be retyped.
         wsgi_snippet = HERE / "wsgi_snippet.py"
         snippet_lines = [
             "# ── Paste this block at the top of your PythonAnywhere WSGI file ──\n",
@@ -476,15 +486,14 @@ def main():
             pass
 
         print(
-            "\n=== PythonAnywhere setup ===\n"
-            "The Web tab has no 'Environment Variables' UI — env vars must "
-            "be set inside the WSGI configuration file itself, because "
-            "apollo.py reads them from os.environ at import time.\n"
+            "\n=== WSGI setup ===\n"
+            "apollo.py reads env vars from os.environ at import time, so set them "
+            "in the WSGI file (not .env).\n"
             "\n"
             f"A ready-to-paste WSGI file has been written to:\n"
             f"  {wsgi_snippet}\n"
             "\n"
-            "On the PythonAnywhere Web tab:\n"
+            "PythonAnywhere → Web tab (it has no 'Environment Variables' UI):\n"
             "  1. Set 'Source code' to the project directory:\n"
             f"       {HERE}\n"
             "  2. Set 'Virtualenv' to the venv you just created (the path "
@@ -493,8 +502,11 @@ def main():
             f"contents with the contents of {wsgi_snippet.name}\n"
             "  4. Click the green Reload button.\n"
             "\n"
-            "Also make sure the venv you pointed the Web tab at has the same "
-            "packages installed (notably `resend`, if you configured email)."
+            "gunicorn / mod_wsgi / systemd: source the same values however that "
+            "host sets environment (the snippet is just os.environ assignments).\n"
+            "\n"
+            "Either way, make sure that venv has the same packages installed "
+            "(notably `pywebpush` for reminders and `resend` for email)."
         )
 
     if env_vars.get("VAPID_PUBLIC_KEY"):

@@ -20,9 +20,12 @@ cloning the repo. It walks you through four things:
   4. Collecting environment variables and writing them to a `.env`
      file next to `install.py`
 
-For the server flavor it also writes `wsgi_snippet.py` — a ready-
-to-paste WSGI configuration file with your real values filled in
-(see the PythonAnywhere section below).
+If you say you're deploying under a WSGI server (PythonAnywhere,
+gunicorn, mod_wsgi) it also writes `wsgi_snippet.py` — a ready-to-
+paste WSGI configuration file with your real values filled in. This
+is offered for either flavor (a venv on PythonAnywhere can run SQLite
+or MySQL) and defaults on for the server flavor. See the WSGI section
+below. `.env` is always written too, for console runs.
 
 Run it with:
 
@@ -83,10 +86,11 @@ Root account prompts  (server flavor only)
 3. Environment variables
 ----------------------------------------------------------------
 
-These all get written to `.env` (and, for server, also baked into
-`wsgi_snippet.py`). Apollo reads them via `os.environ` at startup
-— there is no dotenv loader, so they must already be set in the
-process environment by the time `apollo.py` is imported.
+These all get written to `.env` (and, if you opt into a WSGI
+deployment, also baked into `wsgi_snippet.py`). Apollo reads them
+via `os.environ` at startup — there is no dotenv loader, so they
+must already be set in the process environment by the time
+`apollo.py` is imported.
 
 SECRET_KEY                                            [required]
     Signs Flask session cookies and CSRF tokens. install.py
@@ -195,7 +199,7 @@ FLASK_DEBUG                                    [not set by installer]
         source <venv>/bin/activate
         python apollo.py
 
-wsgi_snippet.py            [server flavor only]
+wsgi_snippet.py            [written when you choose a WSGI deploy]
     A complete WSGI configuration file. Sets `os.environ[...]`
     for every env var, inserts the project directory onto
     `sys.path`, then imports the Flask app. Mode 0600.
