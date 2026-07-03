@@ -152,6 +152,49 @@ def venv_python(env_path):
     return env_path / "bin" / "python"
 
 
+# One-liner run *inside the target env* (where pywebpush → cryptography was just
+# installed) to mint a VAPID keypair: a P-256 keypair the browser subscribes
+# with (public) and the server signs pushes with (private), both base64url. The
+# private key is the raw 32-byte scalar — the form pywebpush's Vapid.from_string
+# reads straight from an env var.
+_VAPID_GEN_SNIPPET = (
+    "import base64;"
+    "from cryptography.hazmat.primitives.asymmetric import ec;"
+    "from cryptography.hazmat.primitives import serialization as s;"
+    "k=ec.generate_private_key(ec.SECP256R1());"
+    "pr=k.private_numbers().private_value.to_bytes(32,'big');"
+    "pu=k.public_key().public_bytes(s.Encoding.X962,s.PublicFormat.UncompressedPoint);"
+    "b=lambda x: base64.urlsafe_b64encode(x).rstrip(b'=').decode();"
+    "print('VAPID_PUBLIC='+b(pu));print('VAPID_PRIVATE='+b(pr))"
+)
+
+
+def generate_vapid_keys(env_python_cmd):
+    """Return (public, private) base64url VAPID keys, or (None, None) on failure.
+
+    Runs the keygen in the target environment's Python so it uses the
+    ``cryptography`` that was just installed there, not whatever interpreter is
+    running install.py.
+    """
+    if not env_python_cmd:
+        return None, None
+    try:
+        res = subprocess.run(
+            [*env_python_cmd, "-c", _VAPID_GEN_SNIPPET],
+            capture_output=True, text=True, check=True,
+        )
+    except (subprocess.CalledProcessError, OSError) as e:
+        print(f"  ⚠️  Couldn't generate VAPID keys automatically: {e}")
+        return None, None
+    pub = priv = None
+    for line in res.stdout.splitlines():
+        if line.startswith("VAPID_PUBLIC="):
+            pub = line.split("=", 1)[1].strip()
+        elif line.startswith("VAPID_PRIVATE="):
+            priv = line.split("=", 1)[1].strip()
+    return pub, priv
+
+
 def setup_conda(packages):
     env_name   = prompt("Conda env name", default="apollo")
     py_version = prompt("Python version", default="3.11")
@@ -177,6 +220,7 @@ def setup_conda(packages):
 
     return {
         "activate_hint": f"conda activate {env_name}",
+        "env_python": ["conda", "run", "-n", env_name, "python"],
     }
 
 
@@ -235,6 +279,7 @@ def setup_venv(packages):
         activate = env_path / "bin" / "activate"
     return {
         "activate_hint": f"source {activate}",
+        "env_python": [str(py)],
     }
 
 
@@ -263,6 +308,7 @@ def main():
         info = setup_conda(packages)
     else:
         info = setup_venv(packages)
+    env_python_cmd = info.get("env_python")
 
     # ── Env vars ──────────────────────────────────────────────────────────
     print("\n=== Environment variables ===")
@@ -294,32 +340,37 @@ def main():
             default=DEFAULT_RESEND_FROM,
         )
 
-    # PWA practice reminders use browser Web-Push (optional). VAPID keys
-    # authorize your server to the browsers' push services. Leave blank to skip
-    # — Apollo just won't offer reminders (everything else works). Generate a
-    # keypair with the py-vapid CLI (`vapid --gen`, ships with pywebpush) or:
-    #   python -c "import base64,ecdsa; sk=ecdsa.SigningKey.generate(curve=ecdsa.NIST256p); \
-    #     print(base64.urlsafe_b64encode(sk.to_string()).decode())"
+    # PWA practice reminders use browser Web-Push (optional). A VAPID keypair
+    # authorizes your server to the browsers' push services; we mint one for you
+    # (using the cryptography that pywebpush just pulled in). Everything else
+    # works without it. Keep the keys stable once set — rotating them logs out
+    # everyone who has already subscribed.
     print(
-        "\nPractice reminders use browser Web-Push (optional). Leave blank to "
-        "skip — Apollo simply won't offer reminders."
+        "\nPractice reminders use browser Web-Push (optional). Everything else "
+        "works without them."
     )
-    vapid_public = prompt("VAPID_PUBLIC_KEY (base64url)", default="", required=False)
-    if vapid_public:
-        env_vars["VAPID_PUBLIC_KEY"] = vapid_public
-        env_vars["VAPID_PRIVATE_KEY"] = prompt("VAPID_PRIVATE_KEY (base64url)")
-        env_vars["VAPID_CONTACT"] = prompt(
-            "VAPID_CONTACT (a mailto: the push service can reach you at)",
-            default="mailto:admin@example.com",
-        )
-    # CRON_SECRET guards /cron/reminders so the endpoint is never open. Generate
-    # one even when push is off (auto-filled if left blank). Hit the endpoint
-    # daily from a scheduler: GET /cron/reminders?key=<CRON_SECRET>.
-    cron_secret = prompt(
-        "CRON_SECRET (guards the daily reminder cron; blank = auto-generate)",
-        default="", required=False,
-    )
-    env_vars["CRON_SECRET"] = cron_secret or token_urlsafe(24)
+    if yes_no("Enable practice reminders? (generates a VAPID keypair now)",
+              default=False):
+        pub, priv = generate_vapid_keys(env_python_cmd)
+        if pub and priv:
+            env_vars["VAPID_PUBLIC_KEY"] = pub
+            env_vars["VAPID_PRIVATE_KEY"] = priv
+            contact = prompt(
+                "VAPID_CONTACT (a mailto: the push services can reach you at)",
+                default="mailto:admin@example.com",
+            )
+            env_vars["VAPID_CONTACT"] = (
+                contact if contact.startswith("mailto:") else "mailto:" + contact
+            )
+            print("  ✓ VAPID keypair generated. Users enable reminders per-device "
+                  "from their Account page.")
+        else:
+            print("  Couldn't generate keys — leaving reminders off. Re-run later, "
+                  "or add VAPID_* to .env by hand.")
+    # CRON_SECRET guards /cron/reminders so the endpoint is never open, even when
+    # push is off. Trigger it daily from a scheduler (e.g. a PythonAnywhere
+    # Scheduled Task):  curl "<APOLLO_BASE_URL>/cron/reminders?key=<CRON_SECRET>"
+    env_vars["CRON_SECRET"] = token_urlsafe(24)
 
     if flavor == "server":
         # FLASK_ENV=production turns off the Werkzeug debugger and makes
@@ -444,6 +495,16 @@ def main():
             "\n"
             "Also make sure the venv you pointed the Web tab at has the same "
             "packages installed (notably `resend`, if you configured email)."
+        )
+
+    if env_vars.get("VAPID_PUBLIC_KEY"):
+        base = env_vars.get("APOLLO_BASE_URL") or "http://127.0.0.1:5000"
+        print(
+            "\n=== Practice reminders ===\n"
+            "Web-push is configured. Trigger the reminder sweep once a day from a\n"
+            "scheduler (on PythonAnywhere: the Tasks tab → add a daily task):\n"
+            f'  curl -s "{base}/cron/reminders?key={env_vars["CRON_SECRET"]}"\n'
+            "Users opt in per-device from their Account page."
         )
 
 
