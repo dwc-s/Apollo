@@ -103,6 +103,31 @@
             <span class="form-label amo-label">Bow length (AMO, inches)</span>
             <input type="text" name="bow_amo" value="{{ bow_data[i][0]['amo'] }}" inputmode="decimal">
 
+            {% set m = bow_meta[bow_data[i][0]['rowid']] %}
+            <div style="margin-top:10px;padding-top:8px;border-top:1px dashed #6b80a8;">
+                <span class="form-label">String &amp; service</span>
+                <div style="font-weight:700;color:#1a3a5c;margin-bottom:4px;">
+                    {{ m.shots_total }} shots on this bow{% if m.on_string is not none %} · {{ m.on_string }} on current string{% endif %}
+                </div>
+                {% if m.status %}
+                <div style="display:inline-block;margin:0 0 6px;padding:2px 9px;border-radius:999px;font-size:0.75rem;font-weight:700;
+                    {% if m.status[0]=='overdue' %}background:#c0392b;color:#fff;{% elif m.status[0]=='soon' %}background:#e0a106;color:#1a3a5c;{% else %}background:#2e7d32;color:#fff;{% endif %}">
+                    {{ m.status[1] }}</div>
+                {% endif %}
+
+                <span class="form-label">String installed on</span>
+                <input type="date" name="string_installed_on" value="{{ bow_data[i][0]['string_installed_on'] or '' }}">
+
+                <span class="form-label">Shots already on string at install</span>
+                <input type="text" name="string_shot_baseline" value="{{ bow_data[i][0]['string_shot_baseline'] if bow_data[i][0]['string_shot_baseline'] is not none else 0 }}" inputmode="numeric" pattern="[0-9]*">
+
+                <span class="form-label">Replace string after (shots)</span>
+                <input type="text" name="string_service_shots" value="{{ bow_data[i][0]['string_service_shots'] or '' }}" inputmode="numeric" pattern="[0-9]*">
+
+                <span class="form-label">Setup note</span>
+                <input type="text" name="setup_note" value="{{ bow_data[i][0]['setup_note'] or '' }}">
+            </div>
+
         <div class="submit-row">
         <input type="submit" value="Delete bow" name="delete" class="button" formnovalidate>
           <input type="submit" value="Submit Edit">

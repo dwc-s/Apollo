@@ -33,7 +33,7 @@ ENV_FILE = HERE / ".env"
 # only pulled in for the server flavor since the local flavor talks to
 # SQLite via SQLAlchemy's bundled driver.
 BASE_PACKAGES = ["Flask", "Flask-WTF", "Pillow", "SQLAlchemy", "openpyxl",
-                 "resend", "matplotlib"]
+                 "resend", "matplotlib", "pywebpush"]
 SERVER_PACKAGES = ["PyMySQL"]
 
 # Resend's shared sandbox sender. Only delivers to verified test
@@ -293,6 +293,33 @@ def main():
             "for real recipients)",
             default=DEFAULT_RESEND_FROM,
         )
+
+    # PWA practice reminders use browser Web-Push (optional). VAPID keys
+    # authorize your server to the browsers' push services. Leave blank to skip
+    # — Apollo just won't offer reminders (everything else works). Generate a
+    # keypair with the py-vapid CLI (`vapid --gen`, ships with pywebpush) or:
+    #   python -c "import base64,ecdsa; sk=ecdsa.SigningKey.generate(curve=ecdsa.NIST256p); \
+    #     print(base64.urlsafe_b64encode(sk.to_string()).decode())"
+    print(
+        "\nPractice reminders use browser Web-Push (optional). Leave blank to "
+        "skip — Apollo simply won't offer reminders."
+    )
+    vapid_public = prompt("VAPID_PUBLIC_KEY (base64url)", default="", required=False)
+    if vapid_public:
+        env_vars["VAPID_PUBLIC_KEY"] = vapid_public
+        env_vars["VAPID_PRIVATE_KEY"] = prompt("VAPID_PRIVATE_KEY (base64url)")
+        env_vars["VAPID_CONTACT"] = prompt(
+            "VAPID_CONTACT (a mailto: the push service can reach you at)",
+            default="mailto:admin@example.com",
+        )
+    # CRON_SECRET guards /cron/reminders so the endpoint is never open. Generate
+    # one even when push is off (auto-filled if left blank). Hit the endpoint
+    # daily from a scheduler: GET /cron/reminders?key=<CRON_SECRET>.
+    cron_secret = prompt(
+        "CRON_SECRET (guards the daily reminder cron; blank = auto-generate)",
+        default="", required=False,
+    )
+    env_vars["CRON_SECRET"] = cron_secret or token_urlsafe(24)
 
     if flavor == "server":
         # FLASK_ENV=production turns off the Werkzeug debugger and makes

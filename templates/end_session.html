@@ -7,6 +7,7 @@
     <link rel="stylesheet" type="text/css" href="{{ url_for('static', filename='style.css') }}">
     <title>Apollo::end_session</title>
     <script defer src="{{ url_for('static', filename='apollo-nav.js') }}"></script>
+    <script defer src="{{ url_for('static', filename='apollo-card.js') }}"></script>
 </head>
 <body>
 <nav class="side-nav">
@@ -71,7 +72,9 @@
 {% if stats %}
 <!-- ── Results view ─────────────────────────────────────────────────────── -->
 <script>
-window.setTimeout(function () { window.location.href = '/'; }, 7000);
+// Stored so the "Share card" button can cancel it — otherwise the redirect
+// yanks the share sheet / download away mid-action.
+window.APOLLO_END_REDIRECT = window.setTimeout(function () { window.location.href = '/'; }, 7000);
 </script>
 <h1 class="title">{{ end_noun or 'Session' }} ended</h1>
 <div class="sessions-table">
@@ -109,6 +112,27 @@ window.setTimeout(function () { window.location.href = '/'; }, 7000);
         </tbody>
     </table>
 </div>
+
+<div style="text-align:center;margin:1rem 0;">
+    <button type="button" id="share-card-btn" class="button"
+            style="background:#4d6da6;color:#fff;padding:10px 22px;border:none;border-radius:6px;cursor:pointer;font-family:'Quantico',sans-serif;">
+        📸 Share card
+    </button>
+    <div id="share-card-status" style="font-size:0.85rem;color:#33507d;margin-top:6px;"></div>
+</div>
+<script>
+window.APOLLO_CARD = {
+    username: {{ (current_user.username if current_user else 'Archer') | tojson }},
+    endNoun: {{ (end_noun or 'Session') | tojson }},
+    date: {{ (stats.get("session_date") if stats.get else none) | tojson }},
+    length: {{ stats["pretty_session_length"] | tojson }},
+    arrows: {{ stats["arrows_shot"] | tojson }},
+    hit: {{ stats["hit_shots"] | tojson }},
+    hitPct: {{ stats["percent_hit"] | tojson }},
+    missed: {{ stats["missed_shots"] | tojson }},
+    missPct: {{ stats["percent_missed"] | tojson }}
+};
+</script>
 
 {% else %}
 <!-- ── Confirmation / end-session form (GET) ────────────────────────────── -->

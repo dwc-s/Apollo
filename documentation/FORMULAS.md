@@ -378,6 +378,31 @@ the figure is a personal tracking number, not a club-submitted one.
 - `resolve_awards` returns every award earned across the three schemes. NFAA is
   deferred — it's a relative multi-score scheme, not a single-round lookup.
 
+### 7.6 Goal projection — `_project_handicap`
+On the completed-round points (ascending by date, lower handicap = better) fit
+the same least-squares line as the trend report on ordinal days:
+`slope, intercept = polyfit(days_from_first, handicaps, 1)`, reported as
+`slope_per_year = slope · 365`. With a deadline `D`, the projected handicap is
+`intercept + slope · (D − first_date_in_days)`. Grading vs a target `H*`:
+- **achieved** — `latest ≤ H*`.
+- **no_trend** — only one round (no slope).
+- with a deadline: **on_track** if `projected ≤ H*`, else **behind**; the
+  required rate to hit the target from the latest round is
+  `((H* − latest) / days_left) · 365`.
+- with no deadline: **on_track** while the slope is improving (`< 0`), else **behind**.
+A classification goal resolves its class's threshold handicap (`agb_class_thresholds`)
+and projects against that. Volume goals compare arrows shot in the current
+week/month (from the shot calendar) to the target, paced by the fraction of the
+period elapsed.
+
+### 7.7 Performance vs conditions — `_report_conditions`
+Each hit whose session captured weather is normalized by target half-width (as
+in the other reports) and bucketed by **wind band** (calm `< 8`, light `8–19`,
+moderate `19–30`, strong `≥ 30` km/h — roughly Beaufort 0-2 / 3-4 / 5 / 6+) and
+by **temperature band** (`< 8`, `8–18`, `18–26`, `≥ 26 °C`). `_archery_stats`
+runs per bucket; MPI and R95 are reported as a percentage of the target
+half-width. Buckets below five hits are flagged as thin.
+
 ---
 
 *Generated and verified against the implementation for v0.71. When a formula

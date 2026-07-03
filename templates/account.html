@@ -38,7 +38,9 @@
             margin: 0 0 10px 0;
         }
     </style>
+    <meta name="csrf-token" content="{{ csrf_token() }}">
     <script defer src="{{ url_for('static', filename='apollo-nav.js') }}"></script>
+    <script defer src="{{ url_for('static', filename='apollo-push.js') }}"></script>
 </head>
 <body>
 <nav class="side-nav">
@@ -234,6 +236,30 @@
             </div>
         </div>
     </form>
+
+    <div class="form-panel" id="push-reminders">
+        <h4>Practice reminders</h4>
+        <p class="account-tz-note">
+            Opt in to a browser notification when you haven’t shot in a while.
+            Reminders are per-device — enable on each device you want nudged.
+        </p>
+        <div style="margin:8px 0;">
+            <button type="button" id="push-toggle-btn" class="button"
+                    style="background:#4d6da6;color:#fff;padding:9px 18px;border:none;border-radius:6px;cursor:pointer;font-family:'Quantico',sans-serif;">Turn on reminders</button>
+            <div id="push-status" style="font-size:0.85rem;color:#33507d;margin-top:6px;">Checking…</div>
+        </div>
+        <form action="/account" method="POST" autocomplete="off" style="margin-top:10px;">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <input type="hidden" name="action" value="change_reminders">
+            <span class="form-label">Remind me after this many idle days</span>
+            <input type="number" name="remind_after_days" min="1" max="60" step="1"
+                   value="{{ current_user.remind_after_days if current_user and current_user.remind_after_days else 4 }}"
+                   style="width:100px;">
+            <div class="submit-row">
+                <input type="submit" value="Save threshold">
+            </div>
+        </form>
+    </div>
 
     <form action="/delete_account" method="POST" autocomplete="off"
           onsubmit="return confirm('Permanently delete your account and ALL your data? This cannot be undone.');">

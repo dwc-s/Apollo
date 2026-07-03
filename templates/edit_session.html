@@ -187,6 +187,18 @@
              data-tag-placeholder="type a tag, then space"></div>
     </label>
 
+    <label>Weather — optional (°C · km/h · hPa · degrees · %)
+        {% if wx and wx.source %}<span style="text-transform:none;font-weight:400;color:#33507d;"> — logged {{ wx.source }}</span>{% endif %}
+    </label>
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:12px;">
+        <input type="number" step="any" name="wx_temp_c" placeholder="Temp °C" value="{% if wx and wx.temp_c is not none %}{{ wx.temp_c }}{% endif %}">
+        <input type="number" step="any" name="wx_wind_kmh" placeholder="Wind km/h" value="{% if wx and wx.wind_kmh is not none %}{{ wx.wind_kmh }}{% endif %}">
+        <input type="number" step="any" name="wx_gust_kmh" placeholder="Gust km/h" value="{% if wx and wx.gust_kmh is not none %}{{ wx.gust_kmh }}{% endif %}">
+        <input type="number" step="any" name="wx_wind_dir_deg" placeholder="Wind dir °" value="{% if wx and wx.wind_dir_deg is not none %}{{ wx.wind_dir_deg }}{% endif %}">
+        <input type="number" step="any" name="wx_humidity_pct" placeholder="Humidity %" value="{% if wx and wx.humidity_pct is not none %}{{ wx.humidity_pct }}{% endif %}">
+        <input type="number" step="any" name="wx_pressure_hpa" placeholder="Pressure hPa" value="{% if wx and wx.pressure_hpa is not none %}{{ wx.pressure_hpa }}{% endif %}">
+    </div>
+
     <h3 style="margin-top:1.4rem;font-family:'Quantico',sans-serif;">Shots ({{ shots|length }})</h3>
     <p style="font-size:0.78rem;margin:4px 0 8px;">
         Check <em>Delete</em> to remove a shot, or <em>Miss</em> to mark a recorded hit as a miss.

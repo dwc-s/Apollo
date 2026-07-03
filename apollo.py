@@ -2810,6 +2810,17 @@ users_table = Table('users', metadata,
     Column('gender', String(16)),
     Column('age_group', String(32)),
     Column('default_bowstyle', String(32)),
+    # Practice-streak reminders (PWA web-push). ``remind_enabled`` gates the
+    # push; ``remind_after_days`` is the idle threshold before a nudge;
+    # ``last_reminder_at`` de-nags so a single lapse is only pushed once.
+    # ``range_lat`` / ``range_lon`` optionally remember the archer's usual range
+    # so per-session weather capture can skip the geolocation prompt. All
+    # nullable / defaulted — every feature here is opt-in.
+    Column('remind_enabled', Integer, server_default=text('0')),
+    Column('remind_after_days', Integer, server_default=text('4')),
+    Column('last_reminder_at', DateTime),
+    Column('range_lat', Float),
+    Column('range_lon', Float),
 )
 
 apollo_table = Table('apollo', metadata,
@@ -2881,6 +2892,13 @@ arrows_table = Table('arrows', metadata,
     Column('nock_weight', String(64)),
     Column('tip', String(255)),
     Column('tip_weight', String(64)),
+    # Equipment lifecycle. ``set_size`` is how many shafts are in the set;
+    # ``in_service_on`` (ISO date string) is when the set entered service;
+    # ``retired`` flags a set pulled from rotation. Shots-on-set is COUNT()ed
+    # live from the shots table, so no running counter is stored here.
+    Column('set_size', Integer),
+    Column('in_service_on', String(32)),
+    Column('retired', Integer, server_default=text('0')),
 )
 
 bows_table = Table('bows', metadata,
@@ -2906,6 +2924,16 @@ bows_table = Table('bows', metadata,
     # release aid / let-off, recurve clicker / stabilizer, etc.). Schema lives
     # in BOWSTYLE_SETTINGS; nullable, empty for bows added before the field set.
     Column('style_settings', Text),
+    # String lifecycle. ``string_installed_on`` (ISO date string) dates the
+    # current string; ``string_shot_baseline`` is how many shots it already had
+    # at that date (0 for a brand-new string); ``string_service_shots`` is the
+    # replace-at threshold. Shots-on-string = baseline + shots logged with this
+    # bow since the install date; the "service due" badge compares that to the
+    # threshold. ``setup_note`` is a free-form tuning note.
+    Column('string_installed_on', String(32)),
+    Column('string_shot_baseline', Integer, server_default=text('0')),
+    Column('string_service_shots', Integer),
+    Column('setup_note', Text),
 )
 
 session_times_table = Table('session_times', metadata,
@@ -2915,6 +2943,19 @@ session_times_table = Table('session_times', metadata,
     Column('session_begin_time', DateTime),
     Column('session_end_time', DateTime),
     Column('manual_session_length_minutes', Float),
+    # Weather captured at (or manually entered for) the session, stored in
+    # canonical metric (°C, km/h, hPa, degrees, %). The /analyze conditions
+    # report buckets performance by wind / temperature band. ``wx_source`` is
+    # 'auto' (Open-Meteo at the range) or 'manual'. All nullable — sessions
+    # without weather simply don't appear in the conditions report.
+    Column('wx_captured_at', DateTime),
+    Column('wx_source', String(16)),
+    Column('wx_temp_c', Float),
+    Column('wx_wind_kmh', Float),
+    Column('wx_gust_kmh', Float),
+    Column('wx_wind_dir_deg', Float),
+    Column('wx_humidity_pct', Float),
+    Column('wx_pressure_hpa', Float),
 )
 
 # Targets are square. physical_size_mm = edge length of the printed face;
@@ -3022,6 +3063,79 @@ form_prefs_table = Table('form_prefs', metadata,
     Column('payload', Text),
     Column('updated_at', DateTime),
     UniqueConstraint('user_id', 'form_key', name='uq_form_prefs_user_key'),
+)
+
+
+# Per-user performance goals with an optional deadline. ``kind`` selects which
+# target columns matter:
+#   handicap        → target_handicap
+#   classification  → target_class_code (an AGB class code, resolved to its
+#                     handicap threshold for the on-track projection)
+#   round_score     → round_key + target_score
+#   volume          → volume_arrows + volume_period ('week' | 'month')
+# The category (bowstyle/gender/age_group) is snapshotted so a classification
+# goal keeps its meaning even if the archer later edits their profile.
+# ``status`` is active|achieved|archived; ``achieved_at`` stamps the first time
+# the goal was met.
+goals_table = Table('goals', metadata,
+    Column('id', Integer, primary_key=True, autoincrement=True),
+    Column('user_id', Integer, index=True, nullable=False),
+    Column('created_at', DateTime),
+    Column('kind', String(20), nullable=False),
+    Column('label', String(255)),
+    Column('target_handicap', Integer),
+    Column('target_class_code', String(32)),
+    Column('round_key', String(64)),
+    Column('target_score', Integer),
+    # accuracy / precision goals: target MPI or R95 as a percentage of the
+    # target's half-width (the same normalized unit the /analyze reports use).
+    Column('target_metric', Float),
+    Column('volume_arrows', Integer),
+    Column('volume_period', String(16)),
+    Column('deadline', DateTime),
+    Column('bowstyle', String(32)),
+    Column('gender', String(16)),
+    Column('age_group', String(32)),
+    Column('status', String(16), server_default=text("'active'")),
+    Column('achieved_at', DateTime),
+)
+
+# First-earned ledger for classifications / award pins so the records board and
+# dashboard can show a "NEW" flag and the date each milestone was first reached
+# without recomputing history. Upserted by _scan_achievements on round
+# completion and external-comp save. ``scheme`` is agb|wa|usaa; ``code`` is the
+# award code within that scheme; unique per (user, scheme, code).
+user_achievements_table = Table('user_achievements', metadata,
+    Column('id', Integer, primary_key=True, autoincrement=True),
+    Column('user_id', Integer, index=True, nullable=False),
+    Column('scheme', String(16), nullable=False),
+    Column('code', String(48), nullable=False),
+    Column('name', String(128)),
+    Column('round_key', String(64)),
+    Column('score', Integer),
+    Column('handicap', Integer),
+    Column('earned_at', DateTime),
+    UniqueConstraint('user_id', 'scheme', 'code',
+                     name='uq_user_achievements_user_scheme_code'),
+)
+
+# Web-push subscriptions for practice-streak reminders (PWA push). One row per
+# browser endpoint; ``p256dh`` and ``auth`` are the subscription's public
+# encryption keys. The endpoint URL can be long, so uniqueness is enforced on
+# its sha256 (``endpoint_hash``) — the same trick password_resets uses — since
+# MySQL can't put a UNIQUE on an unbounded TEXT column. A subscription the push
+# service reports as gone (404 / 410) is pruned by the sender.
+push_subscriptions_table = Table('push_subscriptions', metadata,
+    Column('id', Integer, primary_key=True, autoincrement=True),
+    Column('user_id', Integer, index=True, nullable=False),
+    Column('endpoint', Text, nullable=False),
+    Column('endpoint_hash', String(64), nullable=False),
+    Column('p256dh', String(255)),
+    Column('auth', String(255)),
+    Column('created_at', DateTime),
+    Column('last_ok', DateTime),
+    Column('last_error', Text),
+    UniqueConstraint('endpoint_hash', name='uq_push_subscriptions_endpoint_hash'),
 )
 
 
@@ -3192,7 +3306,8 @@ class CompatConnection:
 # single-user to multi-user. On a fresh DB metadata.create_all() handles
 # this; on an existing DB we ALTER TABLE ADD COLUMN at startup.
 _PER_USER_TABLES = ('apollo', 'arrows', 'bows', 'session_times', 'targets',
-                    'target_zones')
+                    'target_zones', 'goals',
+                    'user_achievements', 'push_subscriptions')
 
 
 def _ensure_user_id_columns():
@@ -3654,6 +3769,65 @@ def _ensure_style_settings_columns():
                 conn.execute(text(f"ALTER TABLE {tbl} ADD COLUMN {col_name} {col_decl}"))
 
 
+def _ensure_feature_columns():
+    """Add the v0.91 feature-batch columns to existing DBs (idempotent).
+
+    Groups the goals-reminder, weather, and equipment-lifecycle additions in a
+    single pass, following the same ADD-COLUMN-when-missing recipe as
+    _ensure_archer_profile_columns(). All columns are nullable or defaulted so
+    existing rows keep working untouched; the new *tables* (goals,
+    user_achievements, push_subscriptions) need no work here —
+    metadata.create_all() creates them.
+    """
+    insp = sa_inspect(engine)
+    tables = set(insp.get_table_names())
+    wanted = {
+        'users': [
+            ('remind_enabled',    "INTEGER DEFAULT 0"),
+            ('remind_after_days', "INTEGER DEFAULT 4"),
+            ('last_reminder_at',  "DATETIME"),
+            ('range_lat',         "FLOAT"),
+            ('range_lon',         "FLOAT"),
+        ],
+        'session_times': [
+            ('wx_captured_at',  "DATETIME"),
+            ('wx_source',       "VARCHAR(16)"),
+            ('wx_temp_c',       "FLOAT"),
+            ('wx_wind_kmh',     "FLOAT"),
+            ('wx_gust_kmh',     "FLOAT"),
+            ('wx_wind_dir_deg', "FLOAT"),
+            ('wx_humidity_pct', "FLOAT"),
+            ('wx_pressure_hpa', "FLOAT"),
+        ],
+        'bows': [
+            ('string_installed_on',  "VARCHAR(32)"),
+            ('string_shot_baseline', "INTEGER DEFAULT 0"),
+            ('string_service_shots', "INTEGER"),
+            ('setup_note',           "TEXT"),
+        ],
+        'arrows': [
+            ('set_size',      "INTEGER"),
+            ('in_service_on', "VARCHAR(32)"),
+            ('retired',       "INTEGER DEFAULT 0"),
+        ],
+        # goals is created fresh by create_all, but target_metric (accuracy /
+        # precision goals) was added after goals shipped, so back-fill it.
+        'goals': [
+            ('target_metric', "FLOAT"),
+        ],
+    }
+    for tbl, cols in wanted.items():
+        if tbl not in tables:
+            continue
+        existing = {c['name'] for c in insp.get_columns(tbl)}
+        for col_name, col_decl in cols:
+            if col_name in existing:
+                continue
+            print(f"⚙️  Migrating: adding {col_name} column to {tbl}")
+            with engine.begin() as conn:
+                conn.execute(text(f"ALTER TABLE {tbl} ADD COLUMN {col_name} {col_decl}"))
+
+
 def _ensure_is_root_column():
     """Add the is_root column to users on DBs that predate root support.
 
@@ -3878,6 +4052,7 @@ def migrate_db():
     _ensure_user_timezone_column()
     _ensure_archer_profile_columns()
     _ensure_style_settings_columns()
+    _ensure_feature_columns()
     metadata.create_all(engine)
     _drop_legacy_unique_target_name()
     _ensure_session_times_unique_index()
@@ -4586,7 +4761,8 @@ def current_user():
         with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
             row = cur.execute(
                 "SELECT id AS rowid, username, email, created_at, last_login, "
-                "is_root, timezone, gender, age_group, default_bowstyle "
+                "is_root, timezone, gender, age_group, default_bowstyle, "
+                "remind_enabled, remind_after_days "
                 "FROM users WHERE id = %s AND is_active = 1", (uid,)
             ).fetchone()
             # Stale session: cookie says user 42 but user 42 was deleted
@@ -4982,6 +5158,65 @@ def _splash_user_summary(user_id):
     }
 
 
+def _string_service_alerts(user_id):
+    """Bows whose string is at / near its service threshold, for the dashboard.
+
+    Returns ``[{bow, level, text}]`` (level 'overdue' | 'soon'); empty when no
+    bow has a service interval set or all are comfortably within it.
+    """
+    out = []
+    try:
+        with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
+            rows = cur.execute(
+                "SELECT id AS rowid, bow_model, string_installed_on, "
+                "string_shot_baseline, string_service_shots, setup_note "
+                "FROM bows WHERE user_id = %s AND string_service_shots IS NOT NULL",
+                (user_id,)).fetchall()
+            for r in rows:
+                m = _bow_lifecycle(cur, user_id, r)
+                if m['status'] and m['status'][0] in ('overdue', 'soon'):
+                    out.append({'bow': r['bow_model'], 'level': m['status'][0],
+                                'text': m['status'][1]})
+    except SQLAlchemyError as e:
+        print(f"❌ Service-alert error: {e}")
+    return out
+
+
+def _home_dashboard(user_id):
+    """Aggregate the signed-in home dashboard: streak, handicap, classification,
+    active goals with on-track verdicts, and equipment service alerts.
+
+    Returns None for anonymous users; individual keys are None / empty when
+    there's no data yet. Shares one ``_completed_rounds`` scan across the
+    handicap, classification and handicap/classification goal projections.
+    """
+    if user_id is None:
+        return None
+    try:
+        points = _completed_rounds(user_id)
+        summary = _handicap_summary(points)
+        category = _archer_category()
+        ladder = _class_ladder(points, category)
+        streak = _streak_stats(user_id)
+        goals = []
+        # Active first, then recently-achieved — so a goal that ticked over to
+        # "achieved" doesn't silently vanish from the dashboard.
+        for g in _fetch_goals(user_id, statuses=('active', 'achieved'))[:6]:
+            prog = _goal_progress(
+                g, user_id,
+                points=points if g['kind'] in ('handicap', 'classification') else None,
+                want_chart=False)
+            vlabel, vcolor = _GOAL_VERDICTS.get(prog['verdict'], ('—', '#7a879c'))
+            goals.append({'label': g['label'], 'headline': prog['headline'],
+                          'verdict_label': vlabel, 'verdict_color': vcolor})
+        alerts = _string_service_alerts(user_id)
+    except (SQLAlchemyError, ValueError, TypeError) as e:
+        print(f"❌ Dashboard build error: {e}")
+        return None
+    return {'streak': streak, 'handicap': summary, 'ladder': ladder,
+            'goals': goals, 'alerts': alerts}
+
+
 def _pretty_duration(total_seconds):
     """Compact human label for a span in seconds, e.g. '3h 12m' or '0m'.
 
@@ -5008,8 +5243,11 @@ def index():
     lifetime arrow count, total time shot) in place of the feature tour —
     see ``_splash_user_summary``.
     """
-    summary = _splash_user_summary(current_user_id())
-    return render_template('splash.html', splash_summary=summary)
+    user_id = current_user_id()
+    summary = _splash_user_summary(user_id)
+    dashboard = _home_dashboard(user_id)
+    return render_template('splash.html', splash_summary=summary,
+                           dashboard=dashboard)
 
 
 # ─── PWA: service worker + manifest ──────────────────────────────────────
@@ -5482,6 +5720,28 @@ def account():
         g.pop('_current_user', None)
         return render_template('account.html', error=None,
                                success="Archer profile updated.")
+
+    # Practice-reminder idle threshold (days). Display-only preference — no
+    # password re-prompt. The push subscription itself is managed client-side
+    # via /api/push/subscribe, which flips remind_enabled on.
+    if action == 'change_reminders':
+        days = _parse_int_or_none(request.form.get('remind_after_days'))
+        if days is None or days < 1 or days > 60:
+            return render_template('account.html',
+                error="Reminder threshold must be 1–60 days.", success=None), 400
+        try:
+            with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
+                cur.execute("UPDATE users SET remind_after_days = %s WHERE id = %s",
+                            (days, user['rowid']))
+                con.commit()
+        except SQLAlchemyError as e:
+            print(f"❌ Change-reminders error: {e}")
+            return render_template('account.html',
+                error="Could not update reminders — please try again.",
+                success=None), 500
+        g.pop('_current_user', None)
+        return render_template('account.html', error=None,
+                               success="Reminder settings updated.")
 
     # Server-wide timezone is admin-only and only meaningful on the
     # multi-user MySQL flavor; reject from the local SQLite install too.
@@ -9175,6 +9435,37 @@ def edit_session(session_id):
                      new_target_id, *bow_snap, *arrow_snap,
                      session_id, user_id)
                 )
+
+                # Manual weather for the session (optional). Stored canonical
+                # metric on session_times; source flips to 'manual'. Written
+                # only when at least one field is supplied so a blank form
+                # doesn't wipe conditions captured live at the range.
+                def _mnum(name):
+                    v = (request.form.get(name) or '').strip()
+                    try:
+                        return float(v) if v else None
+                    except ValueError:
+                        return None
+                wx_vals = {
+                    'wx_temp_c': _mnum('wx_temp_c'),
+                    'wx_wind_kmh': _mnum('wx_wind_kmh'),
+                    'wx_gust_kmh': _mnum('wx_gust_kmh'),
+                    'wx_wind_dir_deg': _mnum('wx_wind_dir_deg'),
+                    'wx_humidity_pct': _mnum('wx_humidity_pct'),
+                    'wx_pressure_hpa': _mnum('wx_pressure_hpa'),
+                }
+                if any(v is not None for v in wx_vals.values()):
+                    cur.execute(
+                        "UPDATE session_times SET wx_captured_at = %s, "
+                        "wx_source = 'manual', wx_temp_c = %s, wx_wind_kmh = %s, "
+                        "wx_gust_kmh = %s, wx_wind_dir_deg = %s, "
+                        "wx_humidity_pct = %s, wx_pressure_hpa = %s "
+                        "WHERE session_id = %s AND user_id = %s",
+                        (_app_now(), wx_vals['wx_temp_c'], wx_vals['wx_wind_kmh'],
+                         wx_vals['wx_gust_kmh'], wx_vals['wx_wind_dir_deg'],
+                         wx_vals['wx_humidity_pct'], wx_vals['wx_pressure_hpa'],
+                         session_id, user_id))
+
                 con.commit()
                 flash("Session updated.")
                 return redirect(url_for('previous_sessions'))
@@ -9196,6 +9487,12 @@ def edit_session(session_id):
                 (user_id,)
             ).fetchall()
             targets_list = [{'rowid': r['rowid'], 'name': _display_target_name(r['name'])} for r in target_rows]
+            wx_row = cur.execute(
+                "SELECT wx_temp_c, wx_wind_kmh, wx_gust_kmh, wx_wind_dir_deg, "
+                "wx_humidity_pct, wx_pressure_hpa, wx_source FROM session_times "
+                "WHERE session_id = %s AND user_id = %s",
+                (session_id, user_id)
+            ).fetchone()
     except SQLAlchemyError as e:
         print(f"❌ Edit-session error: {e}")
         flash("Could not load session for editing — please try again.")
@@ -9223,6 +9520,12 @@ def edit_session(session_id):
             'is_miss':   (xraw == MISS_SENTINEL and yraw == MISS_SENTINEL),
             'is_precise': r['is_precise'],
         })
+    wx_current = {
+        'temp_c': wx_row['wx_temp_c'], 'wind_kmh': wx_row['wx_wind_kmh'],
+        'gust_kmh': wx_row['wx_gust_kmh'], 'wind_dir_deg': wx_row['wx_wind_dir_deg'],
+        'humidity_pct': wx_row['wx_humidity_pct'],
+        'pressure_hpa': wx_row['wx_pressure_hpa'], 'source': wx_row['wx_source'],
+    } if wx_row else None
     return render_template(
         'edit_session.html',
         session_id=session_id,
@@ -9232,6 +9535,7 @@ def edit_session(session_id):
         arrow_types=arrow_types,
         targets_list=targets_list,
         tag_suggestions=_distinct_user_tags(user_id),
+        wx=wx_current,
     )
 
 
@@ -9600,6 +9904,67 @@ def add_bow():
             return "Error adding bow", 500
 
 
+def _parse_int_or_none(v):
+    """Best-effort non-negative int from form input; None on blank/garbage."""
+    try:
+        n = int(str(v).strip()) if v not in (None, '') else None
+    except (TypeError, ValueError):
+        return None
+    return n if (n is None or n >= 0) else None
+
+
+def _bow_lifecycle(cur, user_id, row):
+    """Shot counters + string-service status for one bow row.
+
+    Uses an already-open cursor. ``shots on string`` is the baseline recorded at
+    install plus every shot logged with this bow on/after the install date; the
+    service status compares that to the replace-after threshold.
+    """
+    model = row['bow_model']
+    total = cur.execute(
+        "SELECT COUNT(*) FROM apollo WHERE user_id = %s AND bow = %s",
+        (user_id, model)).fetchone()[0]
+    installed = row['string_installed_on']
+    baseline = row['string_shot_baseline'] or 0
+    interval = row['string_service_shots']
+    on_string = None
+    if installed:
+        since = cur.execute(
+            "SELECT COUNT(*) FROM apollo WHERE user_id = %s AND bow = %s "
+            "AND timestamp >= %s", (user_id, model, installed)).fetchone()[0]
+        on_string = int(baseline) + int(since)
+    status = None
+    if interval and on_string is not None:
+        remaining = int(interval) - on_string
+        if remaining <= 0:
+            status = ('overdue', f'{-remaining} shots over service')
+        elif remaining <= max(1, int(int(interval) * 0.15)):
+            status = ('soon', f'{remaining} shots to service')
+        else:
+            status = ('ok', f'{remaining} shots to service')
+    return {'shots_total': int(total), 'installed_on': installed,
+            'on_string': on_string, 'interval': interval,
+            'setup_note': row['setup_note'], 'status': status}
+
+
+def _arrow_lifecycle(cur, user_id, row):
+    """Shot count on an arrow set (matched by name), since its in-service date."""
+    name = row['arrow']
+    total = cur.execute(
+        "SELECT COUNT(*) FROM apollo WHERE user_id = %s AND arrow_type = %s",
+        (user_id, name)).fetchone()[0]
+    since_date = row['in_service_on']
+    on_set = None
+    if since_date:
+        since = cur.execute(
+            "SELECT COUNT(*) FROM apollo WHERE user_id = %s AND arrow_type = %s "
+            "AND timestamp >= %s", (user_id, name, since_date)).fetchone()[0]
+        on_set = int(since)
+    return {'shots_total': int(total), 'in_service_on': since_date,
+            'on_set': on_set, 'set_size': row['set_size'],
+            'retired': bool(row['retired'])}
+
+
 @app.route('/edit_bows', methods=['GET', 'POST'])
 @login_required
 def edit_bows():
@@ -9619,19 +9984,24 @@ def edit_bows():
                 ).fetchall()
                 bow_models = [row[0] for row in res] if res else []
                 bow_data = []
+                bow_meta = {}
                 for bow in bow_models:
                     rows = cur.execute(
                         "SELECT id AS rowid, bow_model, bow_type, bow_draw_weight, "
-                        "effective_draw_weight, amo "
+                        "effective_draw_weight, amo, string_installed_on, "
+                        "string_shot_baseline, string_service_shots, setup_note "
                         "FROM bows WHERE bow_model = %s AND user_id = %s",
                         (bow, user_id)
                     ).fetchall()
                     if rows:
                         bow_data.append(list(rows))
+                        for r in rows:
+                            bow_meta[r['rowid']] = _bow_lifecycle(cur, user_id, r)
                 num_records = len(bow_data)
             return render_template('edit_bows.html',
                                    bow_models=bow_models,
                                    bow_data=bow_data,
+                                   bow_meta=bow_meta,
                                    num_records=num_records)
         except Exception as e:
             print(f"Retrieving bows error: {e}")
@@ -9663,6 +10033,10 @@ def edit_bows():
             bow_draw_weight       = request.form.get('bow_draw_weight')
             effective_dw          = request.form.get('effective_draw_weight')
             bow_amo               = request.form.get('bow_amo')
+            str_installed = (request.form.get('string_installed_on') or '').strip() or None
+            str_interval  = _parse_int_or_none(request.form.get('string_service_shots'))
+            str_baseline  = _parse_int_or_none(request.form.get('string_shot_baseline')) or 0
+            setup_note    = (request.form.get('setup_note') or '').strip() or None
             # NB: ``bow_type`` is intentionally *not* in the UPDATE — it's
             # an immutable property of a bow (longbow vs. recurve vs.
             # compound is a kind, not a tuning). The form renders it as a
@@ -9673,10 +10047,13 @@ def edit_bows():
                 with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
                     cur.execute(
                         "UPDATE bows SET bow_model = %s, bow_draw_weight = %s, "
-                        "effective_draw_weight = %s, amo = %s "
+                        "effective_draw_weight = %s, amo = %s, "
+                        "string_installed_on = %s, string_service_shots = %s, "
+                        "string_shot_baseline = %s, setup_note = %s "
                         "WHERE id = %s AND user_id = %s",
-                        (bow_model, bow_draw_weight,
-                         effective_dw, bow_amo, rowid, user_id)
+                        (bow_model, bow_draw_weight, effective_dw, bow_amo,
+                         str_installed, str_interval, str_baseline, setup_note,
+                         rowid, user_id)
                     )
                     con.commit()
             except Exception as e:
@@ -9706,19 +10083,24 @@ def edit_arrows():
                 ).fetchall()
                 arrows = [row[0] for row in res] if res else []
                 arrow_data = []
+                arrow_meta = {}
                 for arrow in arrows:
                     rows = cur.execute(
                         "SELECT id AS rowid, arrow, length, spine, shaft_weight, "
                         "shaft_diameter, shaft_material, nock_weight, "
-                        "tip, tip_weight FROM arrows WHERE arrow = %s AND user_id = %s",
+                        "tip, tip_weight, set_size, in_service_on, retired "
+                        "FROM arrows WHERE arrow = %s AND user_id = %s",
                         (arrow, user_id)
                     ).fetchall()
                     if rows:
                         arrow_data.append(list(rows))
+                        for r in rows:
+                            arrow_meta[r['rowid']] = _arrow_lifecycle(cur, user_id, r)
                 num_records = len(arrow_data)
             return render_template('edit_arrows.html',
                                    arrows=arrows,
                                    arrow_data=arrow_data,
+                                   arrow_meta=arrow_meta,
                                    num_records=num_records)
         except Exception as e:
             print(f"Retrieving arrows error: {e}")
@@ -9754,6 +10136,9 @@ def edit_arrows():
         nock_weight    = request.form.get('nock_weight')
         tip            = request.form.get('tip')
         tip_weight     = request.form.get('tip_weight')
+        set_size       = _parse_int_or_none(request.form.get('set_size'))
+        in_service_on  = (request.form.get('in_service_on') or '').strip() or None
+        retired        = 1 if request.form.get('retired') else 0
         # NB: ``spine`` is intentionally *not* in the UPDATE — spine is an
         # intrinsic, immutable property of a shaft (a 500-spine doesn't
         # become a 600 because you changed the tip). The form renders it
@@ -9763,10 +10148,11 @@ def edit_arrows():
                 cur.execute(
                     "UPDATE arrows SET arrow = %s, length = %s, shaft_weight = %s, "
                     "shaft_diameter = %s, shaft_material = %s, "
-                    "nock_weight = %s, tip = %s, tip_weight = %s "
+                    "nock_weight = %s, tip = %s, tip_weight = %s, "
+                    "set_size = %s, in_service_on = %s, retired = %s "
                     "WHERE id = %s AND user_id = %s",
                     (arrow, length, shaft_weight, shaft_diameter, shaft_material,
-                     nock_weight, tip, tip_weight,
+                     nock_weight, tip, tip_weight, set_size, in_service_on, retired,
                      rowid, user_id)
                 )
                 con.commit()
@@ -14242,6 +14628,78 @@ def _report_calendar_heatmap(user_id):
     }
 
 
+def _streak_stats(user_id, tz=None):
+    """Practice cadence for a user: per-day counts, streak, days-since-last.
+
+    Reused by the home dashboard and the reminder cron. Buckets each session's
+    begin time into a calendar day in ``tz`` (a tzinfo); when ``tz`` is None it
+    uses the signed-in user's zone (so the cron, which has no request user, must
+    pass the user's zone explicitly). Returns::
+
+        {'per_day': {date: shots}, 'total_shots', 'active_days',
+         'last_date', 'days_since_last', 'current_streak'}
+
+    or None when the user has no dated sessions yet. Same per-day aggregation as
+    the shot-volume calendar; the streak is consecutive shot-days ending at the
+    most recent active day.
+    """
+    from datetime import timedelta
+    from collections import defaultdict
+    if tz is None:
+        tz = _user_tz()
+    with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
+        rows = cur.execute(
+            "SELECT st.session_begin_time, COUNT(a.id) AS shots "
+            "FROM session_times st "
+            "LEFT JOIN apollo a ON a.session_id = st.session_id "
+            "                   AND a.user_id   = st.user_id "
+            "WHERE st.user_id = %s AND st.session_begin_time IS NOT NULL "
+            "GROUP BY st.session_id, st.session_begin_time",
+            (user_id,)
+        ).fetchall()
+    per_day = defaultdict(int)
+    for r in rows:
+        raw = r['session_begin_time']
+        dt = raw if isinstance(raw, datetime) else _parse_session_dt(str(raw))
+        if dt is None:
+            continue
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        per_day[dt.astimezone(tz).date()] += int(r['shots'] or 0)
+    active = {d for d, n in per_day.items() if n > 0}
+    if not active:
+        return None
+    last_date = max(active)
+    today = datetime.now(timezone.utc).astimezone(tz).date()
+    days_since_last = (today - last_date).days
+    # Consecutive shot-days ending at the most recent active day...
+    streak = 0
+    d = last_date
+    while d in active:
+        streak += 1
+        d -= timedelta(days=1)
+    # ...but a streak is only "current" if it reaches today or yesterday;
+    # once you've missed a full day it's broken (0), not frozen at its old length.
+    current_streak = streak if days_since_last <= 1 else 0
+    # Longest historical run of consecutive shot-days.
+    longest_streak = 0
+    sd = sorted(active)
+    run = 0
+    for i, day in enumerate(sd):
+        run = run + 1 if (i and (day - sd[i - 1]).days == 1) else 1
+        if run > longest_streak:
+            longest_streak = run
+    return {
+        'per_day': dict(per_day),
+        'total_shots': sum(per_day.values()),
+        'active_days': len(active),
+        'last_date': last_date,
+        'days_since_last': days_since_last,
+        'current_streak': current_streak,
+        'longest_streak': longest_streak,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Handicap trend
 # ---------------------------------------------------------------------------
@@ -14303,8 +14761,81 @@ def _handicap_summary(points):
             'agb': agb, 'agb_basis': basis}
 
 
-def _report_handicap_trend(user_id):
-    """Archery GB handicap for every completed AGB-target round, over time."""
+def _project_handicap(points, deadline, target_handicap=None):
+    """Extrapolate the handicap trend to a deadline and grade a target.
+
+    Pure (no DB / Flask) so it unit-tests like ``_handicap_summary``.
+    ``points`` is a ``_completed_rounds()`` list sorted ascending by date;
+    ``deadline`` is a naive datetime or None. Fits the same least-squares line
+    the handicap-trend report draws (slope in handicap-points per day, lower =
+    better) and projects the handicap at the deadline. When ``target_handicap``
+    is given it also grades progress with a verdict:
+
+        achieved  — the latest round already meets the target
+        on_track  — the fitted trend reaches the target by the deadline
+                    (or, with no deadline, the trend is improving)
+        behind    — improving too slowly, flat, or getting worse
+        no_trend  — only one round, so no slope can be fit
+        no_data   — no rounds at all
+
+    Values are None where there isn't enough data (need >=2 rounds to fit).
+    """
+    if not points:
+        return {'verdict': 'no_data', 'latest': None, 'projected': None,
+                'slope_per_year': None, 'required_per_year': None,
+                'target': target_handicap, 'deadline': deadline}
+    latest = points[-1]['handicap']
+    latest_date = points[-1]['date']
+    out = {'latest': latest, 'projected': None, 'slope_per_year': None,
+           'required_per_year': None, 'verdict': None,
+           'target': target_handicap, 'deadline': deadline}
+
+    slope = None
+    if len(points) >= 2:
+        import numpy as np
+        t0 = points[0]['date']
+        days = np.array([(p['date'] - t0).total_seconds() / 86400.0
+                         for p in points])
+        ys = np.array([p['handicap'] for p in points], dtype=float)
+        slope, intercept = np.polyfit(days, ys, 1)
+        out['slope_per_year'] = slope * 365.0
+        if deadline is not None:
+            dd = (deadline - t0).total_seconds() / 86400.0
+            out['projected'] = intercept + slope * dd
+
+    if target_handicap is None:
+        return out
+
+    if latest <= target_handicap:
+        out['verdict'] = 'achieved'
+    elif slope is None:
+        out['verdict'] = 'no_trend'
+    elif deadline is not None:
+        out['verdict'] = ('on_track' if (out['projected'] is not None and
+                          out['projected'] <= target_handicap) else 'behind')
+        if deadline > latest_date:
+            days_left = (deadline - latest_date).total_seconds() / 86400.0
+            out['required_per_year'] = \
+                ((target_handicap - latest) / days_left) * 365.0
+    else:
+        out['verdict'] = 'on_track' if slope < 0 else 'behind'
+    return out
+
+
+def _completed_rounds(user_id):
+    """Every completed AGB-target round for a user, as handicap points.
+
+    Returns a list of ``{'date', 'handicap', 'round_key', 'round_name', 'score'}``
+    dicts sorted ascending by date (``date`` naive, in the user's zone; lower
+    handicap = better). Source is the shots table: completed match play / score
+    sheets — the same competed-only filter the trend report has always used
+    (practice never counts, see ``_counts_toward_handicap``). Real competitions
+    are logged through the Tournament score-sheet flow, which stamps the
+    ``match:`` tag, so they land here automatically.
+
+    Rows are fetched first and the connection closed before the per-round
+    progress recompute, since ``_compute_tournament_progress`` opens its own.
+    """
     with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
         rows = cur.execute(
             "SELECT st.session_id, st.session_begin_time, "
@@ -14320,15 +14851,9 @@ def _report_handicap_trend(user_id):
 
     points = []
     for r in rows:
-        # Only competed rounds feed the running handicap — match play or a
-        # score sheet logged from a real competition. Practice never counts,
-        # neither the live on-screen Practice mode nor a paper practice
-        # scorecard.
         if not _counts_toward_handicap(r['tags']):
             continue
         round_key = _round_key_from_tags(r['tags'])
-        # Cheap filter first: skip non-tournament and non-AGB rounds before
-        # paying for a per-session progress recompute.
         if not round_key or round_key not in classifications.data.AGB_TARGET_ROUNDS:
             continue
         round_def = _tournament_round_def(round_key)
@@ -14343,14 +14868,21 @@ def _report_handicap_trend(user_id):
         begin_dt = _utc_to_user(r['session_begin_time'])
         if begin_dt is None:
             continue
-        begin_dt = begin_dt.replace(tzinfo=None)
         points.append({
-            'date': begin_dt,
+            'date': begin_dt.replace(tzinfo=None),
             'handicap': hc,
+            'round_key': round_key,
             'round_name': round_def.get('name', round_key),
             'score': prog.get('total_score'),
         })
 
+    points.sort(key=lambda p: p['date'])
+    return points
+
+
+def _report_handicap_trend(user_id):
+    """Archery GB handicap for every completed AGB-target round, over time."""
+    points = _completed_rounds(user_id)
     if not points:
         return {
             'key': 'handicap_trend',
@@ -14466,6 +14998,196 @@ def _report_handicap_trend(user_id):
     return {
         'key': 'handicap_trend',
         'title': 'Handicap over time',
+        'intro_html': intro,
+        'svg_b64': svg_b64,
+        'columns': columns,
+        'rows': rows_out,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Performance vs conditions
+# ---------------------------------------------------------------------------
+# Sessions can capture weather (wind / temperature) at the range via Open-Meteo
+# (see /api/session_conditions). This report pools every shot whose session has
+# weather, buckets it by wind band and temperature band, and reports the same
+# accuracy (MPI) / precision (R95) split the rest of /analyze uses — so an
+# archer can see, honestly, whether wind actually widens their group.
+
+# (label, lo_inclusive, hi_exclusive) in km/h — roughly Beaufort 0-2 / 3-4 / 5 / 6+.
+_WIND_BANDS = [
+    ('Calm (<8)', 0.0, 8.0),
+    ('Light (8–19)', 8.0, 19.0),
+    ('Moderate (19–30)', 19.0, 30.0),
+    ('Strong (≥30)', 30.0, 1e9),
+]
+# (label, lo_inclusive, hi_exclusive) in °C.
+_TEMP_BANDS = [
+    ('Cold (<8)', -1e9, 8.0),
+    ('Mild (8–18)', 8.0, 18.0),
+    ('Warm (18–26)', 18.0, 26.0),
+    ('Hot (≥26)', 26.0, 1e9),
+]
+
+
+def _wx_float(v):
+    """Coerce a stored weather value to float, or None."""
+    try:
+        return float(v) if v is not None and v != '' else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _band_of(value, bands):
+    """Label of the band ``value`` falls in, or None (unknown value)."""
+    if value is None:
+        return None
+    for label, lo, hi in bands:
+        if lo <= value < hi:
+            return label
+    return None
+
+
+def _report_conditions(user_id, date_from=None, date_to=None):
+    """Accuracy (MPI) / precision (R95) bucketed by wind and temperature band.
+
+    Pools every hit whose session captured weather, normalizes distances by
+    target half-width (so mixed faces pool fairly, exactly like the other
+    reports), and fits ``_archery_stats`` per band. Misses are excluded from the
+    group fit; bands with fewer than 5 hits are flagged as thin.
+    """
+    q = ("SELECT a.x_coord, a.y_coord, a.target_id, t.physical_size_mm, "
+         "       st.wx_wind_kmh, st.wx_temp_c "
+         "FROM apollo a "
+         "JOIN session_times st ON st.session_id = a.session_id "
+         "                      AND st.user_id = a.user_id "
+         "LEFT JOIN targets t ON t.id = a.target_id "
+         "WHERE a.user_id = %s AND st.wx_captured_at IS NOT NULL")
+    params = [user_id]
+    if date_from:
+        q += " AND a.timestamp >= %s"
+        params.append(date_from)
+    if date_to:
+        q += " AND a.timestamp <= %s"
+        params.append(date_to + ' 23:59:59.999999')
+    with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
+        rows = cur.execute(q, tuple(params)).fetchall()
+
+    if not rows:
+        return {
+            'key': 'conditions_performance',
+            'title': 'Performance vs conditions',
+            'empty': True,
+            'empty_reason': 'No sessions have captured weather yet. On the '
+                            'session page tap "Capture weather" to log wind and '
+                            'temperature (or fill them in when editing a '
+                            'session); this report then compares your grouping '
+                            'across wind and temperature bands.',
+        }
+
+    wind_groups = {lab: {'xs': [], 'ys': []} for lab, _, _ in _WIND_BANDS}
+    temp_groups = {lab: {'xs': [], 'ys': []} for lab, _, _ in _TEMP_BANDS}
+    n_hits = 0
+    for r in rows:
+        try:
+            half_mm = float(r['physical_size_mm']) / 2.0
+        except (TypeError, ValueError):
+            continue
+        if half_mm <= 0:
+            continue
+        xr = str(r['x_coord']).strip() if r['x_coord'] is not None else ''
+        yr = str(r['y_coord']).strip() if r['y_coord'] is not None else ''
+        if xr == MISS_SENTINEL and yr == MISS_SENTINEL:
+            continue
+        try:
+            xn, yn = float(xr) / half_mm, float(yr) / half_mm
+        except ValueError:
+            continue
+        n_hits += 1
+        wl = _band_of(_wx_float(r['wx_wind_kmh']), _WIND_BANDS)
+        if wl:
+            wind_groups[wl]['xs'].append(xn)
+            wind_groups[wl]['ys'].append(yn)
+        tl = _band_of(_wx_float(r['wx_temp_c']), _TEMP_BANDS)
+        if tl:
+            temp_groups[tl]['xs'].append(xn)
+            temp_groups[tl]['ys'].append(yn)
+
+    def _band_stats(groups, bands):
+        out = []
+        for lab, _lo, _hi in bands:
+            g = groups[lab]
+            n = len(g['xs'])
+            if n == 0:
+                out.append({'label': lab, 'n': 0, 'mpi': None, 'r95': None,
+                            'low': False})
+                continue
+            a = _archery_stats(g['xs'], g['ys'])
+            out.append({'label': lab, 'n': n, 'mpi': a['mpi'], 'r95': a['r95'],
+                        'low': n < 5})
+        return out
+
+    wind_stats = _band_stats(wind_groups, _WIND_BANDS)
+    temp_stats = _band_stats(temp_groups, _TEMP_BANDS)
+
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    import numpy as np
+
+    nonempty = [w for w in wind_stats if w['n'] > 0]
+    svg_b64 = None
+    if nonempty:
+        fig, ax = plt.subplots(figsize=(8, 4.2))
+        labels = [w['label'] for w in nonempty]
+        mpis = [w['mpi'] * 100 for w in nonempty]
+        r95s = [w['r95'] * 100 for w in nonempty]
+        xpos = np.arange(len(labels))
+        bw = 0.38
+        ax.bar(xpos - bw / 2, mpis, bw, label='MPI (accuracy)', color='#c0504d')
+        ax.bar(xpos + bw / 2, r95s, bw, label='R95 (precision)', color='#3f7d3f')
+        for i, w in enumerate(nonempty):
+            ax.annotate(f"n={w['n']}", (i, max(mpis[i], r95s[i])),
+                        textcoords='offset points', xytext=(0, 3),
+                        ha='center', fontsize=7, color='#5a6a82')
+        ax.set_xticks(xpos)
+        ax.set_xticklabels(labels, fontsize=8)
+        ax.set_ylabel('% of target half-width (lower = tighter)')
+        ax.set_title('Grouping by wind band')
+        ax.legend(fontsize=8)
+        ax.grid(True, axis='y', linestyle='--', alpha=0.35)
+        fig.tight_layout()
+        svg_b64 = _render_matplotlib_svg(fig)
+
+    def _cell(v):
+        return '—' if v is None else f'{v * 100:.1f}'
+
+    columns = ['Condition', 'Band', 'Shots', 'MPI (% hw)', 'R95 (% hw)']
+    rows_out = [[Markup('<em>— Wind —</em>'), '', '', '', '']]
+    for w in wind_stats:
+        lab = w['label'] + (' ⚠' if w['low'] else '')
+        rows_out.append(['Wind', lab, w['n'], _cell(w['mpi']), _cell(w['r95'])])
+    rows_out.append([Markup('<em>— Temperature —</em>'), '', '', '', ''])
+    for t in temp_stats:
+        lab = t['label'] + (' ⚠' if t['low'] else '')
+        rows_out.append(['Temp', lab, t['n'], _cell(t['mpi']), _cell(t['r95'])])
+
+    intro = Markup(
+        '<p class="report-intro">'
+        '<strong>What this shows:</strong> your accuracy (MPI, where the group '
+        'centres) and precision (R95, how tightly it clusters) split out by the '
+        'wind and temperature logged for each session, as a percentage of the '
+        'target half-width so mixed faces pool fairly. Lower is tighter. Bands '
+        'marked ⚠ have fewer than five shots — read them lightly. Wind that '
+        'genuinely widens your group shows up as rising bars from calm to '
+        f'strong. Based on {n_hits} weather-tagged hit'
+        f'{"s" if n_hits != 1 else ""}.'
+        '</p>'
+    )
+
+    return {
+        'key': 'conditions_performance',
+        'title': 'Performance vs conditions',
         'intro_html': intro,
         'svg_b64': svg_b64,
         'columns': columns,
@@ -14956,6 +15678,16 @@ REPORTS = {
                        'months, and the official AGB number (average of your '
                        'best three, rounded down).',
         'fn': _report_handicap_trend,
+    },
+    'conditions_performance': {
+        'label': 'Performance vs conditions',
+        'description': 'Accuracy (MPI) and precision (R95) bucketed by the '
+                       'wind and temperature captured for each session, '
+                       'normalized by target size. Shows whether wind really '
+                       'widens your group. Only sessions with logged weather '
+                       'count; optionally restrict to a date range.',
+        'fn': _report_conditions,
+        'accepts_date_range': True,
     },
 }
 
@@ -16231,6 +16963,1087 @@ def import_data():
 
     total = sum(counts.values())
     return jsonify(ok=True, total=total, counts=counts)
+
+
+@app.route('/api/session_conditions', methods=['GET', 'POST'])
+@login_required
+def api_session_conditions():
+    """Read / write the weather captured for the active session.
+
+    Scoped to the current session_id from the Flask cookie (the same session
+    the shot log writes to). GET returns the stored conditions; POST upserts
+    them onto the session_times row. Values are canonical metric (°C, km/h,
+    hPa, degrees, %) — the client fetches them from Open-Meteo, or the user
+    types them manually. CSRF: honours the X-CSRFToken header like the other
+    /api endpoints, so no exemption is needed.
+    """
+    user_id = current_user_id()
+    session_id = session.get('session_id')
+    if not session_id:
+        return jsonify(ok=False, error='No active session.'), 400
+
+    if request.method == 'GET':
+        with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
+            row = cur.execute(
+                "SELECT wx_captured_at, wx_source, wx_temp_c, wx_wind_kmh, "
+                "wx_gust_kmh, wx_wind_dir_deg, wx_humidity_pct, wx_pressure_hpa "
+                "FROM session_times WHERE user_id = %s AND session_id = %s",
+                (user_id, session_id)
+            ).fetchone()
+        if not row or row['wx_captured_at'] is None:
+            return jsonify(ok=True, captured=False)
+        return jsonify(ok=True, captured=True, source=row['wx_source'],
+                       temp_c=row['wx_temp_c'], wind_kmh=row['wx_wind_kmh'],
+                       gust_kmh=row['wx_gust_kmh'],
+                       wind_dir_deg=row['wx_wind_dir_deg'],
+                       humidity_pct=row['wx_humidity_pct'],
+                       pressure_hpa=row['wx_pressure_hpa'])
+
+    data = request.get_json(silent=True) or {}
+
+    def num(k):
+        v = data.get(k)
+        try:
+            return float(v) if v is not None and v != '' else None
+        except (TypeError, ValueError):
+            return None
+
+    vals = {
+        'wx_temp_c': num('temp_c'),
+        'wx_wind_kmh': num('wind_kmh'),
+        'wx_gust_kmh': num('gust_kmh'),
+        'wx_wind_dir_deg': num('wind_dir_deg'),
+        'wx_humidity_pct': num('humidity_pct'),
+        'wx_pressure_hpa': num('pressure_hpa'),
+    }
+    if all(v is None for v in vals.values()):
+        return jsonify(ok=False, error='No weather values supplied.'), 400
+    source = (str(data.get('source') or 'auto'))[:16]
+    try:
+        with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
+            cur.execute(
+                "UPDATE session_times SET wx_captured_at = %s, wx_source = %s, "
+                "wx_temp_c = %s, wx_wind_kmh = %s, wx_gust_kmh = %s, "
+                "wx_wind_dir_deg = %s, wx_humidity_pct = %s, wx_pressure_hpa = %s "
+                "WHERE user_id = %s AND session_id = %s",
+                (_app_now(), source, vals['wx_temp_c'], vals['wx_wind_kmh'],
+                 vals['wx_gust_kmh'], vals['wx_wind_dir_deg'],
+                 vals['wx_humidity_pct'], vals['wx_pressure_hpa'],
+                 user_id, session_id))
+            con.commit()
+    except SQLAlchemyError as e:
+        print(f"❌ Session conditions save error: {e}")
+        return jsonify(ok=False, error='Database error.'), 500
+    return jsonify(ok=True, captured=True)
+
+
+# ---------------------------------------------------------------------------
+# Goals + "am I on track?" projection
+# ---------------------------------------------------------------------------
+# A goal is a target the archer sets with an optional deadline. The headline
+# feature is the *projection*: for handicap / classification goals we reuse the
+# same least-squares fit the handicap-trend report draws (via _project_handicap)
+# and extrapolate it to the deadline to grade on-track / behind / achieved.
+# Round-score goals project raw score on one round; volume goals track arrows
+# per week/month against the shot calendar.
+
+_GOAL_KINDS = ('handicap', 'classification', 'round_score', 'volume',
+               'accuracy', 'precision')
+
+# verdict code -> (label, colour) for the badge on each goal card.
+_GOAL_VERDICTS = {
+    'achieved':    ('Achieved',          '#1e7e34'),
+    'on_track':    ('On track',          '#2e7d32'),
+    'behind':      ('Behind',            '#c0392b'),
+    'no_trend':    ('Need more rounds',  '#8a6d1f'),
+    'no_data':     ('No data yet',       '#7a879c'),
+    'in_progress': ('In progress',       '#4d6da6'),
+}
+
+
+def _as_dt(v):
+    """Coerce a stored DateTime (or DT-shaped string) to a naive datetime."""
+    if v is None or isinstance(v, datetime):
+        return v
+    return _parse_session_dt(str(v))
+
+
+def _goal_category(goal):
+    """A classifications.Category from a goal's snapshotted archer profile."""
+    return classifications.Category(
+        bowstyle=(goal.get('bowstyle') or 'recurve'),
+        gender=(goal.get('gender') or 'male'),
+        age_group=(goal.get('age_group') or 'adult'),
+    )
+
+
+def _class_threshold(category, class_code):
+    """(threshold_hc, indoor, long_name) for an AGB class code, or None."""
+    if not class_code:
+        return None
+    for indoor in (False, True):
+        for code, long_name, record, thr in \
+                classifications.agb_class_thresholds(category, indoor):
+            if code == class_code:
+                return thr, indoor, long_name
+    return None
+
+
+def _best_agb_class(handicap_value, category, indoor):
+    """Best AGB class the given handicap currently meets (dict), or None."""
+    if handicap_value is None:
+        return None
+    for code, long_name, record, thr in \
+            classifications.agb_class_thresholds(category, indoor):
+        if handicap_value <= thr:
+            return {'code': code, 'name': long_name, 'record': record,
+                    'threshold': thr}
+    return None
+
+
+def _agb_class_choices(category):
+    """All AGB class options (outdoor then indoor) for the goal-form dropdown."""
+    out = []
+    for indoor, group in ((False, 'Outdoor'), (True, 'Indoor')):
+        for code, long_name, record, thr in \
+                classifications.agb_class_thresholds(category, indoor):
+            out.append({'code': code, 'name': long_name, 'group': group,
+                        'threshold': round(thr, 1), 'record': record})
+    return out
+
+
+def _round_choices(agb_only=False):
+    """Scored rounds for a dropdown: [{key, name, max_score}], sorted by name."""
+    items = []
+    for key, d in TOURNAMENT_ROUNDS.items():
+        if d.get('max_score') is None:
+            continue
+        if agb_only and key not in classifications.data.AGB_TARGET_ROUNDS:
+            continue
+        items.append({'key': key, 'name': d.get('name', key),
+                      'max_score': d.get('max_score')})
+    items.sort(key=lambda x: x['name'])
+    return items
+
+
+def _round_score_points(user_id, round_key):
+    """(date, value=score) for every COMPLETED run of one round, any mode.
+
+    Includes practice and competed sessions of this round (competitions logged
+    via the Tournament score-sheet flow land here too). Sorted ascending by
+    date. Feeds round-score goals (a personal-best-style target, so practice
+    counts too).
+    """
+    round_def = _tournament_round_def(round_key)
+    if not round_def:
+        return []
+    with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
+        rows = cur.execute(
+            "SELECT st.session_id, st.session_begin_time, "
+            "       (SELECT a.session_tags FROM apollo a "
+            "          WHERE a.session_id = st.session_id AND a.user_id = st.user_id "
+            "          ORDER BY a.id LIMIT 1) AS tags "
+            "FROM session_times st "
+            "WHERE st.user_id = %s AND st.session_begin_time IS NOT NULL "
+            "ORDER BY st.session_begin_time ASC",
+            (user_id,)
+        ).fetchall()
+    pts = []
+    for r in rows:
+        if _round_key_from_tags(r['tags']) != round_key:
+            continue
+        prog = _compute_tournament_progress(r['session_id'], user_id, round_def)
+        if not prog.get('is_complete'):
+            continue
+        dt = _utc_to_user(r['session_begin_time'])
+        if dt is None:
+            continue
+        pts.append({'date': dt.replace(tzinfo=None),
+                    'value': prog.get('total_score') or 0})
+    pts.sort(key=lambda p: p['date'])
+    return pts
+
+
+def _goal_chart_svg(points, target, deadline, ylabel, lower_is_better, title):
+    """Trend + target + deadline chart for a goal card. points: [{date,value}]."""
+    if not points:
+        return None
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    import matplotlib.dates as mdates
+    xs = [p['date'] for p in points]
+    ys = [p['value'] for p in points]
+    fig, ax = plt.subplots(figsize=(7.2, 3.1))
+    ax.plot(xs, ys, '-', color='#9bb0d0', linewidth=1.0, zorder=1)
+    ax.scatter(xs, ys, s=26, color='#4d6da6', edgecolor='#1a3a5c', zorder=3)
+    if len(points) >= 2:
+        import numpy as np
+        t0 = xs[0]
+        days = np.array([(x - t0).total_seconds() / 86400.0 for x in xs])
+        slope, intercept = np.polyfit(days, np.array(ys, dtype=float), 1)
+        end_x = deadline if (deadline is not None and deadline > xs[-1]) else xs[-1]
+        ex = (end_x - t0).total_seconds() / 86400.0
+        ax.plot([t0, end_x], [intercept, intercept + slope * ex], '--',
+                color='#c0504d', linewidth=1.3, zorder=2, label='Trend')
+    if target is not None:
+        ax.axhline(target, color='#3f7d3f', linewidth=1.2, linestyle=':',
+                   zorder=2, label='Target')
+    if deadline is not None:
+        ax.axvline(deadline, color='#7a879c', linewidth=1.0, linestyle='--',
+                   alpha=0.7, zorder=1)
+    if lower_is_better:
+        ax.invert_yaxis()
+    ax.set_ylabel(ylabel)
+    ax.set_title(title, fontsize=10, color='#1a3a5c')
+    ax.grid(True, axis='y', linestyle='--', alpha=0.35)
+    ax.legend(loc='best', fontsize=8)
+    locator = mdates.AutoDateLocator()
+    ax.xaxis.set_major_locator(locator)
+    ax.xaxis.set_major_formatter(mdates.ConciseDateFormatter(locator))
+    fig.autofmt_xdate()
+    fig.tight_layout()
+    return _render_matplotlib_svg(fig)
+
+
+def _volume_progress(user_id, goal):
+    """Current-period arrow count vs a volume target, with a pace verdict."""
+    from datetime import timedelta
+    target = goal.get('volume_arrows') or 0
+    period = (goal.get('volume_period') or 'week').lower()
+    stats = _streak_stats(user_id)
+    per_day = stats['per_day'] if stats else {}
+    today = _utc_to_user(_app_now())
+    today = today.date() if today else None
+    if today is None:
+        return {'verdict': 'no_data', 'headline': 'No data yet',
+                'sub': '', 'metrics': [], 'svg_b64': None}
+    if period == 'month':
+        start = today.replace(day=1)
+        nxt = (start.replace(year=start.year + 1, month=1) if start.month == 12
+               else start.replace(month=start.month + 1))
+        period_len = (nxt - start).days
+        period_label = today.strftime('%B %Y')
+    else:
+        period = 'week'
+        start = today - timedelta(days=today.weekday())
+        period_len = 7
+        period_label = f'week of {start.isoformat()}'
+    elapsed = (today - start).days + 1
+    got = sum(n for d, n in per_day.items() if start <= d <= today)
+    pace = target * (elapsed / period_len) if period_len else target
+    if target and got >= target:
+        verdict = 'achieved'
+    elif got >= pace:
+        verdict = 'on_track'
+    else:
+        verdict = 'behind'
+    return {
+        'verdict': verdict,
+        'headline': f'{got} / {target} arrows this {period}',
+        'sub': '',
+        'metrics': [
+            (f'This {period}', f'{got} arrows'),
+            ('Target', f'{target} / {period}'),
+            ('Pace needed by now', f'{int(round(pace))} arrows'),
+            ('Period', period_label),
+        ],
+        'svg_b64': None,
+    }
+
+
+def _ap_series(user_id, metric, min_hits=6):
+    """Per-session accuracy (MPI) or precision (R95) over time, as a percentage
+    of the target's half-width (the normalized unit the /analyze reports use).
+
+    ``metric`` is 'mpi' or 'r95'. Sessions with fewer than ``min_hits`` hits are
+    skipped (too few to fit a meaningful group). Returns ``[{date, value}]``
+    ascending; value is the metric × 100 (so ~30 means 30% of half-width).
+    """
+    with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
+        rows = cur.execute(
+            "SELECT a.session_id, st.session_begin_time, a.x_coord, a.y_coord, "
+            "       t.physical_size_mm "
+            "FROM apollo a "
+            "JOIN session_times st ON st.session_id = a.session_id "
+            "                      AND st.user_id = a.user_id "
+            "LEFT JOIN targets t ON t.id = a.target_id "
+            "WHERE a.user_id = %s AND st.session_begin_time IS NOT NULL "
+            "ORDER BY st.session_begin_time ASC",
+            (user_id,)
+        ).fetchall()
+    sess = {}
+    for r in rows:
+        try:
+            half_mm = float(r['physical_size_mm']) / 2.0
+        except (TypeError, ValueError):
+            continue
+        if half_mm <= 0:
+            continue
+        xr = str(r['x_coord']).strip() if r['x_coord'] is not None else ''
+        yr = str(r['y_coord']).strip() if r['y_coord'] is not None else ''
+        if xr == MISS_SENTINEL and yr == MISS_SENTINEL:
+            continue
+        try:
+            xn, yn = float(xr) / half_mm, float(yr) / half_mm
+        except ValueError:
+            continue
+        sid = r['session_id']
+        s = sess.get(sid)
+        if s is None:
+            dt = _utc_to_user(r['session_begin_time'])
+            s = sess[sid] = {'date': dt.replace(tzinfo=None) if dt else None,
+                             'xs': [], 'ys': []}
+        s['xs'].append(xn)
+        s['ys'].append(yn)
+    pts = []
+    for s in sess.values():
+        if s['date'] is None or len(s['xs']) < min_hits:
+            continue
+        stat = _archery_stats(s['xs'], s['ys'])
+        if stat is None:
+            continue
+        pts.append({'date': s['date'],
+                    'value': (stat['mpi'] if metric == 'mpi' else stat['r95']) * 100.0})
+    pts.sort(key=lambda p: p['date'])
+    return pts
+
+
+def _goal_progress(goal, user_id, points=None, want_chart=True):
+    """Compute a goal's current status + projection for its card.
+
+    Returns ``{verdict, headline, sub, metrics: [(label, value)], svg_b64}``.
+    ``points`` (a _completed_rounds list) can be passed in to avoid recomputing
+    it for every handicap / classification goal on the page. ``want_chart=False``
+    skips the matplotlib render for callers that only need the verdict/headline
+    (the home dashboard), which never draws the chart.
+    """
+    kind = goal.get('kind')
+    label = goal.get('label') or ''
+    deadline = _as_dt(goal.get('deadline'))
+
+    if kind == 'volume':
+        return _volume_progress(user_id, goal)
+
+    if kind in ('handicap', 'classification'):
+        pts = points if points is not None else _completed_rounds(user_id)
+        category = _goal_category(goal)
+        if kind == 'classification':
+            info = _class_threshold(category, goal.get('target_class_code'))
+            if not info:
+                return {'verdict': 'no_data', 'headline': 'Unknown class',
+                        'sub': label, 'metrics': [], 'svg_b64': None}
+            target_hc, indoor, class_name = info
+        else:
+            target_hc = goal.get('target_handicap')
+            indoor, class_name = False, None
+        proj = _project_handicap(pts, deadline, target_hc)
+        value_points = [{'date': p['date'], 'value': p['handicap']} for p in pts]
+        svg = (_goal_chart_svg(value_points, target_hc, deadline,
+                               'Handicap (lower = better)', True, label or 'Handicap')
+               if want_chart else None)
+        latest = proj['latest']
+        metrics = []
+        if latest is not None:
+            metrics.append(('Current handicap', latest))
+        if proj.get('projected') is not None:
+            metrics.append(('Projected at deadline', f"{proj['projected']:.0f}"))
+        if proj.get('slope_per_year') is not None:
+            metrics.append(('Trend', f"{proj['slope_per_year']:+.1f} hc/yr"))
+        if proj.get('required_per_year') is not None:
+            metrics.append(('Required', f"{proj['required_per_year']:+.1f} hc/yr"))
+        if kind == 'classification':
+            current = _best_agb_class(latest, category, indoor)
+            metrics.append(('Target', f"{class_name} (≤ {target_hc:.1f} hc, "
+                                      f"{'indoor' if indoor else 'outdoor'})"))
+            headline = ((current['name'] if current else 'No class yet') +
+                        f" → {class_name}")
+        else:
+            headline = (f"Handicap {latest} → target {target_hc}"
+                        if latest is not None else f"Target handicap {target_hc}")
+        return {'verdict': proj['verdict'] or 'in_progress', 'headline': headline,
+                'sub': label, 'metrics': metrics, 'svg_b64': svg}
+
+    if kind == 'round_score':
+        round_key = goal.get('round_key')
+        target = goal.get('target_score')
+        rd = _tournament_round_def(round_key) or {}
+        pts = _round_score_points(user_id, round_key)
+        if not pts:
+            return {'verdict': 'no_data',
+                    'headline': f"Target {target} on {rd.get('name', round_key)}",
+                    'sub': label, 'metrics': [('Rounds shot', 0)], 'svg_b64': None}
+        best = max(p['value'] for p in pts)
+        latest = pts[-1]['value']
+        projected = slope_per_year = None
+        if len(pts) >= 2:
+            import numpy as np
+            t0 = pts[0]['date']
+            days = np.array([(p['date'] - t0).total_seconds() / 86400.0 for p in pts])
+            slope, intercept = np.polyfit(days, np.array([p['value'] for p in pts],
+                                                         dtype=float), 1)
+            slope_per_year = slope * 365.0
+            if deadline is not None:
+                projected = intercept + slope * (
+                    (deadline - t0).total_seconds() / 86400.0)
+        if target is not None and best >= target:
+            verdict = 'achieved'
+        elif len(pts) < 2:
+            verdict = 'no_trend'
+        elif deadline is not None:
+            verdict = ('on_track' if (projected is not None and projected >= target)
+                       else 'behind')
+        else:
+            verdict = 'on_track' if (slope_per_year and slope_per_year > 0) else 'behind'
+        svg = (_goal_chart_svg(pts, target, deadline, 'Score', False,
+                               rd.get('name', round_key)) if want_chart else None)
+        metrics = [('Best score', best), ('Latest', latest), ('Rounds shot', len(pts))]
+        if projected is not None:
+            metrics.append(('Projected at deadline', f"{projected:.0f}"))
+        if slope_per_year is not None:
+            metrics.append(('Trend', f"{slope_per_year:+.0f} pts/yr"))
+        return {'verdict': verdict,
+                'headline': f"Best {best} / target {target} on {rd.get('name', round_key)}",
+                'sub': label, 'metrics': metrics, 'svg_b64': svg}
+
+    if kind in ('accuracy', 'precision'):
+        metric = 'mpi' if kind == 'accuracy' else 'r95'
+        mlabel = 'MPI' if metric == 'mpi' else 'R95'
+        target = goal.get('target_metric')
+        if target is None:
+            return {'verdict': 'no_data', 'headline': f'{mlabel} goal — no target set',
+                    'sub': label, 'metrics': [], 'svg_b64': None}
+        series = _ap_series(user_id, metric)
+        # Reuse the handicap projector — lower value is better, same as handicap.
+        proj = _project_handicap(
+            [{'date': p['date'], 'handicap': p['value']} for p in series],
+            deadline, target)
+        svg = (_goal_chart_svg(series, target, deadline,
+                               f'{mlabel} (% of half-width)', True, label or mlabel)
+               if want_chart else None)
+        latest = proj['latest']
+        metrics = []
+        if latest is not None:
+            metrics.append((f'Current {mlabel}', f'{latest:.1f}%'))
+        if proj.get('projected') is not None:
+            metrics.append(('Projected at deadline', f"{proj['projected']:.1f}%"))
+        if proj.get('slope_per_year') is not None:
+            metrics.append(('Trend', f"{proj['slope_per_year']:+.1f} %/yr"))
+        metrics.append(('Sessions', len(series)))
+        headline = (f"{mlabel} {latest:.1f}% → target {target:g}%"
+                    if latest is not None else f"Target {mlabel} {target:g}%")
+        return {'verdict': proj['verdict'] or 'in_progress', 'headline': headline,
+                'sub': label, 'metrics': metrics, 'svg_b64': svg}
+
+    return {'verdict': 'no_data', 'headline': 'Unknown goal', 'sub': label,
+            'metrics': [], 'svg_b64': None}
+
+
+def _fetch_goals(user_id, statuses=None):
+    """Goal rows for a user as plain dicts, active first then newest."""
+    cols = ('id', 'kind', 'label', 'target_handicap', 'target_class_code',
+            'round_key', 'target_score', 'target_metric', 'volume_arrows',
+            'volume_period', 'deadline', 'bowstyle', 'gender', 'age_group',
+            'status', 'achieved_at', 'created_at')
+    q = f"SELECT {', '.join(cols)} FROM goals WHERE user_id = %s"
+    params = [user_id]
+    if statuses:
+        q += " AND status IN (" + ','.join(['%s'] * len(statuses)) + ")"
+        params.extend(statuses)
+    q += (" ORDER BY CASE status WHEN 'active' THEN 0 WHEN 'achieved' THEN 1 "
+          "ELSE 2 END, id DESC")
+    with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
+        rows = cur.execute(q, tuple(params)).fetchall()
+    return [{k: r[k] for k in cols} for r in rows]
+
+
+def _mark_goal_achieved(user_id, goal_id):
+    """Flip an active goal to achieved once its verdict first reads 'achieved'."""
+    try:
+        with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
+            cur.execute(
+                "UPDATE goals SET status = 'achieved', achieved_at = %s "
+                "WHERE id = %s AND user_id = %s AND status = 'active'",
+                (_app_now(), goal_id, user_id))
+            con.commit()
+    except SQLAlchemyError as e:
+        print(f"❌ Goal achieve error: {e}")
+
+
+def _create_goal_from_form(user_id, form):
+    """Validate + insert a goal from the add form. Returns an error str or None."""
+    kind = (form.get('kind') or '').strip()
+    if kind not in _GOAL_KINDS:
+        return 'Pick a goal type.'
+    label = (form.get('label') or '').strip()[:255]
+    deadline = None
+    raw_deadline = (form.get('deadline') or '').strip()
+    if raw_deadline:
+        try:
+            deadline = datetime.strptime(raw_deadline, '%Y-%m-%d')
+        except ValueError:
+            return 'Deadline must be a valid date (YYYY-MM-DD).'
+    f = dict(target_handicap=None, target_class_code=None, round_key=None,
+             target_score=None, target_metric=None, volume_arrows=None,
+             volume_period=None)
+    user = current_user()
+
+    if kind == 'handicap':
+        try:
+            th = int(form.get('target_handicap'))
+        except (TypeError, ValueError):
+            return 'Enter a target handicap (0–150).'
+        if not (0 <= th <= 150):
+            return 'Target handicap must be between 0 and 150.'
+        f['target_handicap'] = th
+        label = label or f'Handicap {th}'
+    elif kind == 'classification':
+        code = (form.get('target_class_code') or '').strip()
+        category = classifications.Category(
+            bowstyle=(user.get('default_bowstyle') if user else None) or 'recurve',
+            gender=(user.get('gender') if user else None) or 'male',
+            age_group=(user.get('age_group') if user else None) or 'adult')
+        info = _class_threshold(category, code)
+        if not info:
+            return 'Pick a classification.'
+        f['target_class_code'] = code
+        label = label or f'Reach {info[2]}'
+    elif kind == 'round_score':
+        rk = (form.get('round_key') or '').strip()
+        if rk not in TOURNAMENT_ROUNDS:
+            return 'Pick a round.'
+        try:
+            ts = int(form.get('target_score'))
+        except (TypeError, ValueError):
+            return 'Enter a target score.'
+        maxs = TOURNAMENT_ROUNDS[rk].get('max_score') or 0
+        if ts <= 0 or (maxs and ts > maxs):
+            return f'Score must be between 1 and {maxs}.'
+        f['round_key'], f['target_score'] = rk, ts
+        label = label or f"{ts} on {TOURNAMENT_ROUNDS[rk].get('name', rk)}"
+    elif kind == 'volume':
+        try:
+            va = int(form.get('volume_arrows'))
+        except (TypeError, ValueError):
+            return 'Enter an arrow count.'
+        if va <= 0:
+            return 'Arrow count must be positive.'
+        vp = (form.get('volume_period') or 'week').strip().lower()
+        if vp not in ('week', 'month'):
+            vp = 'week'
+        f['volume_arrows'], f['volume_period'] = va, vp
+        label = label or f'{va} arrows / {vp}'
+    elif kind in ('accuracy', 'precision'):
+        try:
+            tv = float(form.get('target_metric'))
+        except (TypeError, ValueError):
+            return 'Enter a target percentage.'
+        if not (0 < tv <= 100):
+            return 'Target must be between 0 and 100 (% of target half-width).'
+        f['target_metric'] = tv
+        mlabel = 'MPI' if kind == 'accuracy' else 'R95'
+        label = label or f'{mlabel} ≤ {tv:g}%'
+
+    try:
+        with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
+            cur.execute(
+                "INSERT INTO goals (user_id, created_at, kind, label, "
+                "target_handicap, target_class_code, round_key, target_score, "
+                "target_metric, volume_arrows, volume_period, deadline, bowstyle, "
+                "gender, age_group, status) VALUES "
+                "(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'active')",
+                (user_id, _app_now(), kind, label, f['target_handicap'],
+                 f['target_class_code'], f['round_key'], f['target_score'],
+                 f['target_metric'], f['volume_arrows'], f['volume_period'],
+                 deadline,
+                 (user.get('default_bowstyle') if user else None),
+                 (user.get('gender') if user else None),
+                 (user.get('age_group') if user else None)))
+            con.commit()
+    except SQLAlchemyError as e:
+        print(f"❌ Goal create error: {e}")
+        return 'Could not save the goal — please try again.'
+    return None
+
+
+@app.route('/goals', methods=['GET', 'POST'])
+@login_required
+def goals():
+    """List performance goals with a live on-track projection; add via POST."""
+    user_id = current_user_id()
+    form_error = None
+    if request.method == 'POST':
+        form_error = _create_goal_from_form(user_id, request.form)
+        if not form_error:
+            return redirect(url_for('goals'))
+
+    goal_rows = _fetch_goals(user_id)
+    # Shared across every handicap / classification goal so the completed-round
+    # scan only runs once per page load.
+    points = _completed_rounds(user_id) if any(
+        g['kind'] in ('handicap', 'classification') for g in goal_rows) else []
+    cards = []
+    for g in goal_rows:
+        prog = _goal_progress(
+            g, user_id,
+            points=points if g['kind'] in ('handicap', 'classification') else None)
+        # Volume goals are recurring (a weekly / monthly target resets each
+        # period), so never retire them — only one-shot targets get marked done.
+        if (prog['verdict'] == 'achieved' and g['status'] == 'active'
+                and g['kind'] != 'volume'):
+            _mark_goal_achieved(user_id, g['id'])
+            g['status'] = 'achieved'
+        vlabel, vcolor = _GOAL_VERDICTS.get(prog['verdict'], ('—', '#7a879c'))
+        cards.append({'goal': g, 'prog': prog,
+                      'verdict_label': vlabel, 'verdict_color': vcolor,
+                      'deadline': _as_dt(g['deadline'])})
+
+    user = current_user()
+    category = classifications.Category(
+        bowstyle=(user.get('default_bowstyle') if user else None) or 'recurve',
+        gender=(user.get('gender') if user else None) or 'male',
+        age_group=(user.get('age_group') if user else None) or 'adult').normalized()
+    return render_template('goals.html',
+                           cards=cards,
+                           form_error=form_error,
+                           class_choices=_agb_class_choices(category),
+                           round_choices=_round_choices(agb_only=False),
+                           category=category,
+                           current_user=user)
+
+
+@app.route('/goals/<int:goal_id>/delete', methods=['POST'])
+@login_required
+def goal_delete(goal_id):
+    """Remove one goal (scoped to the owner)."""
+    user_id = current_user_id()
+    try:
+        with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
+            cur.execute("DELETE FROM goals WHERE id = %s AND user_id = %s",
+                        (goal_id, user_id))
+            con.commit()
+    except SQLAlchemyError as e:
+        print(f"❌ Goal delete error: {e}")
+    return redirect(url_for('goals'))
+
+
+# ---------------------------------------------------------------------------
+# Records / achievements board + external-competition log
+# ---------------------------------------------------------------------------
+# Pulls together the personal bests, the AGB classification ladder, and the
+# classification / award pins earned across every completed round — Apollo-
+# scored *and* external competitions logged by hand. The achievement ledger
+# (user_achievements) is upserted lazily on view; earned_at is the round's own
+# date so re-scanning never rewrites when a milestone was first reached.
+
+
+def _scan_achievements(user_id, points=None):
+    """Upsert every classification/award earned across completed rounds and
+    return the current ledger, newest-earned first. ``points`` (a
+    _completed_rounds list) can be passed in to skip re-scanning when the caller
+    already has it."""
+    if points is None:
+        points = _completed_rounds(user_id)
+    category = _archer_category()
+    best = {}
+    for p in points:
+        awards = classifications.resolve_awards(
+            p.get('round_key'), p.get('score'), p.get('handicap'), category)
+        for aw in awards:
+            key = (aw['scheme'], aw['code'])
+            if key not in best or p['date'] < best[key]['date']:
+                best[key] = {'scheme': aw['scheme'], 'code': aw['code'],
+                             'name': aw['name'], 'round_key': p.get('round_key'),
+                             'score': p.get('score'), 'handicap': p.get('handicap'),
+                             'date': p['date']}
+    try:
+        with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
+            for (scheme, code), rec in best.items():
+                exists = cur.execute(
+                    "SELECT id FROM user_achievements "
+                    "WHERE user_id=%s AND scheme=%s AND code=%s",
+                    (user_id, scheme, code)).fetchone()
+                if exists is None:
+                    cur.execute(
+                        "INSERT INTO user_achievements (user_id, scheme, code, "
+                        "name, round_key, score, handicap, earned_at) "
+                        "VALUES (%s,%s,%s,%s,%s,%s,%s,%s)",
+                        (user_id, scheme, code, rec['name'], rec['round_key'],
+                         rec['score'], rec['handicap'], rec['date']))
+            con.commit()
+            rows = cur.execute(
+                "SELECT scheme, code, name, round_key, score, handicap, earned_at "
+                "FROM user_achievements WHERE user_id=%s "
+                "ORDER BY earned_at DESC, id DESC", (user_id,)).fetchall()
+    except SQLAlchemyError as e:
+        print(f"❌ Achievement scan error: {e}")
+        return []
+    return [{'scheme': r['scheme'], 'code': r['code'], 'name': r['name'],
+             'round_key': r['round_key'], 'score': r['score'],
+             'handicap': r['handicap'], 'earned_at': r['earned_at']} for r in rows]
+
+
+def _round_pbs(user_id):
+    """Best score on every round the user has completed (any mode).
+    Returns ``[{round_key, name, best, date, max_score, n}]``."""
+    with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
+        rows = cur.execute(
+            "SELECT st.session_id, st.session_begin_time, "
+            "       (SELECT a.session_tags FROM apollo a "
+            "          WHERE a.session_id = st.session_id AND a.user_id = st.user_id "
+            "          ORDER BY a.id LIMIT 1) AS tags "
+            "FROM session_times st "
+            "WHERE st.user_id = %s AND st.session_begin_time IS NOT NULL "
+            "ORDER BY st.session_begin_time ASC", (user_id,)).fetchall()
+
+    pbs = {}
+
+    def upd(rk, name, score, dt, maxs):
+        e = pbs.get(rk)
+        if e is None:
+            pbs[rk] = {'round_key': rk, 'name': name, 'best': score, 'date': dt,
+                       'max_score': maxs, 'n': 1}
+        else:
+            e['n'] += 1
+            if score > e['best']:
+                e['best'], e['date'] = score, dt
+
+    for r in rows:
+        rk = _round_key_from_tags(r['tags'])
+        if not rk:
+            continue
+        rd = _tournament_round_def(rk)
+        if not rd:
+            continue
+        prog = _compute_tournament_progress(r['session_id'], user_id, rd)
+        if not prog.get('is_complete'):
+            continue
+        dt = _utc_to_user(r['session_begin_time'])
+        upd(rk, rd.get('name', rk), prog.get('total_score') or 0,
+            dt.replace(tzinfo=None) if dt else None, rd.get('max_score'))
+    return sorted(pbs.values(), key=lambda x: x['name'])
+
+
+def _practice_pbs(user_id):
+    """Practice personal bests for the records board: the most accurate and most
+    precise completed quiver (MPI / R95 as a % of target half-width), and the
+    calendar month where accuracy improved most vs the prior active month.
+    (Longest streak comes from _streak_stats.) Keys are None without enough data.
+    """
+    with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
+        srows = cur.execute(
+            "SELECT session_id, session_begin_time FROM session_times "
+            "WHERE user_id = %s", (user_id,)).fetchall()
+    sid_date = {}
+    for r in srows:
+        dt = _utc_to_user(r['session_begin_time'])
+        if dt is not None:
+            sid_date[r['session_id']] = dt.replace(tzinfo=None)
+
+    best_acc = best_prec = None
+    for sid, _qidx, shots, _tid in _iter_quivers(user_id):
+        xs, ys = [], []
+        for s in shots:
+            try:
+                half = float(s['half_src']) / 2.0
+            except (TypeError, ValueError):
+                continue
+            if half <= 0:
+                continue
+            xr = str(s['x_coord']).strip() if s['x_coord'] is not None else ''
+            yr = str(s['y_coord']).strip() if s['y_coord'] is not None else ''
+            if xr == MISS_SENTINEL and yr == MISS_SENTINEL:
+                continue
+            try:
+                xs.append(float(xr) / half)
+                ys.append(float(yr) / half)
+            except ValueError:
+                continue
+        if len(xs) < 3:
+            continue
+        st = _archery_stats(xs, ys)
+        if st is None:
+            continue
+        d = sid_date.get(sid)
+        mpi, r95 = st['mpi'] * 100, st['r95'] * 100
+        if best_acc is None or mpi < best_acc['value']:
+            best_acc = {'value': mpi, 'date': d, 'n': len(xs)}
+        if best_prec is None or r95 < best_prec['value']:
+            best_prec = {'value': r95, 'date': d, 'n': len(xs)}
+
+    # Biggest month-over-month accuracy gain (drop in mean per-session MPI).
+    from collections import defaultdict
+    month_vals = defaultdict(list)
+    for p in _ap_series(user_id, 'mpi'):
+        month_vals[(p['date'].year, p['date'].month)].append(p['value'])
+    months = sorted(month_vals)
+    most_improved = None
+    for i in range(1, len(months)):
+        prev_m, cur_m = months[i - 1], months[i]
+        prev_mean = sum(month_vals[prev_m]) / len(month_vals[prev_m])
+        cur_mean = sum(month_vals[cur_m]) / len(month_vals[cur_m])
+        delta = prev_mean - cur_mean  # positive = improved (MPI fell)
+        if delta > 0 and (most_improved is None or delta > most_improved['delta']):
+            most_improved = {
+                'label': datetime(cur_m[0], cur_m[1], 1).strftime('%B %Y'),
+                'delta': delta, 'from': prev_mean, 'to': cur_mean}
+    return {'best_accuracy': best_acc, 'best_precision': best_prec,
+            'most_improved': most_improved}
+
+
+def _class_ladder(points, category):
+    """Current outdoor AGB class from the best handicap + the next rung up."""
+    if not points:
+        return None
+    best_hc = min(p['handicap'] for p in points)
+    thresholds = classifications.agb_class_thresholds(category, indoor=False)
+    current = current_idx = None
+    for i, (code, name, record, thr) in enumerate(thresholds):
+        if best_hc <= thr:
+            current = {'code': code, 'name': name, 'threshold': thr, 'record': record}
+            current_idx = i
+            break
+    nxt = None
+    idx_next = (current_idx - 1) if current_idx is not None else (len(thresholds) - 1)
+    if 0 <= idx_next < len(thresholds) and idx_next != current_idx:
+        code, name, record, thr = thresholds[idx_next]
+        nxt = {'code': code, 'name': name, 'threshold': thr, 'record': record,
+               'gap': round(best_hc - thr, 1)}
+    return {'best_handicap': best_hc, 'current': current, 'next': nxt}
+
+
+@app.route('/records', methods=['GET'])
+@login_required
+def records():
+    """Personal bests, classification ladder, earned awards, and practice
+    milestones. Real competitions are logged through the Tournament score-sheet
+    flow, so they show up in the PBs / handicap here automatically."""
+    user_id = current_user_id()
+    points = _completed_rounds(user_id)
+    category = _archer_category()
+    return render_template(
+        'records.html',
+        summary=_handicap_summary(points),
+        ladder=_class_ladder(points, category),
+        achievements=_scan_achievements(user_id, points=points),
+        pbs=_round_pbs(user_id),
+        streak=_streak_stats(user_id),
+        practice=_practice_pbs(user_id),
+        category=category)
+
+
+# ---------------------------------------------------------------------------
+# PWA web-push practice reminders
+# ---------------------------------------------------------------------------
+# Opt-in browser push nudging an archer who's gone quiet. Subscriptions live in
+# push_subscriptions; the daily /cron/reminders endpoint (guarded by
+# CRON_SECRET, hit by an external scheduler such as a PythonAnywhere task)
+# computes each subscriber's days-since-last-shot and pushes when they've
+# lapsed past their threshold. Degrades gracefully when pywebpush isn't
+# installed or the VAPID keys aren't configured — it logs instead of sending —
+# so nothing here can crash a request or the cron.
+
+
+def _vapid_config():
+    return {
+        'public_key': (os.environ.get('VAPID_PUBLIC_KEY') or '').strip(),
+        'private_key': (os.environ.get('VAPID_PRIVATE_KEY') or '').strip(),
+        'contact': (os.environ.get('VAPID_CONTACT') or '').strip()
+                   or 'mailto:reminders@apolloshoots.org',
+    }
+
+
+def _push_enabled():
+    c = _vapid_config()
+    return bool(c['public_key'] and c['private_key'])
+
+
+def _send_web_push(sub, payload):
+    """Send one web-push message. Returns ``(status, detail)`` where status is
+    'ok' (sent, or dev-logged when unconfigured), 'gone' (prune this
+    subscription), or 'error'. Never raises."""
+    cfg = _vapid_config()
+    try:
+        from pywebpush import webpush, WebPushException
+    except ImportError:
+        print(f"🔔 [dev] pywebpush not installed; would push: {payload.get('title')}")
+        return ('ok', 'dev')
+    if not (cfg['public_key'] and cfg['private_key']):
+        print(f"🔔 [dev] VAPID keys unset; would push: {payload.get('title')}")
+        return ('ok', 'dev')
+    try:
+        webpush(
+            subscription_info={'endpoint': sub['endpoint'],
+                               'keys': {'p256dh': sub['p256dh'], 'auth': sub['auth']}},
+            data=json.dumps(payload),
+            vapid_private_key=cfg['private_key'],
+            vapid_claims={'sub': cfg['contact']},
+            timeout=10,
+        )
+        return ('ok', 'sent')
+    except WebPushException as e:
+        code = getattr(getattr(e, 'response', None), 'status_code', None)
+        if code in (404, 410):
+            return ('gone', str(code))
+        return ('error', str(e)[:200])
+    except Exception as e:
+        return ('error', str(e)[:200])
+
+
+@app.route('/api/push/config', methods=['GET'])
+@login_required
+def api_push_config():
+    """Whether push is configured server-side + the VAPID public key the
+    browser needs as its applicationServerKey."""
+    cfg = _vapid_config()
+    return jsonify(enabled=_push_enabled(), public_key=cfg['public_key'])
+
+
+@app.route('/api/push/subscribe', methods=['POST'])
+@login_required
+def api_push_subscribe():
+    """Store a browser push subscription and enable reminders for the user."""
+    user_id = current_user_id()
+    data = request.get_json(silent=True) or {}
+    endpoint = (data.get('endpoint') or '').strip()
+    keys = data.get('keys') or {}
+    p256dh = (keys.get('p256dh') or '').strip()
+    auth = (keys.get('auth') or '').strip()
+    if not endpoint or not p256dh or not auth:
+        return jsonify(ok=False, error='Invalid subscription.'), 400
+    endpoint_hash = hashlib.sha256(endpoint.encode('utf-8')).hexdigest()
+    try:
+        with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
+            existing = cur.execute(
+                "SELECT id FROM push_subscriptions WHERE endpoint_hash = %s",
+                (endpoint_hash,)).fetchone()
+            if existing:
+                cur.execute(
+                    "UPDATE push_subscriptions SET user_id = %s, endpoint = %s, "
+                    "p256dh = %s, auth = %s, last_error = NULL WHERE id = %s",
+                    (user_id, endpoint, p256dh, auth, existing['id']))
+            else:
+                cur.execute(
+                    "INSERT INTO push_subscriptions (user_id, endpoint, "
+                    "endpoint_hash, p256dh, auth, created_at) "
+                    "VALUES (%s,%s,%s,%s,%s,%s)",
+                    (user_id, endpoint, endpoint_hash, p256dh, auth, _app_now()))
+            cur.execute("UPDATE users SET remind_enabled = 1 WHERE id = %s",
+                        (user_id,))
+            con.commit()
+    except SQLAlchemyError as e:
+        print(f"❌ Push subscribe error: {e}")
+        return jsonify(ok=False, error='Database error.'), 500
+    g.pop('_current_user', None)
+    return jsonify(ok=True)
+
+
+@app.route('/api/push/unsubscribe', methods=['POST'])
+@login_required
+def api_push_unsubscribe():
+    """Remove a push subscription; disable reminders when it was the last one."""
+    user_id = current_user_id()
+    data = request.get_json(silent=True) or {}
+    endpoint = (data.get('endpoint') or '').strip()
+    try:
+        with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
+            if endpoint:
+                endpoint_hash = hashlib.sha256(endpoint.encode('utf-8')).hexdigest()
+                cur.execute("DELETE FROM push_subscriptions WHERE endpoint_hash = %s "
+                            "AND user_id = %s", (endpoint_hash, user_id))
+            remaining = cur.execute(
+                "SELECT COUNT(*) FROM push_subscriptions WHERE user_id = %s",
+                (user_id,)).fetchone()[0]
+            if not remaining:
+                cur.execute("UPDATE users SET remind_enabled = 0 WHERE id = %s",
+                            (user_id,))
+            con.commit()
+    except SQLAlchemyError as e:
+        print(f"❌ Push unsubscribe error: {e}")
+        return jsonify(ok=False, error='Database error.'), 500
+    g.pop('_current_user', None)
+    return jsonify(ok=True)
+
+
+@app.route('/cron/reminders', methods=['GET', 'POST'])
+def cron_reminders():
+    """Send practice-streak reminders to lapsed subscribers.
+
+    Guarded by CRON_SECRET (query ``key`` or ``X-Cron-Key`` header, constant-
+    time compared). Meant to be hit once a day by an external scheduler. Sends
+    at most one push per lapse (de-nagged via ``users.last_reminder_at``) and
+    prunes subscriptions the push service reports as expired.
+    """
+    secret = (os.environ.get('CRON_SECRET') or '').strip()
+    provided = (request.args.get('key') or
+                request.headers.get('X-Cron-Key') or '').strip()
+    if not secret or not secrets.compare_digest(secret, provided):
+        return jsonify(ok=False, error='forbidden'), 403
+
+    sent = pruned = reminded = skipped = 0
+    with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
+        rows = cur.execute(
+            "SELECT id, timezone, remind_after_days, last_reminder_at "
+            "FROM users WHERE remind_enabled = 1 AND is_active = 1").fetchall()
+        users = [dict(id=r['id'], timezone=r['timezone'],
+                      remind_after_days=r['remind_after_days'],
+                      last_reminder_at=r['last_reminder_at']) for r in rows]
+
+    now = _app_now()
+    for u in users:
+        uid = u['id']
+        with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
+            srows = cur.execute(
+                "SELECT id, endpoint, p256dh, auth FROM push_subscriptions "
+                "WHERE user_id = %s", (uid,)).fetchall()
+            subs = [dict(id=s['id'], endpoint=s['endpoint'], p256dh=s['p256dh'],
+                         auth=s['auth']) for s in srows]
+        if not subs:
+            continue
+        try:
+            tz = ZoneInfo(u['timezone'] or 'UTC')
+        except Exception:
+            tz = ZoneInfo('UTC')
+        streak = _streak_stats(uid, tz=tz)
+        threshold = int(u['remind_after_days'] or 4)
+        if not streak or streak['days_since_last'] < threshold:
+            skipped += 1
+            continue
+        last = _as_dt(u['last_reminder_at'])
+        if last and (now - last).days < threshold:
+            skipped += 1
+            continue
+        payload = {
+            'title': 'Time to shoot 🏹',
+            'body': f"It's been {streak['days_since_last']} days since your last "
+                    "session — keep the streak alive.",
+            'url': '/sesh',
+        }
+        any_ok = False
+        for s in subs:
+            status, detail = _send_web_push(s, payload)
+            if status == 'ok':
+                any_ok = True
+                sent += 1
+            elif status == 'gone':
+                pruned += 1
+                with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
+                    cur.execute("DELETE FROM push_subscriptions WHERE id = %s",
+                                (s['id'],))
+                    con.commit()
+            else:
+                with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
+                    cur.execute("UPDATE push_subscriptions SET last_error = %s "
+                                "WHERE id = %s", (detail, s['id']))
+                    con.commit()
+        if any_ok:
+            reminded += 1
+            with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
+                cur.execute("UPDATE users SET last_reminder_at = %s WHERE id = %s",
+                            (now, uid))
+                con.commit()
+    return jsonify(ok=True, reminded=reminded, sent=sent, pruned=pruned,
+                   skipped=skipped)
 
 
 if __name__ == "__main__":

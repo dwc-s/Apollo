@@ -113,6 +113,27 @@
 
             <span class="form-label">Tip weight (grams)</span>
             <input type="text" name="tip_weight" value="{{ arrow_data[i][0]['tip_weight'] }}" inputmode="decimal">
+
+            {% set m = arrow_meta[arrow_data[i][0]['rowid']] %}
+            <div style="margin-top:10px;padding-top:8px;border-top:1px dashed #6b80a8;">
+                <span class="form-label">Set &amp; usage</span>
+                <div style="font-weight:700;color:#1a3a5c;margin-bottom:4px;">
+                    {{ m.shots_total }} shots on this set{% if m.on_set is not none %} · {{ m.on_set }} since in service{% endif %}
+                    {% if m.retired %} <span style="color:#c0392b;">· retired</span>{% endif %}
+                </div>
+
+                <span class="form-label">Arrows in set</span>
+                <input type="text" name="set_size" value="{{ arrow_data[i][0]['set_size'] or '' }}" inputmode="numeric" pattern="[0-9]*">
+
+                <span class="form-label">In service since</span>
+                <input type="date" name="in_service_on" value="{{ arrow_data[i][0]['in_service_on'] or '' }}">
+
+                <label style="display:flex;align-items:center;gap:6px;margin-top:6px;font-size:0.9rem;">
+                    <input type="checkbox" name="retired" value="1" {% if arrow_data[i][0]['retired'] %}checked{% endif %} style="width:auto;">
+                    Retired (out of rotation)
+                </label>
+            </div>
+
             <div class="submit-row">
                 <input type="submit" value="Delete Arrow" name="delete" formnovalidate>
                 <input type="submit" value="Submit Edit">

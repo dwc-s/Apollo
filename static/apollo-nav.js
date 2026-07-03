@@ -109,6 +109,21 @@
     }
 
     ready(function () {
+        // Inject the Goals + Records links into every page's side-nav, so the
+        // two personal-progress pages don't require editing each template's
+        // duplicated nav block. Runs before the mobile-drawer wiring below so
+        // the injected links pick up its close-on-tap handler. Idempotent.
+        (function () {
+            const nav = document.querySelector('.side-nav');
+            if (!nav || nav.querySelector('a[href="/goals"]')) return;
+            const anchor = nav.querySelector('a[href="/analyze"]');
+            if (!anchor) return;
+            anchor.insertAdjacentHTML('beforebegin',
+                '<a href="/goals" class="side-nav-link"><span class="nav-badge">◎</span>Goals</a>' +
+                '<a href="/records" class="side-nav-link"><span class="nav-badge">🏅</span>Records</a>' +
+                '<hr class="side-nav-divider">');
+        })();
+
         document.body.insertAdjacentHTML('beforeend', EXPORT_MODAL_HTML);
         document.body.insertAdjacentHTML('beforeend', IMPORT_MODAL_HTML);
         document.body.insertAdjacentHTML('beforeend', NOTES_MODAL_HTML);

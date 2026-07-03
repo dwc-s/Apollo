@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <link rel="stylesheet" href="/static/fonts/apollo-fonts.css">
+    <link rel="stylesheet" type="text/css" href="{{ url_for('static', filename='style.css') }}">
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="csrf-token" content="{{ csrf_token() }}">
+    <title>Apollo::goals</title>
+    <style>
+        .goals-wrap { width: 88vw; max-width: 1100px; margin: 0 auto; }
+        .goal-add-panel .goal-field { margin: 10px 0; }
+        .goal-add-panel label.fld-label {
+            display: block; font-size: 0.82rem; letter-spacing: 0.04em;
+            text-transform: uppercase; color: #5a6a82; margin-bottom: 4px;
+        }
+        .goal-add-panel select, .goal-add-panel input[type="number"],
+        .goal-add-panel input[type="text"], .goal-add-panel input[type="date"] {
+            width: 100%; box-sizing: border-box; padding: 9px 11px;
+            border: 1px solid #6b80a8; border-radius: 6px; background: #eef2f9;
+            color: #1a3a5c; font-family: 'Quantico', sans-serif; font-size: 0.95rem;
+        }
+        .goal-kind-fields { display: none; }
+        .goal-kind-fields.active { display: block; }
+        .goals-grid {
+            display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+            gap: 16px; margin-top: 18px;
+        }
+        .goal-card {
+            border: 1px solid #d6deeb; border-radius: 10px; background: #f6f9fd;
+            padding: 14px 16px; position: relative;
+        }
+        .goal-card.status-achieved { background: #f2faf3; border-color: #bfe3c4; }
+        .goal-card.status-archived { opacity: 0.72; }
+        .goal-card-head { display: flex; align-items: center; gap: 10px; }
+        .goal-card-head h4 { margin: 0; flex: 1; color: #1a3a5c; font-size: 1.05rem; }
+        .goal-verdict {
+            color: #fff; font-size: 0.72rem; font-weight: 700; letter-spacing: 0.04em;
+            text-transform: uppercase; padding: 3px 9px; border-radius: 999px;
+        }
+        .goal-del-btn {
+            background: none; border: none; color: #9aa7bd; font-size: 1.1rem;
+            cursor: pointer; line-height: 1; padding: 2px 4px;
+        }
+        .goal-del-btn:hover { color: #c0392b; }
+        .goal-headline { font-size: 1.15rem; font-weight: 700; color: #1a3a5c; margin: 10px 0 2px; }
+        .goal-deadline { font-size: 0.8rem; color: #7a879c; margin-bottom: 8px; }
+        .goal-card img { width: 100%; height: auto; border-radius: 6px; margin: 8px 0; background:#fff; }
+        table.goal-metrics { width: 100%; border-collapse: collapse; font-size: 0.86rem; }
+        table.goal-metrics td { padding: 3px 2px; border-bottom: 1px solid #e6ecf5; }
+        table.goal-metrics td.k { color: #5a6a82; }
+        table.goal-metrics td.v { text-align: right; font-weight: 600; color: #1a3a5c; }
+        .goals-empty { color: #cfe0f7; margin-top: 18px; font-style: italic; }
+    </style>
+    <script defer src="{{ url_for('static', filename='apollo-nav.js') }}"></script>
+</head>
+<body>
+<nav class="side-nav">
+    <a href="/" class="side-nav-brand">Apollo</a>
+    <a href="/sesh" class="side-nav-link"><span class="nav-badge">→</span>Start session</a>
+    <a href="/previous_sessions" class="side-nav-link"><span class="nav-badge">→</span>Previous sessions</a>
+    <hr class="side-nav-divider">
+    <a href="/tournament" class="side-nav-link"><span class="nav-badge">★</span>Tournament</a>
+    <hr class="side-nav-divider">
+    <a href="/analyze" class="side-nav-link"><span class="nav-badge">→</span>Analyze data</a>
+    <a href="/predict" class="side-nav-link"><span class="nav-badge">→</span>Predict performance</a>
+    <a href="/tools" class="side-nav-link"><span class="nav-badge">⚙</span>Tools</a>
+    <hr class="side-nav-divider">
+    <a href="/add_bow" class="side-nav-link"><span class="nav-badge">→</span>Add bow</a>
+    <a href="/add_arrow" class="side-nav-link"><span class="nav-badge">→</span>Add arrow</a>
+    <a href="/add_target" class="side-nav-link"><span class="nav-badge">→</span>Add target</a>
+    <hr class="side-nav-divider">
+    <a href="/edit_bows" class="side-nav-link"><span class="nav-badge">→</span>Edit bows</a>
+    <a href="/edit_arrows" class="side-nav-link"><span class="nav-badge">→</span>Edit arrows</a>
+    <a href="/edit_targets" class="side-nav-link"><span class="nav-badge">→</span>Edit targets</a>
+    <hr class="side-nav-divider">
+    <a href="#" id="export-link" class="side-nav-link"><span class="nav-badge">⬇</span>Export data</a>
+    <a href="#" id="import-link" class="side-nav-link"><span class="nav-badge">⬆</span>Import data</a>
+    <hr class="side-nav-divider">
+    <a href="#" id="notes-link" class="side-nav-link"><span class="nav-badge">✎</span>Notes</a>
+    <hr class="side-nav-divider">
+    {% if current_user and current_user.is_root %}
+    <a href="/admin" class="side-nav-link"><span class="nav-badge">★</span>Admin</a>
+    <hr class="side-nav-divider">
+    {% endif %}
+    <button type="button" id="units-toggle" class="side-nav-units-btn">⇄ Imperial</button>
+    <div class="side-nav-spacer"></div>
+    {% if current_user %}
+    <div class="side-nav-user">
+        <span class="username">{{ current_user.username }}</span>
+        <a href="/account">Account</a>
+        <form action="/logout" method="POST">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <button type="submit" class="logout-btn">Sign out</button>
+        </form>
+        <a href="/docs/">Documentation</a>
+    </div>
+    {% endif %}
+</nav>
+<h1 class="title">Goals</h1>
+<script>
+(function fitTitleInit() {
+    function fitTitle() {
+        document.querySelectorAll('.title').forEach(el => {
+            el.style.fontSize = '200px';
+            let fs = 200;
+            while (el.scrollWidth > el.clientWidth && fs > 14) { fs -= 2; el.style.fontSize = fs + 'px'; }
+        });
+    }
+    window.addEventListener('load', fitTitle);
+    window.addEventListener('resize', fitTitle);
+})();
+</script>
+
+<div class="goals-wrap">
+
+    {% if form_error %}
+    <div class="auth-message error">{{ form_error }}</div>
+    {% endif %}
+
+    <form action="/goals" method="POST" class="form-panel goal-add-panel">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <h4>Set a goal</h4>
+        <div class="goal-field">
+            <label class="fld-label" for="kind">Goal type</label>
+            <select name="kind" id="kind">
+                <option value="handicap">Reach a handicap</option>
+                <option value="classification">Reach a classification</option>
+                <option value="round_score">Score on a round</option>
+                <option value="accuracy">Improve accuracy (MPI)</option>
+                <option value="precision">Improve precision (R95)</option>
+                <option value="volume">Practice volume</option>
+            </select>
+        </div>
+
+        <div class="goal-kind-fields" data-kind="handicap">
+            <div class="goal-field">
+                <label class="fld-label" for="target_handicap">Target handicap (0 = best)</label>
+                <input type="number" name="target_handicap" id="target_handicap" min="0" max="150" step="1" placeholder="e.g. 40">
+            </div>
+        </div>
+
+        <div class="goal-kind-fields" data-kind="classification">
+            <div class="goal-field">
+                <label class="fld-label" for="target_class_code">Target classification
+                    ({{ category.bowstyle }} · {{ category.gender }} · {{ category.age_group }})</label>
+                <select name="target_class_code" id="target_class_code">
+                    <optgroup label="Outdoor">
+                        {% for c in class_choices if c.group == 'Outdoor' %}
+                        <option value="{{ c.code }}">{{ c.name }} (≤ {{ c.threshold }} hc){% if c.record %} · record status{% endif %}</option>
+                        {% endfor %}
+                    </optgroup>
+                    <optgroup label="Indoor">
+                        {% for c in class_choices if c.group == 'Indoor' %}
+                        <option value="{{ c.code }}">{{ c.name }} (≤ {{ c.threshold }} hc){% if c.record %} · record status{% endif %}</option>
+                        {% endfor %}
+                    </optgroup>
+                </select>
+            </div>
+        </div>
+
+        <div class="goal-kind-fields" data-kind="round_score">
+            <div class="goal-field">
+                <label class="fld-label" for="round_key">Round</label>
+                <select name="round_key" id="round_key">
+                    {% for r in round_choices %}
+                    <option value="{{ r.key }}" data-max="{{ r.max_score }}">{{ r.name }} (max {{ r.max_score }})</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="goal-field">
+                <label class="fld-label" for="target_score">Target score</label>
+                <input type="number" name="target_score" id="target_score" min="1" step="1" placeholder="e.g. 650">
+            </div>
+        </div>
+
+        <div class="goal-kind-fields" data-kind="accuracy precision">
+            <div class="goal-field">
+                <label class="fld-label" for="target_metric">Target as % of the target's half-width (lower is tighter)</label>
+                <input type="number" name="target_metric" id="target_metric" min="1" max="100" step="0.5" placeholder="e.g. 25">
+                <div style="font-size:0.78rem;color:#7a879c;margin-top:4px;">
+                    Same normalized measure as Analyze — e.g. an R95 of 25% means 95% of your arrows land within a quarter of the way from centre to the target edge. Averaged per session across your history.
+                </div>
+            </div>
+        </div>
+
+        <div class="goal-kind-fields" data-kind="volume">
+            <div class="goal-field">
+                <label class="fld-label" for="volume_arrows">Arrows per period</label>
+                <input type="number" name="volume_arrows" id="volume_arrows" min="1" step="1" placeholder="e.g. 300">
+            </div>
+            <div class="goal-field">
+                <label class="fld-label" for="volume_period">Period</label>
+                <select name="volume_period" id="volume_period">
+                    <option value="week">Per week</option>
+                    <option value="month">Per month</option>
+                </select>
+            </div>
+        </div>
+
+        <div class="goal-field goal-deadline-field">
+            <label class="fld-label" for="deadline">Deadline (optional)</label>
+            <input type="date" name="deadline" id="deadline">
+        </div>
+        <div class="goal-field">
+            <label class="fld-label" for="label">Label (optional)</label>
+            <input type="text" name="label" id="label" maxlength="255" placeholder="Auto-generated if blank">
+        </div>
+        <div class="submit-row">
+            <input type="submit" value="Add goal">
+        </div>
+    </form>
+
+    {% if cards %}
+    <div class="goals-grid">
+        {% for card in cards %}
+        <div class="goal-card status-{{ card.goal.status }}">
+            <div class="goal-card-head">
+                <span class="goal-verdict" style="background:{{ card.verdict_color }}">{{ card.verdict_label }}</span>
+                <h4>{{ card.goal.label }}</h4>
+                <form method="POST" action="/goals/{{ card.goal.id }}/delete"
+                      onsubmit="return confirm('Delete this goal?');">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <button type="submit" class="goal-del-btn" title="Delete goal">✕</button>
+                </form>
+            </div>
+            <div class="goal-headline">{{ card.prog.headline }}</div>
+            {% if card.deadline %}
+            <div class="goal-deadline">by {{ card.deadline.strftime('%Y-%m-%d') }}</div>
+            {% endif %}
+            {% if card.prog.svg_b64 %}
+            <img src="data:image/svg+xml;base64,{{ card.prog.svg_b64 }}" alt="Goal projection chart">
+            {% endif %}
+            {% if card.prog.metrics %}
+            <table class="goal-metrics">
+                {% for k, v in card.prog.metrics %}
+                <tr><td class="k">{{ k }}</td><td class="v">{{ v }}</td></tr>
+                {% endfor %}
+            </table>
+            {% endif %}
+        </div>
+        {% endfor %}
+    </div>
+    {% else %}
+    <div class="goals-empty">No goals yet — set one above. Handicap and classification
+        goals project your Archery&nbsp;GB handicap trend to tell you if you're on track.</div>
+    {% endif %}
+
+</div>
+
+<script>
+// Reveal only the fields relevant to the selected goal type.
+(function () {
+    const kind = document.getElementById('kind');
+    const groups = document.querySelectorAll('.goal-kind-fields');
+    const deadlineField = document.querySelector('.goal-deadline-field');
+    function sync() {
+        groups.forEach(g => g.classList.toggle('active', g.dataset.kind.split(' ').includes(kind.value)));
+        // Volume goals are period-relative, so a one-off deadline doesn't apply.
+        deadlineField.style.display = (kind.value === 'volume') ? 'none' : '';
+    }
+    kind.addEventListener('change', sync);
+    sync();
+})();
+</script>
+
+<script>
+const UNITS_KEY = 'apollo_units';
+function applyUnits() {
+    const imperial = localStorage.getItem(UNITS_KEY) === 'imperial';
+    document.getElementById('units-toggle').textContent = imperial ? '⇄ Metric' : '⇄ Imperial';
+}
+document.getElementById('units-toggle').addEventListener('click', () => {
+    const current = localStorage.getItem(UNITS_KEY) || 'metric';
+    localStorage.setItem(UNITS_KEY, current === 'metric' ? 'imperial' : 'metric');
+    applyUnits();
+});
+applyUnits();
+</script>
+</body>
+</html>

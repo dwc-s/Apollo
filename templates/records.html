@@ -1,0 +1,216 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <link rel="stylesheet" href="/static/fonts/apollo-fonts.css">
+    <link rel="stylesheet" type="text/css" href="{{ url_for('static', filename='style.css') }}">
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="csrf-token" content="{{ csrf_token() }}">
+    <title>Apollo::records</title>
+    <style>
+        .rec-wrap { width: 90vw; max-width: 1100px; margin: 0 auto; }
+        .rec-section { margin: 22px 0; }
+        .rec-section h3 { color: #cfe0f7; font-family: 'Quantico', sans-serif;
+            letter-spacing: 0.04em; margin-bottom: 8px; }
+        .rec-cards { display: flex; flex-wrap: wrap; gap: 14px; }
+        .rec-card { flex: 1 1 160px; min-width: 150px; padding: 12px 14px;
+            border: 1px solid #d6deeb; border-radius: 10px; background: #f6f9fd; }
+        .rec-card .k { font-size: 0.76em; text-transform: uppercase; letter-spacing: 0.04em; color: #5a6a82; }
+        .rec-card .v { font-size: 1.7em; font-weight: 700; color: #1a3a5c; }
+        .rec-card .s { font-size: 0.74em; color: #7a879c; }
+        .ladder { display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+            background: #f6f9fd; border: 1px solid #d6deeb; border-radius: 10px; padding: 14px 16px; }
+        .ladder .now { font-size: 1.3em; font-weight: 700; color: #1a3a5c; }
+        .ladder .arrow { color: #9aa7bd; font-size: 1.4em; }
+        .ladder .next { color: #33507d; }
+        .badges { display: flex; flex-wrap: wrap; gap: 8px; }
+        .badge { display: inline-flex; flex-direction: column; padding: 8px 12px; border-radius: 8px;
+            background: #4d6da6; color: #fff; font-size: 0.86rem; }
+        .badge.agb { background: #4d6da6; } .badge.wa { background: #b0842f; } .badge.usaa { background: #3f7d3f; }
+        .badge small { opacity: 0.85; font-size: 0.72rem; }
+        table.rec-table { width: 100%; border-collapse: collapse; background:#f6f9fd; border-radius:8px; overflow:hidden; }
+        table.rec-table th, table.rec-table td { padding: 7px 10px; text-align: left; border-bottom: 1px solid #e6ecf5; font-size: 0.9rem; }
+        table.rec-table th { background: #e7eef8; color: #1a3a5c; }
+        .rec-empty { color: #cfe0f7; font-style: italic; }
+    </style>
+    <script defer src="{{ url_for('static', filename='apollo-nav.js') }}"></script>
+</head>
+<body>
+<nav class="side-nav">
+    <a href="/" class="side-nav-brand">Apollo</a>
+    <a href="/sesh" class="side-nav-link"><span class="nav-badge">→</span>Start session</a>
+    <a href="/previous_sessions" class="side-nav-link"><span class="nav-badge">→</span>Previous sessions</a>
+    <hr class="side-nav-divider">
+    <a href="/tournament" class="side-nav-link"><span class="nav-badge">★</span>Tournament</a>
+    <hr class="side-nav-divider">
+    <a href="/analyze" class="side-nav-link"><span class="nav-badge">→</span>Analyze data</a>
+    <a href="/predict" class="side-nav-link"><span class="nav-badge">→</span>Predict performance</a>
+    <a href="/tools" class="side-nav-link"><span class="nav-badge">⚙</span>Tools</a>
+    <hr class="side-nav-divider">
+    <a href="/add_bow" class="side-nav-link"><span class="nav-badge">→</span>Add bow</a>
+    <a href="/add_arrow" class="side-nav-link"><span class="nav-badge">→</span>Add arrow</a>
+    <a href="/add_target" class="side-nav-link"><span class="nav-badge">→</span>Add target</a>
+    <hr class="side-nav-divider">
+    <a href="/edit_bows" class="side-nav-link"><span class="nav-badge">→</span>Edit bows</a>
+    <a href="/edit_arrows" class="side-nav-link"><span class="nav-badge">→</span>Edit arrows</a>
+    <a href="/edit_targets" class="side-nav-link"><span class="nav-badge">→</span>Edit targets</a>
+    <hr class="side-nav-divider">
+    <a href="#" id="export-link" class="side-nav-link"><span class="nav-badge">⬇</span>Export data</a>
+    <a href="#" id="import-link" class="side-nav-link"><span class="nav-badge">⬆</span>Import data</a>
+    <hr class="side-nav-divider">
+    <a href="#" id="notes-link" class="side-nav-link"><span class="nav-badge">✎</span>Notes</a>
+    <hr class="side-nav-divider">
+    {% if current_user and current_user.is_root %}
+    <a href="/admin" class="side-nav-link"><span class="nav-badge">★</span>Admin</a>
+    <hr class="side-nav-divider">
+    {% endif %}
+    <button type="button" id="units-toggle" class="side-nav-units-btn">⇄ Imperial</button>
+    <div class="side-nav-spacer"></div>
+    {% if current_user %}
+    <div class="side-nav-user">
+        <span class="username">{{ current_user.username }}</span>
+        <a href="/account">Account</a>
+        <form action="/logout" method="POST">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <button type="submit" class="logout-btn">Sign out</button>
+        </form>
+        <a href="/docs/">Documentation</a>
+    </div>
+    {% endif %}
+</nav>
+<h1 class="title">Records</h1>
+{% include '_flashes.html' %}
+<script>
+(function fitTitleInit() {
+    function fitTitle() {
+        document.querySelectorAll('.title').forEach(el => {
+            el.style.fontSize = '200px'; let fs = 200;
+            while (el.scrollWidth > el.clientWidth && fs > 14) { fs -= 2; el.style.fontSize = fs + 'px'; }
+        });
+    }
+    window.addEventListener('load', fitTitle);
+    window.addEventListener('resize', fitTitle);
+})();
+</script>
+
+<div class="rec-wrap">
+
+    <div class="rec-section">
+        <h3>Handicap ({{ category.bowstyle }} · {{ category.gender }} · {{ category.age_group }})</h3>
+        <div class="rec-cards">
+            <div class="rec-card"><div class="k">Latest</div><div class="v">{{ summary.latest if summary.latest is not none else '—' }}</div><div class="s">most recent round</div></div>
+            <div class="rec-card"><div class="k">Best (recent)</div><div class="v">{{ summary.best_recent if summary.best_recent is not none else '—' }}</div><div class="s">lowest in 12 months</div></div>
+            <div class="rec-card"><div class="k">AGB handicap</div><div class="v">{{ summary.agb if summary.agb is not none else '—' }}</div><div class="s">{{ summary.agb_basis or 'needs 3 rounds' }}</div></div>
+        </div>
+    </div>
+
+    {% if ladder %}
+    <div class="rec-section">
+        <h3>Classification (outdoor)</h3>
+        <div class="ladder">
+            <span class="now">{{ ladder.current.name if ladder.current else 'No class yet' }}</span>
+            {% if ladder.next %}
+            <span class="arrow">→</span>
+            <span class="next">next: <strong>{{ ladder.next.name }}</strong> — shave {{ ladder.next.gap }} handicap points (≤ {{ ladder.next.threshold|round(1) }})</span>
+            {% else %}
+            <span class="next">top classification reached 🏆</span>
+            {% endif %}
+        </div>
+    </div>
+    {% endif %}
+
+    {% if achievements %}
+    <div class="rec-section">
+        <h3>Awards earned</h3>
+        <div class="badges">
+            {% for a in achievements %}
+            <span class="badge {% if a.scheme == 'Archery GB' %}agb{% elif a.scheme == 'World Archery' %}wa{% else %}usaa{% endif %}">
+                {{ a.name }}
+                <small>{{ a.scheme }}{% if a.earned_at %} · {{ a.earned_at.strftime('%Y-%m-%d') if a.earned_at.strftime is defined else a.earned_at }}{% endif %}</small>
+            </span>
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
+
+    <div class="rec-section">
+        <h3>Personal bests by round</h3>
+        {% if pbs %}
+        <table class="rec-table">
+            <thead><tr><th>Round</th><th>Best</th><th>Date</th><th>Rounds shot</th></tr></thead>
+            <tbody>
+                {% for p in pbs %}
+                <tr>
+                    <td>{{ p.name }}</td>
+                    <td><strong>{{ p.best }}</strong>{% if p.max_score %} / {{ p.max_score }}{% endif %}</td>
+                    <td>{{ p.date.strftime('%Y-%m-%d') if p.date else '—' }}</td>
+                    <td>{{ p.n }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <div class="rec-empty">No completed rounds yet — shoot a tournament round to completion and it'll show up here.</div>
+        {% endif %}
+    </div>
+
+    {% if practice and (practice.best_accuracy or practice.best_precision or practice.most_improved) %}
+    <div class="rec-section">
+        <h3>Practice bests</h3>
+        <div class="rec-cards">
+            {% if practice.best_accuracy %}
+            <div class="rec-card">
+                <div class="k">Most accurate quiver</div>
+                <div class="v">{{ practice.best_accuracy.value|round(1) }}%</div>
+                <div class="s">MPI · {{ practice.best_accuracy.date.strftime('%Y-%m-%d') if practice.best_accuracy.date else '—' }}</div>
+            </div>
+            {% endif %}
+            {% if practice.best_precision %}
+            <div class="rec-card">
+                <div class="k">Tightest quiver</div>
+                <div class="v">{{ practice.best_precision.value|round(1) }}%</div>
+                <div class="s">R95 · {{ practice.best_precision.date.strftime('%Y-%m-%d') if practice.best_precision.date else '—' }}</div>
+            </div>
+            {% endif %}
+            {% if practice.most_improved %}
+            <div class="rec-card">
+                <div class="k">Most improved month</div>
+                <div class="v" style="font-size:1.25rem;line-height:1.2;">{{ practice.most_improved.label }}</div>
+                <div class="s">accuracy −{{ practice.most_improved.delta|round(1) }}% MPI</div>
+            </div>
+            {% endif %}
+        </div>
+        <p style="color:#7a879c;font-size:0.78rem;margin:6px 2px 0;">Quiver bests are a percentage of the target's half-width (lower is tighter), needing at least 3 hits in the quiver.</p>
+    </div>
+    {% endif %}
+
+    {% if streak %}
+    <div class="rec-section">
+        <h3>Practice milestones</h3>
+        <div class="rec-cards">
+            <div class="rec-card"><div class="k">Total shots</div><div class="v">{{ streak.total_shots }}</div><div class="s">all time</div></div>
+            <div class="rec-card"><div class="k">Active days</div><div class="v">{{ streak.active_days }}</div><div class="s">days you shot</div></div>
+            <div class="rec-card"><div class="k">Current streak</div><div class="v">{{ streak.current_streak }}</div><div class="s">consecutive days</div></div>
+            <div class="rec-card"><div class="k">Longest streak</div><div class="v">{{ streak.longest_streak }}</div><div class="s">consecutive days</div></div>
+            <div class="rec-card"><div class="k">Days since last</div><div class="v">{{ streak.days_since_last }}</div><div class="s">rest is fine too</div></div>
+        </div>
+    </div>
+    {% endif %}
+
+</div>
+
+<script>
+const UNITS_KEY = 'apollo_units';
+function applyUnits() {
+    const imperial = localStorage.getItem(UNITS_KEY) === 'imperial';
+    document.getElementById('units-toggle').textContent = imperial ? '⇄ Metric' : '⇄ Imperial';
+}
+document.getElementById('units-toggle').addEventListener('click', () => {
+    const current = localStorage.getItem(UNITS_KEY) || 'metric';
+    localStorage.setItem(UNITS_KEY, current === 'metric' ? 'imperial' : 'metric');
+    applyUnits();
+});
+applyUnits();
+</script>
+</body>
+</html>

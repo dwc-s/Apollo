@@ -115,6 +115,10 @@ the app.
 | `APOLLO_ROOT_PASSWORD` | Server bootstrap  | Used only when the root account doesn't exist yet. Safe to remove from `.env` after first boot. |
 | `RESEND_API_KEY`       | Optional          | Powers password-reset email. If unset, Apollo prints reset links to the server log. |
 | `RESEND_FROM`          | Optional          | Sender address. Must be on a Resend-verified domain to mail real users.   |
+| `VAPID_PUBLIC_KEY`     | Optional          | Web-Push public key (base64url). Both VAPID keys must be set for practice-reminder push to be offered; unset ⇒ the feature hides itself. |
+| `VAPID_PRIVATE_KEY`    | Optional          | Web-Push private key (base64url). Pair with `VAPID_PUBLIC_KEY`.            |
+| `VAPID_CONTACT`        | Optional          | `mailto:` the push services can reach you at (VAPID `sub` claim). Defaults to a placeholder. |
+| `CRON_SECRET`          | Optional          | Guards `/cron/reminders`. Unset ⇒ the endpoint returns 403 to everyone (fail-closed). Hit it daily: `GET /cron/reminders?key=<CRON_SECRET>`. |
 | `FLASK_ENV`            | Server: `production` | Disables the Werkzeug debugger and makes `SECRET_KEY` + `APOLLO_BASE_URL` mandatory. |
 | `FLASK_DEBUG`          | Optional          | `1` (default in dev) enables debug. Ignored when `FLASK_ENV=production`.  |
 
@@ -129,13 +133,16 @@ DBs in place.
 
 | Table              | Purpose                                                                  |
 |--------------------|--------------------------------------------------------------------------|
-| `users`            | One row per account (creds, lockout state, `is_root`, timezone, archer profile: `gender`, `age_group`, `default_bowstyle`). |
+| `users`            | One row per account (creds, lockout state, `is_root`, timezone, archer profile: `gender`, `age_group`, `default_bowstyle`, plus reminder prefs: `remind_enabled`, `remind_after_days`, `last_reminder_at`, and an optional saved range `range_lat`/`range_lon`). |
 | `apollo`           | One row per shot (coords, quiver/session metadata, equipment snapshot, and a `bow_style_settings` JSON snapshot of the gear in force when the arrow was loosed). |
-| `session_times`    | Session start/end times, optional manual length override.                |
+| `session_times`    | Session start/end times, optional manual length override, and captured weather (`wx_*`: temp, wind, gust, direction, humidity, pressure). |
 | `targets`          | Available target faces (image, physical size, default flag).             |
 | `target_zones`     | User-defined concentric scoring rings per target.                        |
-| `bows`             | Bow inventory (model, type, draw weight, AMO length, nock height) plus a `style_settings` JSON column for bowstyle-specific static gear. |
-| `arrows`           | Arrow inventory (length, spine, weights, shaft, tip).                    |
+| `bows`             | Bow inventory (model, type, draw weight, AMO length, nock height), a `style_settings` JSON column for bowstyle-specific static gear, and string-lifecycle fields (`string_installed_on`, `string_shot_baseline`, `string_service_shots`, `setup_note`). |
+| `arrows`           | Arrow inventory (length, spine, weights, shaft, tip) plus set-lifecycle fields (`set_size`, `in_service_on`, `retired`). |
+| `goals`            | Per-user performance goals (handicap / classification / round-score / accuracy / precision / volume) with an optional deadline; the projection grades on-track / behind / achieved. |
+| `user_achievements`| First-earned ledger of AGB classes / WA Star / USAA pins (unique per user + scheme + code). |
+| `push_subscriptions` | Web-Push subscriptions for practice reminders (endpoint + keys, unique on the endpoint's sha256). |
 | `password_resets`  | One-shot, short-lived reset tokens (stored as sha256, never plaintext).  |
 | `rate_limit_hits`  | Persistent rate-limit counters (login, forgot-password).                 |
 | `app_settings`     | Global key/value config (e.g. server timezone).                          |
@@ -372,6 +379,50 @@ profile** block on `/account` and is optional — the handicap is computed
 without it; it only affects which classification you're awarded. NFAA
 classification is deferred (it's a relative multi-score scheme, not a
 single-round lookup).
+
+---
+
+## Goals, records, dashboard & reminders
+
+- **Goals (`/goals`).** Set a target and see whether you're on track. Six
+  kinds: **handicap** and **classification** (both project your Archery GB
+  handicap trend to the deadline and grade *on-track / behind / achieved*),
+  **round-score** (a personal-best target on a specific round), **accuracy**
+  (MPI) and **precision** (R95) — projected the same way from your per-session
+  group stats as a percentage of target half-width — and **volume** (arrows per
+  week/month, paced against your shot calendar). The projection reuses the same
+  least-squares fit the *Handicap over time* report draws (`_project_handicap`).
+- **Records (`/records`).** Personal bests per round, the AGB classification
+  ladder (current class + the handicap gap to the next), every WA Star / USAA
+  pin / AGB class you've earned (first-earned dates cached in
+  `user_achievements`), and **practice bests** — your most accurate and tightest
+  completed quiver (MPI / R95 as a % of half-width), longest shooting streak,
+  and the month your accuracy improved most — plus practice milestones. Real
+  competitions are logged through the Tournament score-sheet flow (which tags
+  the session), so they show up in the PBs, handicap, and classification here
+  automatically.
+- **Home dashboard.** Signed-in, the splash becomes a dashboard: lifetime
+  arrows/time, current streak + days since last shot, handicap, classification,
+  active goals with their verdicts, and string-service alerts.
+- **Weather per session + conditions report.** On the session page, *Capture
+  weather* pulls temp/wind/humidity from Open-Meteo (client-side, opt-in) and
+  stores it on the session; you can also enter it by hand when editing a
+  session. The `/analyze` **Performance vs conditions** report then buckets your
+  MPI (accuracy) and R95 (precision) by wind and temperature band — so you can
+  see whether wind actually widens your group.
+- **Equipment lifecycle.** Edit-bow / edit-arrow pages count shots on each bow,
+  shots on the current string (from an install date + baseline), and shots on
+  an arrow set, with a *service due* badge when a string passes its
+  replace-after threshold.
+- **Shareable session card.** The end-of-session screen offers a *Share card*
+  button that draws a branded PNG summary on a `<canvas>` and shares it via the
+  Web Share API (or downloads it) — entirely client-side.
+- **Practice reminders (PWA push).** Opt in on `/account` to a browser
+  notification when you've gone quiet. Subscriptions are stored per device;
+  `/cron/reminders` (guarded by `CRON_SECRET`, hit daily by an external
+  scheduler such as a PythonAnywhere task) pushes anyone past their idle
+  threshold, once per lapse. Needs `VAPID_*` keys set — otherwise the feature
+  hides itself and the endpoint stays fail-closed.
 
 ---
 

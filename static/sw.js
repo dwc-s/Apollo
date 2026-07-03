@@ -28,7 +28,7 @@
  *
  * Bump VERSION to invalidate every cache on the next activate.
  */
-const VERSION = 'apollo-v4';
+const VERSION = 'apollo-v5';
 // One versioned cache. Using a single cache (rather than separate shell +
 // runtime caches) means a stale-while-revalidate write always overwrites the
 // exact key it was read from — a fresh copy can't be shadowed by an older
@@ -174,4 +174,37 @@ self.addEventListener('fetch', (event) => {
   }
 
   // Everything else (dynamic same-origin GET endpoints): default network.
+});
+
+// ── Web-push practice reminders ────────────────────────────────────────────
+// The server (/cron/reminders) sends a JSON payload {title, body, url}. Show
+// it as a notification; clicking it focuses an existing tab or opens the URL.
+self.addEventListener('push', (event) => {
+  let data = {};
+  try { data = event.data ? event.data.json() : {}; } catch (e) { data = {}; }
+  const title = data.title || 'Apollo';
+  const options = {
+    body: data.body || '',
+    icon: '/static/icon-192.png',
+    badge: '/static/icon-192.png',
+    data: { url: data.url || '/' },
+  };
+  event.waitUntil(self.registration.showNotification(title, options));
+});
+
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  const target = (event.notification.data && event.notification.data.url) || '/';
+  event.waitUntil(
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true })
+      .then((clients) => {
+        for (const client of clients) {
+          if ('focus' in client) {
+            client.navigate(target);
+            return client.focus();
+          }
+        }
+        return self.clients.openWindow(target);
+      })
+  );
 });
