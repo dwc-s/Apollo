@@ -15489,22 +15489,53 @@ def _report_quiver_spread(user_id, date_from=None, date_to=None,
     import matplotlib
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
+    import numpy as np
 
     xs = list(range(1, len(quivers) + 1))
     fig, ax = plt.subplots(figsize=(9, 4.5))
+    # Visual encoding mirrors the accuracy/precision traces: color is the
+    # only channel separating the two lines (blue = biggest pair, amber =
+    # smallest). Each is a solid line with subtle date dots and a faint
+    # same-color linear trend line; labels sit in place at the right end
+    # instead of a legend. The shaded band between them stays as a quiet
+    # backdrop for the within-quiver gap.
     ax.fill_between(xs, smallest, biggest, color='#b3c6e3', alpha=0.25,
-                    label='Within-quiver gap')
-    ax.plot(xs, biggest, color='#1a3a5c', marker='o',
-            linewidth=1.6, markersize=4,
-            label='Biggest spread (max pair)')
-    ax.plot(xs, smallest, color='#c79b5a', marker='s',
-            linewidth=1.6, markersize=4,
-            label='Smallest spread (min pair)')
+                    zorder=1)
+    traces = [
+        {'y': biggest,  'color': '#1a3a5c',
+         'label': 'Biggest spread (max pair)'},
+        {'y': smallest, 'color': '#c79b5a',
+         'label': 'Smallest spread (min pair)'},
+    ]
+    for t in traces:
+        ax.plot(xs, t['y'], color=t['color'], linewidth=1.6,
+                linestyle='-', marker='o', markersize=2.5,
+                markeredgewidth=0, alpha=0.95, zorder=3)
+        # Faint same-color linear trend so each trace's direction reads
+        # at a glance, without adding a differentiating channel.
+        if len(xs) >= 2:
+            m, b = np.polyfit(xs, t['y'], 1)
+            ax.plot([xs[0], xs[-1]], [m * xs[0] + b, m * xs[-1] + b],
+                    color=t['color'], linewidth=1.0, alpha=0.45, zorder=2)
     ax.set_xlabel('Session date (sequential quivers in date range)')
     ax.set_ylabel('Arrow-pair distance ÷ target face width\n(1.0 = opposite edges of target)')
     ax.set_title('Biggest vs smallest spread per quiver')
     ax.grid(True, axis='y', linestyle='--', alpha=0.4)
-    ax.legend(loc='upper left', fontsize=9)
+    # Label each trace in place at its right end (replaces the legend), in
+    # the trace's own color, nudged apart vertically so they don't collide.
+    x_right = xs[-1]
+    ylo, yhi = ax.get_ylim()
+    gap = (yhi - ylo) * 0.048
+    prev_y = None
+    for t in sorted(traces, key=lambda tr: tr['y'][-1]):
+        y = t['y'][-1]
+        if prev_y is not None and y < prev_y + gap:
+            y = prev_y + gap
+        prev_y = y
+        ax.annotate(t['label'], xy=(x_right, y),
+                    xytext=(6, 0), textcoords='offset points',
+                    va='center', ha='left', fontsize=7,
+                    color=t['color'], annotation_clip=False)
     # X-axis: each quiver is one evenly-spaced point, but the tick
     # *labels* show the session date so the user can read off when
     # each quiver happened. On long histories we thin the ticks so
@@ -15535,6 +15566,9 @@ def _report_quiver_spread(user_id, date_from=None, date_to=None,
         'how spread out were the arrows across the <em>whole target</em>? '
         'The blue trace is the worst pair (biggest gap between any two '
         'arrows in the quiver); the amber trace is the tightest pair. '
+        'Both are solid lines labeled in place at the right edge (no '
+        'legend), with subtle dots marking each quiver and a faint '
+        'same-color trend line showing the direction. '
         'The shaded band between them is the within-quiver spread '
         'gap — a thinner band means a more consistent group. '
         'Distances are normalized by the target face width, so '
