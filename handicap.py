@@ -140,11 +140,20 @@ def _round_predicted(handicap: float, passes) -> int:
 def handicap_from_score(score, passes, max_score):
     """Integer AGB handicap for ``score`` on a round described by ``passes``.
 
-    Mirrors archeryutils' AGB integer algorithm: the assigned handicap is the
-    *largest* integer H whose ceil-rounded predicted round score is still at
-    least ``score`` (descending scale, round up). A perfect score is handled
-    specially (lowest H whose expected score reaches within the rounding
-    limit of the maximum).
+    Mirrors archeryutils' AGB integer algorithm: the assigned handicap is
+    ``ceil`` of the *continuous* handicap that would produce ``score`` exactly.
+    On the descending AGB scale you round to the worse (higher) whole handicap
+    unless the score lands exactly on the better one's tabled value — so the
+    assigned handicap is the smallest integer H whose *unrounded* expected round
+    score has fallen to at or below ``score``.
+
+    A plateau refinement then steps toward the worse handicap while its
+    ceil-rounded table score still meets ``score``: ``ceil(expected)`` is a step
+    function, so near the extremes several handicaps share one tabled score, and
+    a tie must resolve to the worst H — not award a better handicap than the
+    published table. This also handles a perfect score, whose expected value
+    only approaches the maximum asymptotically (it lands on the worst H still
+    rounding up to the maximum, not the clamp floor).
 
     Returns an int handicap, or ``None`` if the score is non-positive or above
     the round maximum.
@@ -155,15 +164,18 @@ def handicap_from_score(score, passes, max_score):
     if score <= 0.0 or score > float(max_score):
         return None
 
-    # ceil(predicted) is non-increasing in H. Scan from best to worst and keep
-    # the last H that still meets the score; stop once it drops below. This is
-    # correct for a maximum score too: ceil(expected) == max only while
-    # expected > max-1, so the scan lands on the worst handicap that still
-    # rounds up to the maximum (a small/negative number), not the clamp floor.
-    best = None
-    for h in range(HC_MIN, HC_MAX + 1):
-        if _round_predicted(h, passes) >= score:
-            best = h
-        elif best is not None:
+    # ceil(continuous handicap): expected round score is strictly decreasing in
+    # H, so scanning best→worst, the first H whose *unrounded* expected score is
+    # at or below the achieved score is exactly that ceil.
+    h = HC_MAX
+    for cand in range(HC_MIN, HC_MAX + 1):
+        if expected_round_score(cand, passes) <= score:
+            h = cand
             break
-    return best if best is not None else HC_MAX
+    # Plateau refinement: advance to the worst H whose ceil-rounded table score
+    # still reaches ``score`` (a no-op for ordinary scores; near the maximum,
+    # where expected only approaches max asymptotically, it walks down to the
+    # worst handicap that still rounds up to the achieved score).
+    while h < HC_MAX and _round_predicted(h + 1, passes) >= score:
+        h += 1
+    return h

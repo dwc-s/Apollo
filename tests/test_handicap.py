@@ -64,6 +64,30 @@ def test_handicap_from_score_wa1440_90_reference():
     assert hc.handicap_from_score(999, WA1440_90_PASSES, 1440) == 44
 
 
+def test_handicap_from_score_nonboundary_reference():
+    # Score 999 sits exactly on a rounding boundary (ceil(expected(44)) == 999),
+    # so it can't tell the two rounding conventions apart. These are scores that
+    # fall *between* table values — the case an off-by-one silently breaks. Each
+    # RHS is archeryutils handicap_from_score(score, rnd, "AGB", int_prec=True).
+    for score, expected in [(1100, 38), (1000, 44), (950, 47),
+                            (900, 50), (800, 55)]:
+        assert hc.handicap_from_score(score, WA1440_90_PASSES, 1440) == expected, score
+    for score, expected in [(650, 19), (600, 30), (500, 44), (400, 54)]:
+        assert hc.handicap_from_score(score, WA720_PASSES, 720) == expected, score
+
+
+def test_handicap_rounds_to_worse_handicap():
+    # The assigned integer handicap is ceil() of the continuous handicap: you
+    # round to the *worse* (higher) whole handicap unless the score lands exactly
+    # on the better one's tabled value. Equivalently the unrounded expected score
+    # brackets it as expected(h) <= score < expected(h-1). A score assigned one
+    # handicap too good (the pre-fix bug) violates the left inequality.
+    for score in range(200, 716):
+        h = hc.handicap_from_score(score, WA720_PASSES, 720)
+        assert hc.expected_round_score(h, WA720_PASSES) <= score, (score, h)
+        assert score < hc.expected_round_score(h - 1, WA720_PASSES), (score, h)
+
+
 def test_handicap_monotonic_decreasing_in_score():
     prev = None
     for score in range(200, 720, 25):
