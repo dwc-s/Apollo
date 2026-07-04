@@ -346,7 +346,7 @@
 <h1 class="title">Previous Sessions</h1>
 {% include '_flashes.html' %}
 {% set has_active_filter = filters.q_notes or filters.q_tags or filters.q_target
-                            or filters.q_bow or filters.q_arrow
+                            or filters.q_bow or filters.q_arrow or filters.q_distance
                             or filters.date_from or filters.date_to %}
 <form class="session-search {% if has_active_filter %}expanded{% else %}collapsed{% endif %}"
       method="GET" action="{{ url_for('previous_sessions') }}">
@@ -394,6 +394,17 @@
                     {% endfor %}
                 </select>
             </label>
+            <label>Distance
+                {# Option value is the canonical stored metres (exact match on the
+                   backend); the visible label is relabelled to m/yd by JS so it
+                   tracks the units toggle. #}
+                <select name="q_distance" id="q-distance-select">
+                    <option value="">Any distance</option>
+                    {% for opt in distance_options %}
+                    <option value="{{ opt }}" data-distance-m="{{ opt }}" {% if filters.q_distance == opt %}selected{% endif %}>{{ opt }} m</option>
+                    {% endfor %}
+                </select>
+            </label>
             <label>Date from
                 <input type="date" name="date_from" value="{{ filters.date_from }}">
             </label>
@@ -438,6 +449,7 @@
                     q_target=filters.q_target or none,
                     q_bow=filters.q_bow or none,
                     q_arrow=filters.q_arrow or none,
+                    q_distance=filters.q_distance or none,
                     date_from=filters.date_from or none,
                     date_to=filters.date_to or none) }}"
    title="{% if already_active %}Click to clear tag filter{% else %}Show only sessions tagged "{{ tag }}"{% endif %}">{{ tag }}</a>
@@ -711,11 +723,27 @@ function renderQuiverStats() {
     });
 }
 
+// Relabel the distance filter options to the active unit. The option VALUE
+// stays canonical metres (that's what the backend matches on); only the
+// visible text flips between "70 m" and "76.6 yd".
+function relabelDistances() {
+    const imperial = localStorage.getItem(UNITS_KEY) === 'imperial';
+    const M_PER_YARD = 0.9144;
+    document.querySelectorAll('#q-distance-select option[data-distance-m]').forEach(opt => {
+        const m = parseFloat(opt.dataset.distanceM);
+        if (isNaN(m)) return;
+        opt.textContent = imperial
+            ? `${Math.round(m / M_PER_YARD * 10) / 10} yd`
+            : `${Math.round(m * 10) / 10} m`;
+    });
+}
+
 function applyUnits() {
     const imperial   = localStorage.getItem(UNITS_KEY) === 'imperial';
     const toggleText = imperial ? '⇄ Metric' : '⇄ Imperial';
     document.getElementById('units-toggle').textContent = toggleText;
     renderQuiverStats();
+    relabelDistances();
 }
 
 document.getElementById('units-toggle').addEventListener('click', () => {

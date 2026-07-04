@@ -9055,6 +9055,7 @@ def previous_sessions():
 
     Optional GET query params filter the returned sessions:
       q_notes, q_target, q_bow, q_arrow  — case-insensitive substring matches
+      q_distance                          — exact match on a stored distance (metres)
       date_from, date_to                  — inclusive YYYY-MM-DD bounds on row timestamps
     A session is kept if at least one of its rows satisfies every supplied
     filter (target is session-scoped so it's checked once).
@@ -9062,13 +9063,14 @@ def previous_sessions():
     user_id = current_user_id()
 
     filters = {
-        'q_notes':   (request.args.get('q_notes')  or '').strip(),
-        'q_tags':    (request.args.get('q_tags')   or '').strip(),
-        'q_target':  (request.args.get('q_target') or '').strip(),
-        'q_bow':     (request.args.get('q_bow')    or '').strip(),
-        'q_arrow':   (request.args.get('q_arrow')  or '').strip(),
-        'date_from': (request.args.get('date_from') or '').strip(),
-        'date_to':   (request.args.get('date_to')   or '').strip(),
+        'q_notes':    (request.args.get('q_notes')    or '').strip(),
+        'q_tags':     (request.args.get('q_tags')     or '').strip(),
+        'q_target':   (request.args.get('q_target')   or '').strip(),
+        'q_bow':      (request.args.get('q_bow')      or '').strip(),
+        'q_arrow':    (request.args.get('q_arrow')    or '').strip(),
+        'q_distance': (request.args.get('q_distance') or '').strip(),
+        'date_from':  (request.args.get('date_from')  or '').strip(),
+        'date_to':    (request.args.get('date_to')    or '').strip(),
     }
 
     # Batched fetch: pull every shot for this user in a single query and
@@ -9080,7 +9082,7 @@ def previous_sessions():
             all_rows = cur.execute(
                 "SELECT session_id, timestamp, bow, arrow_type, quiver_size, "
                 "arrows_remaining, session_notes, session_tags, x_coord, y_coord, "
-                "is_precise, target_id, arrow_shaft_diameter "
+                "is_precise, target_id, arrow_shaft_diameter, distance "
                 "FROM apollo WHERE user_id = %s ORDER BY session_id, timestamp",
                 (user_id,)
             ).fetchall()
@@ -9171,6 +9173,17 @@ def previous_sessions():
                              for cfg in target_cache.values()
                              if cfg and (cfg.get('name') or '').strip()},
                             key=str.lower)
+    # Distances are canonical metres stored as strings. Sort numerically so the
+    # dropdown reads 18, 25, 30… rather than lexically ("100" before "25").
+    # Non-numeric strays sort last, keyed by their text.
+    def _distance_sort_key(s):
+        try:
+            return (0, float(s))
+        except (TypeError, ValueError):
+            return (1, s)
+    distance_options = sorted({(r['distance'] or '').strip() for r in all_rows
+                               if (r['distance'] or '').strip()},
+                              key=_distance_sort_key)
 
     return render_template('previous_sessions.html',
                            session_data=session_data,
@@ -9178,6 +9191,7 @@ def previous_sessions():
                            bow_options=bow_options,
                            arrow_options=arrow_options,
                            target_options=target_options,
+                           distance_options=distance_options,
                            tag_suggestions=_distinct_user_tags(user_id),
                            tournament_rounds=TOURNAMENT_ROUNDS)
 
@@ -9185,7 +9199,7 @@ def previous_sessions():
 def _session_matches_filters(rows, target_cfg, filters):
     """True if this session passes every supplied search filter.
 
-    Per-row matchers (notes/bow/arrow) succeed when ANY row matches,
+    Per-row matchers (notes/bow/arrow/distance) succeed when ANY row matches,
     so a single quiver-note hit surfaces the whole session. Target name
     is constant per session. Date bounds compare the YYYY-MM-DD prefix of
     each row's timestamp (sqlite stores strings, mysql returns datetimes
@@ -9194,6 +9208,7 @@ def _session_matches_filters(rows, target_cfg, filters):
     q_target = filters['q_target'].lower()
     q_bow    = filters['q_bow'].lower()
     q_arrow  = filters['q_arrow'].lower()
+    q_distance = filters['q_distance'].strip()
     date_from = filters['date_from']
     date_to   = filters['date_to']
     # Tag query: comma-separated list. Each query term must appear as a
@@ -9233,6 +9248,11 @@ def _session_matches_filters(rows, target_cfg, filters):
             return False
         if q_arrow and q_arrow not in (row['arrow_type'] or '').lower():
             return False
+        # Distance is an exact match on a stored value (the dropdown is
+        # populated from those same stored strings), matched per-row so a
+        # multi-distance round surfaces when any of its distances is picked.
+        if q_distance and (row['distance'] or '').strip() != q_distance:
+            return False
         if q_tag_terms:
             row_tags = {
                 t.strip().lower()
@@ -9244,7 +9264,7 @@ def _session_matches_filters(rows, target_cfg, filters):
         return True
 
     # No per-row content filter means every session in range passes.
-    if not (q_notes or q_bow or q_arrow or q_tag_terms):
+    if not (q_notes or q_bow or q_arrow or q_distance or q_tag_terms):
         return True
     return any(_row_matches(r) for r in rows)
 
