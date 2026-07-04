@@ -62,6 +62,72 @@
             border-radius: 0 0 25px 25px;
             margin-top: 0;
         }
+        /* Collapsible glossary — same pill styling as the report picker. It's
+           a static reference, so it stays closed until the user opens it. */
+        details.glossary-collapse {
+            max-width: 1232px;
+            margin: 0 auto 24px auto;
+        }
+        details.glossary-collapse > summary {
+            cursor: pointer;
+            background-color: #b3c6e3;
+            border-radius: 25px;
+            padding: 14px 28px;
+            font-family: "Quantico", sans-serif;
+            color: #1a3a5c;
+            font-weight: 700;
+            list-style: none;
+            user-select: none;
+        }
+        details.glossary-collapse > summary::-webkit-details-marker { display: none; }
+        details.glossary-collapse > summary::before {
+            content: '\25B8';
+            display: inline-block;
+            margin-right: 8px;
+            transition: transform 0.15s;
+        }
+        details.glossary-collapse[open] > summary::before { transform: rotate(90deg); }
+        details.glossary-collapse[open] > summary {
+            border-radius: 25px 25px 0 0;
+            margin-bottom: 0;
+        }
+        .glossary-panel {
+            background: #eef2f9;
+            border-radius: 0 0 25px 25px;
+            padding: 18px 28px 22px;
+        }
+        .glossary-group { margin-top: 16px; }
+        .glossary-group:first-child { margin-top: 2px; }
+        .glossary-group > h4 {
+            font-family: "Quantico", sans-serif;
+            color: #1a3a5c;
+            font-size: 0.9rem;
+            letter-spacing: 0.04em;
+            text-transform: uppercase;
+            margin: 0 0 6px;
+            border-bottom: 1px solid #c3d2e8;
+            padding-bottom: 4px;
+        }
+        .glossary-item {
+            display: grid;
+            grid-template-columns: 155px 1fr;
+            gap: 4px 18px;
+            padding: 6px 0;
+            align-items: baseline;
+        }
+        .glossary-term {
+            font-family: "Quantico", sans-serif;
+            font-weight: 700;
+            color: #1a3a5c;
+        }
+        .glossary-def {
+            color: #33507d;
+            font-size: 0.9rem;
+            line-height: 1.45;
+        }
+        @media (max-width: 640px) {
+            .glossary-item { grid-template-columns: 1fr; gap: 2px; }
+        }
         .analyze-error {
             background: #f8d7da;
             border: 1px solid #c0392b;
@@ -926,6 +992,69 @@
         <button type="submit">Generate</button>
     </div>
 </form>
+</details>
+
+<details class="glossary-collapse">
+<summary>Glossary — what the numbers mean</summary>
+<div class="glossary-panel">
+    <div class="glossary-group">
+        <h4>Accuracy — where the group sits</h4>
+        <div class="glossary-item">
+            <span class="glossary-term">MPI</span>
+            <span class="glossary-def">Mean Point of Impact: magnitude of the group's centroid offset from the bullseye. Pure accuracy — fix with sight or anchor adjustments, not tuning.</span>
+        </div>
+        <div class="glossary-item">
+            <span class="glossary-term">Bias Δx, Δy</span>
+            <span class="glossary-def">Signed offset of the centroid. The direction tells you which way to move the sight, not just by how much.</span>
+        </div>
+    </div>
+    <div class="glossary-group">
+        <h4>Precision — how tight the group is</h4>
+        <div class="glossary-item">
+            <span class="glossary-term">R95</span>
+            <span class="glossary-def">Radius about the group's own centroid that contains 95% of its shots. The headline precision number — independent of where the centroid sits. (Below 10 shots it's an empirical percentile rather than a Rayleigh fit, so treat it as approximate.)</span>
+        </div>
+        <div class="glossary-item">
+            <span class="glossary-term">Mean Radius (MR)</span>
+            <span class="glossary-def">Average distance of each shot from the group's own centroid. Secondary precision number, canonical in shooting-sport testing.</span>
+        </div>
+        <div class="glossary-item">
+            <span class="glossary-term">σ_x / σ_y</span>
+            <span class="glossary-def">Per-axis standard deviation about the centroid. Large σ_y with small σ_x is vertical stringing (release or anchor variation); the reverse is horizontal stringing (bow torque or grip).</span>
+        </div>
+        <div class="glossary-item">
+            <span class="glossary-term">Extreme spread (ES)</span>
+            <span class="glossary-def">Largest pairwise distance between any two shots in the group. Familiar from firearm and 3D archery scoring — sensitive to one bad shot.</span>
+        </div>
+    </div>
+    <div class="glossary-group">
+        <h4>Head-to-head tests</h4>
+        <div class="glossary-item">
+            <span class="glossary-term">Hotelling's T²</span>
+            <span class="glossary-def">On the 2D shot vectors: tests whether two groups' centroids sit in different places — an accuracy (bias) difference, independent of how tight either group is.</span>
+        </div>
+        <div class="glossary-item">
+            <span class="glossary-term">Brown-Forsythe F</span>
+            <span class="glossary-def">On distance-from-each-group's-own-centroid: tests whether one group clusters more tightly than the other — pure precision, independent of bias.</span>
+        </div>
+        <div class="glossary-item">
+            <span class="glossary-term">Mann-Whitney U</span>
+            <span class="glossary-def">On distance-from-target-center: a practical tiebreaker — does one setup simply land closer to the bull on average? It can't say why (bias vs spread); use the accuracy / precision rows for that.</span>
+        </div>
+        <div class="glossary-item">
+            <span class="glossary-term">Cliff's δ</span>
+            <span class="glossary-def">Effect size paired with Mann-Whitney. Range −1…+1. Positive means this group's distances tend to exceed the other's (the other lands closer); 0 means no ordering.</span>
+        </div>
+        <div class="glossary-item">
+            <span class="glossary-term">Holm-Bonferroni</span>
+            <span class="glossary-def">Step-down p-value adjustment applied within each test family (accuracy / precision / total error), so testing many pairs doesn't inflate false positives beyond α.</span>
+        </div>
+        <div class="glossary-item">
+            <span class="glossary-term">p-value / α</span>
+            <span class="glossary-def">Results are called at α = 0.05 on Holm-adjusted p-values. Small samples often can't reject the null even when a real effect exists, so a null result reads "inconclusive," not "no difference" — treat as exploratory.</span>
+        </div>
+    </div>
+</div>
 </details>
 
 {# The report-card markup + render_panel macro now live in

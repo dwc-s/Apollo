@@ -10,7 +10,7 @@
     <style>
         .rec-wrap { width: 90vw; max-width: 1100px; margin: 0 auto; }
         .rec-section { margin: 22px 0; }
-        .rec-section h3 { color: #cfe0f7; font-family: 'Quantico', sans-serif;
+        .rec-section h3 { color: #1a3a5c; font-family: 'Quantico', sans-serif;
             letter-spacing: 0.04em; margin-bottom: 8px; }
         .rec-cards { display: flex; flex-wrap: wrap; gap: 14px; }
         .rec-card { flex: 1 1 160px; min-width: 150px; padding: 12px 14px;
@@ -18,6 +18,8 @@
         .rec-card .k { font-size: 0.76em; text-transform: uppercase; letter-spacing: 0.04em; color: #5a6a82; }
         .rec-card .v { font-size: 1.7em; font-weight: 700; color: #1a3a5c; }
         .rec-card .s { font-size: 0.74em; color: #7a879c; }
+        .rec-card.with-replay { flex: 1 1 210px; }
+        .rec-card .shot-replay { width: 100%; max-width: 190px; margin: 10px auto 0; }
         .ladder { display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
             background: #f6f9fd; border: 1px solid #d6deeb; border-radius: 10px; padding: 14px 16px; }
         .ladder .now { font-size: 1.3em; font-weight: 700; color: #1a3a5c; }
@@ -34,6 +36,7 @@
         .rec-empty { color: #cfe0f7; font-style: italic; }
     </style>
     <script defer src="{{ url_for('static', filename='apollo-nav.js') }}"></script>
+    <script defer src="{{ url_for('static', filename='apollo-replay.js') }}"></script>
 </head>
 <body>
 <nav class="side-nav">
@@ -159,28 +162,46 @@
         <h3>Practice bests</h3>
         <div class="rec-cards">
             {% if practice.best_accuracy %}
-            <div class="rec-card">
+            {% set rp = practice.best_accuracy.replay %}
+            <div class="rec-card{% if rp %} with-replay{% endif %}">
                 <div class="k">Most accurate quiver</div>
                 <div class="v">{{ practice.best_accuracy.value|round(1) }}%</div>
                 <div class="s">MPI · {{ practice.best_accuracy.date.strftime('%Y-%m-%d') if practice.best_accuracy.date else '—' }}</div>
+                {% if rp %}
+                <div class="shot-replay"
+                     data-shots='{{ rp.shots | tojson }}'
+                     data-record-mode="0"
+                     data-face-render='{{ rp.face_render | tojson if rp.face_render else "null" }}'
+                     data-target-image="{{ url_for('static', filename=rp.target_image) if rp.target_image else '' }}"
+                     data-target-width-mm="{{ rp.target_width_mm }}"></div>
+                {% endif %}
             </div>
             {% endif %}
             {% if practice.best_precision %}
-            <div class="rec-card">
+            {% set rp = practice.best_precision.replay %}
+            <div class="rec-card{% if rp %} with-replay{% endif %}">
                 <div class="k">Tightest quiver</div>
                 <div class="v">{{ practice.best_precision.value|round(1) }}%</div>
-                <div class="s">R95 · {{ practice.best_precision.date.strftime('%Y-%m-%d') if practice.best_precision.date else '—' }}</div>
+                <div class="s">R95 · {{ practice.best_precision.date.strftime('%Y-%m-%d') if practice.best_precision.date else '—' }}{% if practice.best_precision.n %} · {{ practice.best_precision.n }} arrows{% endif %}</div>
+                {% if rp %}
+                <div class="shot-replay"
+                     data-shots='{{ rp.shots | tojson }}'
+                     data-record-mode="0"
+                     data-face-render='{{ rp.face_render | tojson if rp.face_render else "null" }}'
+                     data-target-image="{{ url_for('static', filename=rp.target_image) if rp.target_image else '' }}"
+                     data-target-width-mm="{{ rp.target_width_mm }}"></div>
+                {% endif %}
             </div>
             {% endif %}
             {% if practice.most_improved %}
             <div class="rec-card">
                 <div class="k">Most improved month</div>
                 <div class="v" style="font-size:1.25rem;line-height:1.2;">{{ practice.most_improved.label }}</div>
-                <div class="s">accuracy −{{ practice.most_improved.delta|round(1) }}% MPI</div>
+                <div class="s">precision −{{ practice.most_improved.delta|round(1) }}% R95</div>
             </div>
             {% endif %}
         </div>
-        <p style="color:#7a879c;font-size:0.78rem;margin:6px 2px 0;">Quiver bests are a percentage of the target's half-width (lower is tighter), needing at least 3 hits in the quiver.</p>
+        <p style="color:#7a879c;font-size:0.78rem;margin:6px 2px 0;">Quiver bests are a percentage of the target's half-width (lower is tighter), needing at least 3 hits in the quiver. Tightest is adjusted for end size so a lucky short end doesn't dominate.</p>
     </div>
     {% endif %}
 

@@ -13845,20 +13845,21 @@ def _report_accuracy_precision_traces(user_id, date_from=None, date_to=None,
 
     fig, ax = plt.subplots(figsize=(10, 5.4))
 
-    # Visual encoding. Single combined subject keeps the classic look:
-    # blue = accuracy, green = precision, line style by granularity. Each
-    # granularity gets its own shade so overlapping traces of the same
-    # metric stay distinguishable beyond line style alone. Split mode uses
-    # color = subject; marker = metric; line style = granularity.
-    GRAN_LS = {'session': '-', 'quiver': ':', 'alltime': '--'}
-    METRIC_MARKER = {'acc': 'o', 'prec': 's'}
-    # Accuracy → shades of blue; precision → shades of #667867 (green),
-    # darkest for per-session, lightest for all-time rolling.
-    ACC_SHADES = {'session': '#13314f', 'quiver': '#2e6ca3', 'alltime': '#7aaad6'}
-    PREC_SHADES = {'session': '#3f4d40', 'quiver': '#667867', 'alltime': '#9cb29d'}
+    # Visual encoding, kept deliberately simple: color is the only channel
+    # that separates traces. Single combined subject → blue = accuracy,
+    # green = precision, one distinct shade per granularity. Split mode →
+    # color = subject. Every trace is a solid line, labeled in place at its
+    # right end (no legend), carries subtle date dots, and gets a faint
+    # same-color linear trend line so its direction reads at a glance.
+    ACC_SHADES = {'session': '#123a63', 'quiver': '#2f74c0', 'alltime': '#8fb9e6'}
+    PREC_SHADES = {'session': '#1e6b3c', 'quiver': '#37a866', 'alltime': '#93cfa9'}
     SUBJECT_COLORS = ['#1a3a5c', '#c0392b', '#27ae60', '#8e44ad',
                       '#d68910', '#16a085', '#2c3e50', '#e74c3c']
 
+    import numpy as np
+    import matplotlib.dates as mdates
+
+    plotted = []  # {dates, y, color, label} — drives trend lines + end labels
     for si, subj in enumerate(subjects_with_data):
         series = subj['series']
         subj_color = SUBJECT_COLORS[si % len(SUBJECT_COLORS)]
@@ -13872,33 +13873,58 @@ def _report_accuracy_precision_traces(user_id, date_from=None, date_to=None,
             color = subj_color if split else (
                 ACC_SHADES[gran] if metric == 'acc' else PREC_SHADES[gran])
             label = f"{subj['name']} — {base_label}" if split else base_label
-            ax.plot(dates, yvals, color=color,
-                    marker=METRIC_MARKER[metric], markersize=4,
-                    linewidth=1.8 if gran == 'alltime' else 1.3,
-                    linestyle=GRAN_LS[gran],
-                    alpha=0.7 if gran == 'quiver' else 0.95,
-                    label=label)
+            ax.plot(dates, yvals, color=color, linewidth=1.6,
+                    linestyle='-', marker='o', markersize=2.5,
+                    markeredgewidth=0, alpha=0.95, zorder=3)
+            # Faint same-color linear trend so each trace's direction reads
+            # without adding a differentiating channel.
+            xnum = mdates.date2num(dates)
+            if len(dates) >= 2 and len(set(xnum)) >= 2:
+                m, b = np.polyfit(xnum, yvals, 1)
+                ax.plot([dates[0], dates[-1]],
+                        [m * xnum[0] + b, m * xnum[-1] + b],
+                        color=color, linewidth=1.0, alpha=0.45, zorder=2)
+            plotted.append({'dates': dates, 'y': yvals,
+                            'color': color, 'label': label})
 
     ax.set_xlabel('Date')
     ax.set_ylabel('Normalized units (1.0 = target edge)\nlower is better')
     ax.set_title('Accuracy & precision traces')
     ax.grid(True, axis='y', linestyle='--', alpha=0.4)
     fig.autofmt_xdate()
-    ax.legend(loc='upper left', fontsize=7.5, ncol=2, framealpha=0.85)
+
+    # Label each trace in place at its right end (replaces the legend), in
+    # the trace's own color, nudged apart vertically so labels don't collide.
+    if plotted:
+        x_right = max(t['dates'][-1] for t in plotted)
+        ylo, yhi = ax.get_ylim()
+        gap = (yhi - ylo) * 0.048
+        prev_y = None
+        for t in sorted(plotted, key=lambda tr: tr['y'][-1]):
+            y = t['y'][-1]
+            if prev_y is not None and y < prev_y + gap:
+                y = prev_y + gap
+            prev_y = y
+            ax.annotate(t['label'], xy=(x_right, y),
+                        xytext=(6, 0), textcoords='offset points',
+                        va='center', ha='left', fontsize=7,
+                        color=t['color'], annotation_clip=False)
+
     svg_b64 = _render_matplotlib_svg(fig)
 
     if split:
         overlay = (
             ' Each selected subject (bow / arrow / tag) is a separate color; '
-            'marker shape is the metric (accuracy ○ vs precision ▢) and line '
-            'style is the granularity (session solid, quiver dotted, all-time '
-            'dashed).')
+            'every trace is a solid line labeled in place at its right edge, '
+            'with subtle dots marking each date and a faint same-color trend '
+            'line showing its direction.')
     else:
         overlay = (
             ' Blue traces are accuracy (MPI); green traces are precision '
-            '(R95) — each granularity is a distinct shade. Line style also '
-            'tracks the granularity (session solid, quiver dotted, all-time '
-            'dashed). Pick bows, arrows, or tags to overlay them '
+            '(R95) — each granularity is a distinct shade. Lines are solid '
+            'and labeled in place at the right (no legend); small dots mark '
+            'the dates and a faint same-color trend line shows each '
+            "trace's direction. Pick bows, arrows, or tags to overlay them "
             'head-to-head.')
     intro = Markup(
         '<p class="report-intro">'
@@ -17790,11 +17816,35 @@ def _round_pbs(user_id):
     return sorted(pbs.values(), key=lambda x: x['name'])
 
 
+def _quiver_replay_payload(ctx, user_id):
+    """Replay data (shots + target render spec) for one saved quiver, so the
+    records board can show the group behind a personal best. Mirrors the
+    ``.shot-replay`` attribute set used on previous_sessions / analyze. Returns
+    None if the quiver's target can no longer be resolved."""
+    if not ctx:
+        return None
+    cfg = target_to_config(get_target(ctx['target_id'], user_id))
+    if not cfg:
+        return None
+    shots = []
+    for s in ctx['shots']:
+        xr = str(s['x_coord']).strip() if s['x_coord'] is not None else ''
+        yr = str(s['y_coord']).strip() if s['y_coord'] is not None else ''
+        shots.append({'x': xr, 'y': yr,
+                      'miss': xr == MISS_SENTINEL and yr == MISS_SENTINEL})
+    return {'shots': shots,
+            'target_image': cfg['target_image'],
+            'target_width_mm': cfg['target_width_mm'],
+            'face_render': cfg.get('face_render')}
+
+
 def _practice_pbs(user_id):
     """Practice personal bests for the records board: the most accurate and most
     precise completed quiver (MPI / R95 as a % of target half-width), and the
-    calendar month where accuracy improved most vs the prior active month.
-    (Longest streak comes from _streak_stats.) Keys are None without enough data.
+    calendar month where precision improved most vs the prior active month.
+    The two quiver bests carry a ``replay`` payload so the board can draw the
+    winning group. (Longest streak comes from _streak_stats.) Keys are None
+    without enough data.
     """
     with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
         srows = cur.execute(
@@ -17806,7 +17856,9 @@ def _practice_pbs(user_id):
         if dt is not None:
             sid_date[r['session_id']] = dt.replace(tzinfo=None)
 
-    best_acc = best_prec = None
+    best_acc = None
+    best_acc_ctx = None
+    prec_candidates = []  # one per qualifying end: size-invariant precision
     for sid, _qidx, shots, _tid in _iter_quivers(user_id):
         xs, ys = [], []
         for s in shots:
@@ -17831,16 +17883,62 @@ def _practice_pbs(user_id):
         if st is None:
             continue
         d = sid_date.get(sid)
-        mpi, r95 = st['mpi'] * 100, st['r95'] * 100
+        mpi = st['mpi'] * 100
         if best_acc is None or mpi < best_acc['value']:
             best_acc = {'value': mpi, 'date': d, 'n': len(xs)}
-        if best_prec is None or r95 < best_prec['value']:
-            best_prec = {'value': r95, 'date': d, 'n': len(xs)}
+            best_acc_ctx = {'shots': list(shots), 'target_id': _tid}
+        # Precision: score by a size-invariant σ-model R95 (the Rayleigh form
+        # the n≥10 path already uses), NOT the sample-max percentile
+        # _archery_stats falls back to for small n — that percentile is just
+        # the farthest arrow, which grows with end size and hands the record
+        # to 3-arrow ends. The c4 factor unbiases sqrt(σ²): √ of an unbiased
+        # variance still underestimates σ for few shots, so without it a
+        # 3-arrow end keeps a ~6% edge over a full end of equal skill. dof =
+        # 2(n−1) since both axes contribute. Ranking (with a shrink to the
+        # archer's own baseline) happens after the loop, once it's known.
+        dof = 2 * (len(xs) - 1)
+        c4 = math.sqrt(2.0 / dof) * math.exp(
+            math.lgamma((dof + 1) / 2.0) - math.lgamma(dof / 2.0))
+        r95_model = st['sigma_r'] * math.sqrt(_CHI2_2DOF_95 / 2.0) / c4 * 100
+        prec_candidates.append({
+            'r95_model': r95_model, 'n': len(xs), 'date': d,
+            'ctx': {'shots': list(shots), 'target_id': _tid}})
 
-    # Biggest month-over-month accuracy gain (drop in mean per-session MPI).
+    # Tightest end: shrink each end's σ-model R95 toward the archer's typical
+    # end tightness (median), so a lucky short end — large sampling variance,
+    # hence a small trust weight — is pulled back to the baseline and only a
+    # robustly tight end wins. var scales with the prior (not the end's own
+    # r95) so a degenerate σ≈0 end doesn't collapse var to 0. Reuses the
+    # James-Stein weight from the /predict trend fit.
+    import statistics
+    best_prec = None
+    best_prec_ctx = None
+    if prec_candidates:
+        prior = statistics.median(c['r95_model'] for c in prec_candidates)
+
+        def _tightness_score(c):
+            var = (prior ** 2) / (4.0 * (c['n'] - 1)) if c['n'] > 1 else None
+            w = _shrink_weight(c['r95_model'], prior, var)
+            return w * c['r95_model'] + (1.0 - w) * prior
+
+        # Tie-break toward more arrows so equal scores (e.g. several perfectly
+        # stacked ends) resolve to the better-evidenced end, never the shortest.
+        winner = min(prec_candidates,
+                     key=lambda c: (_tightness_score(c), -c['n']))
+        best_prec = {'value': winner['r95_model'], 'date': winner['date'],
+                     'n': winner['n']}
+        best_prec_ctx = winner['ctx']
+
+    # Attach the winning group so the board can draw it (None if unresolvable).
+    if best_acc is not None:
+        best_acc['replay'] = _quiver_replay_payload(best_acc_ctx, user_id)
+    if best_prec is not None:
+        best_prec['replay'] = _quiver_replay_payload(best_prec_ctx, user_id)
+
+    # Biggest month-over-month precision gain (drop in mean per-session R95).
     from collections import defaultdict
     month_vals = defaultdict(list)
-    for p in _ap_series(user_id, 'mpi'):
+    for p in _ap_series(user_id, 'r95'):
         month_vals[(p['date'].year, p['date'].month)].append(p['value'])
     months = sorted(month_vals)
     most_improved = None
@@ -17848,7 +17946,7 @@ def _practice_pbs(user_id):
         prev_m, cur_m = months[i - 1], months[i]
         prev_mean = sum(month_vals[prev_m]) / len(month_vals[prev_m])
         cur_mean = sum(month_vals[cur_m]) / len(month_vals[cur_m])
-        delta = prev_mean - cur_mean  # positive = improved (MPI fell)
+        delta = prev_mean - cur_mean  # positive = improved (R95 fell)
         if delta > 0 and (most_improved is None or delta > most_improved['delta']):
             most_improved = {
                 'label': datetime(cur_m[0], cur_m[1], 1).strftime('%B %Y'),
