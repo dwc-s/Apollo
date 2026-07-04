@@ -14304,6 +14304,128 @@ def _report_shot_density_heatmap(user_id):
 # ---------------------------------------------------------------------------
 
 
+def _parse_shot_distance(raw):
+    """A shot's distance in metres as a float (rounded to 2 dp) when the
+    stored value parses to a positive number, else None (never recorded /
+    unparseable). The one place the expected-score reports agree on how to
+    bucket a distance."""
+    try:
+        v = float(str(raw).strip())
+    except (TypeError, ValueError):
+        return None
+    return round(v, 2) if v > 0 else None
+
+
+def _distance_group_label(dkey):
+    """Human label for a distance-group key from _parse_shot_distance."""
+    if dkey is None:
+        return 'unknown distance'
+    return f'{int(dkey)} m' if float(dkey).is_integer() else f'{dkey:g} m'
+
+
+# Fixed seed for the expected-score Monte-Carlo. A constant makes the
+# projection reproducible: the expected-score report and the vs-distance graph
+# agree on the same (face, distance) group, and repeat renders don't wobble by
+# sampling noise. Sharing one draw across groups also acts as common random
+# numbers, which smooths the vs-distance drop-off curve.
+_EXPECTED_SCORE_MC_SEED = 424242
+
+
+def _expected_score_fit(zones, shots, n_samples=20000):
+    """Fit a bivariate normal to `shots` against scored `zones`, Monte-Carlo
+    sample it over the rings, and return the expected points-per-arrow plus
+    the ring-hit probability breakdown — or None when the group has fewer
+    than 10 hits or a degenerate (zero-spread) fit.
+
+    `shots` are apollo rows exposing x_coord / y_coord (mm from centre;
+    MISS_SENTINEL marks a recorded miss). The empirical miss rate is blended
+    in as extra outside mass so total flyers count against the projection.
+    Shared by the expected-score reports so the fit lives in one place.
+    """
+    import random as _random
+    # Seed a local RNG (not the global module state) so the Monte-Carlo is
+    # deterministic per call without perturbing anything else that uses random.
+    _rng = _random.Random(_EXPECTED_SCORE_MC_SEED)
+    xs_mm, ys_mm = [], []
+    for s in shots:
+        xraw = str(s['x_coord']).strip() if s['x_coord'] is not None else ''
+        yraw = str(s['y_coord']).strip() if s['y_coord'] is not None else ''
+        if xraw == MISS_SENTINEL and yraw == MISS_SENTINEL:
+            continue
+        try:
+            xs_mm.append(float(xraw))
+            ys_mm.append(float(yraw))
+        except ValueError:
+            continue
+    if len(xs_mm) < 10:
+        return None
+
+    stats = _archery_stats(xs_mm, ys_mm)
+    if stats is None:
+        return None
+    cx, cy = stats['centroid']
+    sx = stats['sigma_x']
+    sy = stats['sigma_y']
+    rho = stats['rho']
+    if sx <= 0 or sy <= 0:
+        return None
+    # Cholesky of the 2×2 covariance for correlated sampling:
+    #   X = cx + sx · z1
+    #   Y = cy + sy · (ρ z1 + √(1 − ρ²) z2)
+    rho_clip = max(-0.999, min(0.999, rho))
+    rho_perp = math.sqrt(max(0.0, 1.0 - rho_clip * rho_clip))
+
+    # Empirical miss rate (sentinels were dropped from xs_mm but we
+    # re-count them here so the score model honors misses).
+    n_total = len(shots)
+    n_misses = sum(
+        1 for s in shots
+        if (str(s['x_coord']).strip() if s['x_coord'] else '') == MISS_SENTINEL
+        and (str(s['y_coord']).strip() if s['y_coord'] else '') == MISS_SENTINEL
+    )
+    miss_rate = n_misses / n_total if n_total else 0.0
+
+    ring_hits = [0] * len(zones)
+    ring_points = [int(z['point_value'] or 0) for z in zones]
+    outside = 0
+    shaft_d = None  # No per-shot shaft diameter at sampling time — use a
+    # typical 6mm shaft for the line-cutter test (most arrows are between
+    # 5 and 7 mm; the small mis-classification rate at ring boundaries is
+    # well within Monte-Carlo noise).
+    for _ in range(n_samples):
+        z1 = _rng.gauss(0, 1)
+        z2 = _rng.gauss(0, 1)
+        x = cx + sx * z1
+        y = cy + sy * (rho_clip * z1 + rho_perp * z2)
+        idx = _classify_shot(f'{x:.4f}', f'{y:.4f}', zones, shaft_d)
+        if idx is None:
+            outside += 1
+        else:
+            ring_hits[idx] += 1
+
+    # Blend in the empirical miss rate: shots that scored zero in the user's
+    # actual history (sentinel-misses) are extra outside mass the Gaussian
+    # can't model.
+    eff_samples = n_samples + int(n_samples * miss_rate /
+                                   max(1e-9, 1 - miss_rate))
+    outside_with_misses = outside + (eff_samples - n_samples)
+    denom = eff_samples
+
+    p_per_ring = [h / denom for h in ring_hits]
+    p_outside = outside_with_misses / denom
+    expected_score = sum(p * pts for p, pts in zip(p_per_ring, ring_points))
+    max_ring_points = max(ring_points) if ring_points else 0
+
+    return {
+        'expected_score': expected_score,
+        'p_per_ring': p_per_ring,
+        'p_outside': p_outside,
+        'ring_points': ring_points,
+        'max_ring_points': max_ring_points,
+        'n_hits': len(xs_mm),
+    }
+
+
 def _report_expected_score(user_id):
     """For each scoring target, fit a 2D Gaussian to the user's shots,
     Monte-Carlo sample it, and report the expected score per arrow plus
@@ -14329,96 +14451,24 @@ def _report_expected_score(user_id):
     import matplotlib
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
-    import random as _rng
 
     N_SAMPLES = 20000  # Monte-Carlo budget per target
     END_LENGTHS = (3, 6, 10)
 
-    panels = []
-    for trow in target_rows:
-        target_id = int(trow['rowid'])
-        target_name = trow['name']
-        target_cfg = target_to_config(trow)
-        zones = _fetch_target_zones(target_id, user_id)
-        if not _zones_define_scoring(zones):
-            continue
-
-        with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
-            shots = cur.execute(
-                "SELECT x_coord, y_coord, arrow_shaft_diameter "
-                "FROM apollo WHERE user_id = %s AND target_id = %s",
-                (user_id, target_id)
-            ).fetchall()
-        xs_mm, ys_mm = [], []
-        for s in shots:
-            xraw = str(s['x_coord']).strip() if s['x_coord'] is not None else ''
-            yraw = str(s['y_coord']).strip() if s['y_coord'] is not None else ''
-            if xraw == MISS_SENTINEL and yraw == MISS_SENTINEL:
-                continue
-            try:
-                xs_mm.append(float(xraw))
-                ys_mm.append(float(yraw))
-            except ValueError:
-                continue
-        if len(xs_mm) < 10:
-            continue
-
-        stats = _archery_stats(xs_mm, ys_mm)
-        if stats is None:
-            continue
-        cx, cy = stats['centroid']
-        sx = stats['sigma_x']
-        sy = stats['sigma_y']
-        rho = stats['rho']
-        if sx <= 0 or sy <= 0:
-            continue
-        # Cholesky of the 2×2 covariance for correlated sampling:
-        #   X = cx + sx · z1
-        #   Y = cy + sy · (ρ z1 + √(1 − ρ²) z2)
-        rho_clip = max(-0.999, min(0.999, rho))
-        rho_perp = math.sqrt(max(0.0, 1.0 - rho_clip * rho_clip))
-
-        # Empirical miss rate (sentinels were dropped from xs_mm but
-        # we re-count them here so the score model honors misses).
-        n_total = len(shots)
-        n_misses = sum(
-            1 for s in shots
-            if (str(s['x_coord']).strip() if s['x_coord'] else '') == MISS_SENTINEL
-            and (str(s['y_coord']).strip() if s['y_coord'] else '') == MISS_SENTINEL
-        )
-        miss_rate = n_misses / n_total if n_total else 0.0
-
-        ring_hits = [0] * len(zones)
-        ring_points = [int(z['point_value'] or 0) for z in zones]
-        outside = 0
-        shaft_d = None  # No per-shot shaft diameter at sampling time —
-        # use a typical 6mm shaft for the line-cutter test (most arrows
-        # are between 5 and 7 mm; the small mis-classification rate at
-        # ring boundaries is well within Monte-Carlo noise).
-        for _ in range(N_SAMPLES):
-            z1 = _rng.gauss(0, 1)
-            z2 = _rng.gauss(0, 1)
-            x = cx + sx * z1
-            y = cy + sy * (rho_clip * z1 + rho_perp * z2)
-            idx = _classify_shot(f'{x:.4f}', f'{y:.4f}', zones, shaft_d)
-            if idx is None:
-                outside += 1
-            else:
-                ring_hits[idx] += 1
-
-        # Blend in the empirical miss rate: shots that scored zero in
-        # the user's actual history (sentinel-misses) are extra outside
-        # mass that the Gaussian can't model.
-        eff_samples = N_SAMPLES + int(N_SAMPLES * miss_rate /
-                                       max(1e-9, 1 - miss_rate))
-        outside_with_misses = outside + (eff_samples - N_SAMPLES)
-        denom = eff_samples
-
-        p_per_ring = [h / denom for h in ring_hits]
-        p_outside = outside_with_misses / denom
-
-        expected_score = sum(p * pts for p, pts in zip(p_per_ring, ring_points))
-        max_ring_points = max(ring_points) if ring_points else 0
+    def _panel_for_group(zones, target_cfg, shots, title, key):
+        """Build one expected-score panel — a bar chart of the ring hit
+        distribution plus a metrics table — for a group of shots, or None
+        when the group is too small / degenerate. Split out of the target
+        loop so a face shot at several distances is fit once per distance
+        instead of pooling them into a single meaningless mix."""
+        fit = _expected_score_fit(zones, shots, N_SAMPLES)
+        if fit is None:
+            return None
+        p_per_ring = fit['p_per_ring']
+        p_outside = fit['p_outside']
+        ring_points = fit['ring_points']
+        expected_score = fit['expected_score']
+        max_ring_points = fit['max_ring_points']
 
         # Per-end expected scores at common end lengths.
         end_table = [
@@ -14439,7 +14489,7 @@ def _report_expected_score(user_id):
         fig, ax = plt.subplots(figsize=(7.5, 4.5))
         bars = ax.bar(labels, pcts, color=colors, edgecolor='#1a3a5c')
         ax.set_ylabel('Expected % of arrows')
-        ax.set_title(f'Expected hit distribution — {target_name}')
+        ax.set_title(f'Expected hit distribution — {title}')
         ax.grid(True, axis='y', linestyle='--', alpha=0.4)
         for bar, p in zip(bars, pcts):
             if p > 0.1:
@@ -14466,13 +14516,58 @@ def _report_expected_score(user_id):
         rows_out.append(['Miss / outside zones',
                          f'{p_outside * 100:.2f}%', '×0 = 0.000'])
 
-        panels.append({
-            'key': f'expected_score__{target_id}',
-            'title': f'{target_name} — expected score',
+        return {
+            'key': key,
+            'title': f'{title} — expected score',
             'svg_b64': svg_b64,
             'columns': ['Metric', 'Value', 'Notes'],
             'rows': rows_out,
-        })
+        }
+
+    panels = []
+    for trow in target_rows:
+        target_id = int(trow['rowid'])
+        target_name = trow['name']
+        target_cfg = target_to_config(trow)
+        zones = _fetch_target_zones(target_id, user_id)
+        if not _zones_define_scoring(zones):
+            continue
+
+        with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
+            shots = cur.execute(
+                "SELECT x_coord, y_coord, arrow_shaft_diameter, distance "
+                "FROM apollo WHERE user_id = %s AND target_id = %s",
+                (user_id, target_id)
+            ).fetchall()
+
+        # Dispersion — and therefore expected score — grows with distance,
+        # so a face shot at several distances is fit once *per distance*;
+        # pooling 18 m and 70 m shots would describe neither. A face shot at
+        # a single distance (or with none recorded) yields one group and
+        # renders exactly as before.
+        by_distance = {}
+        for s in shots:
+            by_distance.setdefault(
+                _parse_shot_distance(_row_get(s, 'distance')), []).append(s)
+
+        if len(by_distance) <= 1:
+            panel = _panel_for_group(
+                zones, target_cfg, shots, target_name,
+                f'expected_score__{target_id}')
+            if panel is not None:
+                panels.append(panel)
+            continue
+
+        # Multiple distances: nearest first (unknown-distance shots last)
+        # so the easier distances lead the report.
+        for dkey in sorted(by_distance, key=lambda k: (k is None, k or 0.0)):
+            panel = _panel_for_group(
+                zones, target_cfg, by_distance[dkey],
+                f'{target_name} @ {_distance_group_label(dkey)}',
+                f'expected_score__{target_id}__'
+                f'{dkey if dkey is not None else "na"}')
+            if panel is not None:
+                panels.append(panel)
 
     if not panels:
         return None
@@ -14480,11 +14575,13 @@ def _report_expected_score(user_id):
     intro = Markup(
         '<p class="report-intro">'
         '<strong>What this answers:</strong> if your current group held, '
-        'what would you score? Each target with scoring zones gets its '
-        'own bivariate-normal fit to your shot history; Monte-Carlo '
-        'sampling integrates that fit over the rings and projects an '
-        'expected score per arrow and per end. Empirical miss rate is '
-        'blended in so total-flyers count against the projection.'
+        'what would you score? Each scoring face — split by distance when '
+        'you have shot it at more than one, since dispersion grows with '
+        'distance — gets its own bivariate-normal fit to your shot '
+        'history; Monte-Carlo sampling integrates that fit over the rings '
+        'and projects an expected score per arrow and per end. Empirical '
+        'miss rate is blended in so total-flyers count against the '
+        'projection.'
         '</p>'
     )
 
@@ -14493,6 +14590,133 @@ def _report_expected_score(user_id):
         'title': 'Expected score from fit',
         'intro_html': intro,
         'panels': panels,
+    }
+
+
+def _report_expected_score_vs_distance(user_id):
+    """Graph expected points-per-arrow against distance, one line per
+    scoring face.
+
+    Reuses the same per-(face, distance) bivariate-normal fit as the
+    "Expected score from fit" report, but lays every distance on a shared
+    axis so the score's drop-off with range is visible at a glance. A face
+    shot at two or more known distances becomes a trend line; a face shot at
+    a single known distance shows as one marker. Shots with no recorded
+    distance can't be placed on the axis and are skipped.
+    """
+    with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
+        target_rows = cur.execute(
+            "SELECT t.id AS rowid, t.name, t.image_filename, "
+            "       t.physical_size_mm, t.image_size_px "
+            "FROM targets t "
+            "WHERE t.user_id = %s "
+            "  AND EXISTS (SELECT 1 FROM target_zones z "
+            "              WHERE z.target_id = t.id AND z.user_id = %s) "
+            "ORDER BY t.id ASC",
+            (user_id, user_id)
+        ).fetchall()
+    if not target_rows:
+        return None
+
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+
+    N_SAMPLES = 20000
+
+    # One series per face: [(distance_m, expected_pts, max_pts, n_hits), ...]
+    series = []
+    for trow in target_rows:
+        target_id = int(trow['rowid'])
+        target_name = trow['name']
+        zones = _fetch_target_zones(target_id, user_id)
+        if not _zones_define_scoring(zones):
+            continue
+
+        with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
+            shots = cur.execute(
+                "SELECT x_coord, y_coord, arrow_shaft_diameter, distance "
+                "FROM apollo WHERE user_id = %s AND target_id = %s",
+                (user_id, target_id)
+            ).fetchall()
+
+        by_distance = {}
+        for s in shots:
+            dkey = _parse_shot_distance(_row_get(s, 'distance'))
+            if dkey is None:      # can't place an unknown distance on the axis
+                continue
+            by_distance.setdefault(dkey, []).append(s)
+
+        points = []
+        for dkey in sorted(by_distance):
+            fit = _expected_score_fit(zones, by_distance[dkey], N_SAMPLES)
+            if fit is None:       # <10 hits at this distance, or degenerate
+                continue
+            points.append((dkey, fit['expected_score'],
+                           fit['max_ring_points'], fit['n_hits']))
+        if points:
+            series.append({'name': target_name, 'points': points})
+
+    if not series:
+        return {
+            'key': 'expected_score_vs_distance',
+            'title': 'Expected points/arrow vs distance',
+            'empty': True,
+            'empty_reason': 'No face has ≥10 scored shots at a known '
+                            'distance yet. Log the distance on your sessions '
+                            'so shots can be placed on the range axis.',
+        }
+
+    # ── Chart: one line per face, a marker at each shot distance ─────────
+    fig, ax = plt.subplots(figsize=(7.5, 4.5))
+    cmap = plt.get_cmap('tab10')
+    for i, s in enumerate(series):
+        color = cmap(i % 10)
+        xs = [p[0] for p in s['points']]
+        ys = [p[1] for p in s['points']]
+        ax.plot(xs, ys, '-o', color=color, label=s['name'],
+                linewidth=2, markersize=6, markeredgecolor='#1a3a5c')
+        for d, eps, _mx, _n in s['points']:
+            ax.annotate(f'{eps:.2f}', (d, eps),
+                        textcoords='offset points', xytext=(0, 7),
+                        ha='center', fontsize=8, color='#1a3a5c')
+    ax.set_xlabel('Distance (m)')
+    ax.set_ylabel('Expected points per arrow')
+    ax.set_title('Expected points per arrow vs distance')
+    ax.grid(True, linestyle='--', alpha=0.4)
+    ax.set_ylim(bottom=0)
+    ax.legend(fontsize=8, framealpha=0.9)
+    svg_b64 = _render_matplotlib_svg(fig)
+
+    # ── Table: face × distance → expected pts/arrow ─────────────────────
+    columns = ['Target', 'Distance', 'Expected pts/arrow',
+               'Max', '% of max', 'Hits']
+    rows_out = []
+    for s in series:
+        for d, eps, mx, n in s['points']:
+            pct = (eps / mx * 100) if mx else 0.0
+            rows_out.append([s['name'], _distance_group_label(d),
+                             f'{eps:.3f}', str(mx), f'{pct:.1f}%', str(n)])
+
+    intro = Markup(
+        '<p class="report-intro">'
+        '<strong>What this answers:</strong> how fast does your expected '
+        'score fall as the target moves back? Each face you have shot at '
+        'more than one distance becomes a line — the same per-distance '
+        'bivariate-normal fit as the expected-score report, plotted so the '
+        'drop-off is obvious. A steep line means distance costs you '
+        'disproportionately; a flat one means your form holds. Only shots '
+        'with a recorded distance are placed on the axis.'
+        '</p>'
+    )
+
+    return {
+        'key': 'expected_score_vs_distance',
+        'title': 'Expected points/arrow vs distance',
+        'intro_html': intro,
+        'svg_b64': svg_b64,
+        'columns': columns,
+        'rows': rows_out,
     }
 
 
@@ -15722,8 +15946,18 @@ REPORTS = {
         'description': 'For each target with scoring zones, fit a '
                        'bivariate normal to your shots, Monte-Carlo '
                        'sample it, and project expected points per arrow '
-                       'and per end.',
+                       'and per end. Split by distance when a face was '
+                       'shot at more than one.',
         'fn': _report_expected_score,
+    },
+    'expected_score_vs_distance': {
+        'label': 'Expected points/arrow vs distance',
+        'description': 'Graph expected points per arrow against distance, '
+                       'one line per scoring face, from the same '
+                       'per-distance fit as the expected-score report. '
+                       'Shows how fast your score falls off as the target '
+                       'moves back. Needs shots logged with a distance.',
+        'fn': _report_expected_score_vs_distance,
     },
     'calendar_heatmap': {
         'label': 'Shot volume calendar',

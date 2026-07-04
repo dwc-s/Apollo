@@ -171,8 +171,12 @@
         </select>
     </label>
 
-    <label>Distance
-        <input type="text" name="distance" value="{{ current.distance }}" inputmode="decimal">
+    <label><span id="distance-label">Distance (meters)</span>
+        {# Visible field is in the archer's chosen unit; the hidden #distance
+           carries canonical metres — the value actually submitted. Mirrors
+           the session page so an Imperial edit never stores yards. #}
+        <input type="text" id="distance_display" inputmode="decimal">
+        <input type="hidden" id="distance" name="distance" value="{{ current.distance }}">
     </label>
 
     <label>Session notes
@@ -247,6 +251,9 @@
     </div>
 </form>
 
+{# Shared distance unit conversion — must load (non-defer) before the inline
+   script below, which calls its helpers synchronously. #}
+<script src="{{ url_for('static', filename='apollo-units.js') }}"></script>
 <script>
 (function fitTitleInit() {
     function fitTitle() {
@@ -264,9 +271,24 @@
 })();
 
 const UNITS_KEY = 'apollo_units';
+
+// Distance unit helpers (distanceToMetres / syncDistanceDisplay) are shared
+// with session.html — see static/apollo-units.js, loaded (non-defer) before
+// this script.
+(function wireDistance() {
+    const dEl = document.getElementById('distance');
+    const vEl = document.getElementById('distance_display');
+    if (dEl && vEl) {
+        vEl.addEventListener('input', () => { dEl.value = distanceToMetres(vEl.value); });
+    }
+})();
+
 function applyUnits() {
     const imperial = localStorage.getItem(UNITS_KEY) === 'imperial';
     document.getElementById('units-toggle').textContent = imperial ? '⇄ Metric' : '⇄ Imperial';
+    const dl = document.getElementById('distance-label');
+    if (dl) dl.textContent = imperial ? 'Distance (yards)' : 'Distance (meters)';
+    syncDistanceDisplay();   // convert the shown distance into the current unit
 }
 document.getElementById('units-toggle').addEventListener('click', () => {
     const current = localStorage.getItem(UNITS_KEY) || 'metric';

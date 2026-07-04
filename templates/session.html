@@ -260,7 +260,11 @@
 
             <span class="form-label" id="distance-label">Distance to target (meters)</span>
             <br>
-            <input type="text" id="distance" name="distance" value="{{ distance }}" inputmode="decimal">
+            {# Visible field is in the archer's chosen unit; the hidden
+               #distance carries canonical metres — the value actually
+               submitted and queued offline. See distanceToMetres(). #}
+            <input type="text" id="distance_display" inputmode="decimal">
+            <input type="hidden" id="distance" name="distance" value="{{ distance }}">
 
             <span class="form-label">Notes</span>
             <textarea name="session_notes" id="session_notes" rows="6">{{ session_notes }}</textarea>
@@ -285,6 +289,9 @@
     <input type="hidden" name="session_begin_time" id="session_begin_time" value="{{ session_begin_time }}">
 </form>
 
+{# Shared distance unit conversion — must load (non-defer) before the inline
+   script below, which calls its helpers synchronously. #}
+<script src="{{ url_for('static', filename='apollo-units.js') }}"></script>
 <script>
 const stage   = document.getElementById('stage');
 const img     = document.getElementById('target-img');
@@ -297,6 +304,10 @@ const form    = document.getElementById('shot-form');
 const UNITS_KEY      = 'apollo_units';
 const isPreciseInput = document.getElementById('is_precise');
 
+// Distance unit helpers (distanceToMetres / distanceToDisplay /
+// syncDistanceDisplay) are shared with edit_session.html — see
+// static/apollo-units.js, loaded (non-defer) before this script.
+
 // ── Persist distance + quiver size across sessions ───────────────────────
 // New sessions begin with the server passing empty/zero defaults; we
 // hydrate them from localStorage so users don't have to retype the same
@@ -305,13 +316,16 @@ const isPreciseInput = document.getElementById('is_precise');
 const DISTANCE_KEY    = 'apollo_last_distance';
 const QUIVER_SIZE_KEY = 'apollo_last_quiver_size';
 (function hydratePersistedFields() {
-    const distEl = document.getElementById('distance');
+    const distEl  = document.getElementById('distance');          // canonical metres
+    const distVis = document.getElementById('distance_display');  // visible, user unit
     if (distEl && !distEl.value) {
-        const saved = localStorage.getItem(DISTANCE_KEY);
+        const saved = localStorage.getItem(DISTANCE_KEY);         // persisted in metres
         if (saved) distEl.value = saved;
     }
-    if (distEl) {
-        distEl.addEventListener('input', () => {
+    syncDistanceDisplay();   // show the canonical metres in the archer's unit
+    if (distEl && distVis) {
+        distVis.addEventListener('input', () => {
+            distEl.value = distanceToMetres(distVis.value);
             if (distEl.value) localStorage.setItem(DISTANCE_KEY, distEl.value);
         });
     }
@@ -1009,6 +1023,7 @@ function applyUnits() {
         `(0, 0) = center · +X right · +Y up · ${unitLabel}`;
     document.getElementById('distance-label').textContent = distLabel;
     document.getElementById('units-toggle').textContent = toggleText;
+    syncDistanceDisplay();   // convert the shown distance into the new unit
 
     const x = parseFloat(xInput.value);
     const y = parseFloat(yInput.value);
