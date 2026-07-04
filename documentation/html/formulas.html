@@ -276,6 +276,25 @@ extreme_spread = max pairwise distance (O(n²))
 </ul>
 <p>The general radius identity is <code>R_q = √(χ²⁻¹(q, 2) · σ²)</code>, i.e.
 <code>R_q = σ·√(−2 ln(1 − q))</code> for the isotropic case — see <code>_chi2_ppf_df2</code>.</p>
+<h3 id="21-size-and-sample-fair-tightness-records-board-_practice_pbs">2.1 Size- and sample-fair tightness (records board) — <code>_practice_pbs</code></h3>
+<p>Ranking each completed quiver's tightness for the <em>Records</em> board can't use the
+empirical R95 (<code>n &lt; 10</code> falls back to the farthest arrow, which grows with end
+size and hands the record to 3-arrow ends). It uses a <strong>σ-model R95 with a small-
+sample unbias</strong>, so a full end and a short end of equal skill compare fairly:</p>
+<pre><code>r95_model = σ_r · √(_CHI2_2DOF_95 / 2) / c4          # σ_r from §2, half-width-normalized
+dof       = 2(n − 1)                                 # both axes contribute
+c4        = √(2/dof) · Γ((dof+1)/2) / Γ(dof/2)       # unbiases √(unbiased variance)
+</code></pre>
+<p>Without <code>c4</code>, <code>√</code> of an unbiased variance still underestimates σ for few shots
+(a 3-arrow end keeps a ~6 % edge). The winner is chosen after a <strong>James-Stein
+shrink</strong> of each end's <code>r95_model</code> toward the archer's own median end tightness
+(<code>prior</code>), so a lucky short end is pulled back and only a robustly tight end wins:</p>
+<pre><code>var   = prior² / (4(n − 1))          # scales with the prior, not the end's own r95
+w     = t² / (t² + c),  t² = (r95_model − prior)² / var,  c = _PREDICT_TREND_SHRINK_C
+score = w · r95_model + (1 − w) · prior      # ties break toward more arrows
+</code></pre>
+<p>The same <code>_ap_series</code> per-session R95 feeds the "month your precision improved
+most" figure (largest month-over-month drop in mean R95).</p>
 <hr />
 <h2 id="3-equipment-tag-head-to-head-tests">3. Equipment / tag head-to-head tests</h2>
 <p><code>_report_equipment_head_to_head</code> (<code>apollo.py</code> ~10362) compares two pieces of kit
@@ -360,10 +379,19 @@ pass through and don't count toward <code>m</code>.</p>
 </ul>
 <hr />
 <h2 id="4-prediction-monte-carlo">4. Prediction &amp; Monte-Carlo</h2>
-<h3 id="41-expected-score-from-a-fit-server-_report_expected_score-12108">4.1 Expected score from a fit (server) — <code>_report_expected_score</code> (~12108)</h3>
-<p>For each scoring target with ≥ 10 hits:
+<h3 id="41-expected-score-from-a-fit-server-_expected_score_fit-_report_expected_score">4.1 Expected score from a fit (server) — <code>_expected_score_fit</code>, <code>_report_expected_score</code></h3>
+<p>The fit lives in one shared helper, <code>_expected_score_fit(zones, shots)</code>, so the
+expected-score report and the vs-distance graph (§4.4) compute it identically.
+Each <strong>(face, distance)</strong> group with ≥ 10 hits is fit on its own — a face shot at
+18 m and 70 m becomes two panels (<code>{face} @ {n} m</code>), not one pooled fit that
+blends a tight indoor group with a loose outdoor one into a spread describing
+neither. Shots with no recorded distance form their own labelled panel.</p>
+<p>Per group:
 1. Fit a 2D Gaussian via <code>_archery_stats</code> → <code>(cx, cy, σ_x, σ_y, ρ)</code>.
-2. Draw <code>N_SAMPLES = 20000</code> correlated samples (Cholesky of the covariance):
+2. Draw <code>N_SAMPLES = 20000</code> correlated samples (Cholesky of the covariance),
+   from a <strong>fixed-seed</strong> RNG (<code>_EXPECTED_SCORE_MC_SEED = 424242</code>) so repeat
+   renders are byte-identical and the two reports agree exactly on a shared
+   group (the shared draw also acts as common random numbers, smoothing §4.4):
    <code>X = cx + σ_x · z1
    Y = cy + σ_y · (ρ_clip · z1 + √(1 − ρ_clip²) · z2),    z1,z2 ~ N(0,1)</code>
    <code>ρ</code> is clamped to <code>±0.999</code>. Each sample is scored with <code>_classify_shot</code>
@@ -411,6 +439,13 @@ shrink weight uses softness <code>_PREDICT_TREND_SHRINK_C = 4.0</code>: a depart
 the prior with <code>|t| = √c</code> earns half weight; larger <code>c</code> keeps the trend nearer
 its prior unless the data strongly disagrees. Below the data threshold the
 model falls back to the flat angular fit (§4.2).</p>
+<h3 id="44-expected-pointsarrow-vs-distance-_report_expected_score_vs_distance">4.4 Expected points/arrow vs distance — <code>_report_expected_score_vs_distance</code></h3>
+<p>Reuses the §4.1 per-(face, distance) fit and lays every distance on one axis, one
+line per scoring face, so the score's drop-off with range is visible at a glance
+(a steep line = distance costs you disproportionately; a flat one = your form
+holds). A face shot at ≥ 2 known distances becomes a trend line; at a single
+distance, one marker. Because both reports share the fixed-seed helper, a point
+here equals the matching panel in §4.1 exactly. <code>% of max = expected / max_ring · 100</code>.</p>
 <hr />
 <h2 id="5-reports-built-on-the-above">5. Reports built on the above</h2>
 <p>Every <code>/analyze</code> report below feeds shot clouds (raw mm or normalized) into
@@ -442,7 +477,12 @@ model falls back to the flat angular fit (§4.2).</p>
 <tr>
 <td>Accuracy/precision traces</td>
 <td><code>_report_accuracy_precision_traces</code></td>
-<td>MPI &amp; R95 per session / per quiver / all-time rolling.</td>
+<td>MPI &amp; R95 per session / per quiver / all-time rolling; optional per-bow/arrow/tag overlay; each trace carries a faint same-colour linear trend line.</td>
+</tr>
+<tr>
+<td>Biggest vs smallest spread per quiver</td>
+<td><code>_report_quiver_spread</code></td>
+<td>per quiver, max &amp; min pairwise arrow distance (half-width normalized) with a trend line through each.</td>
 </tr>
 <tr>
 <td>Within-session drift</td>
@@ -472,7 +512,17 @@ model falls back to the flat angular fit (§4.2).</p>
 <tr>
 <td>Expected score</td>
 <td><code>_report_expected_score</code></td>
-<td>§4.1.</td>
+<td>§4.1 (one panel per face × distance).</td>
+</tr>
+<tr>
+<td>Expected points/arrow vs distance</td>
+<td><code>_report_expected_score_vs_distance</code></td>
+<td>§4.4.</td>
+</tr>
+<tr>
+<td>Performance vs conditions</td>
+<td><code>_report_conditions</code></td>
+<td>§7.7.</td>
 </tr>
 <tr>
 <td>Equipment head-to-head</td>
@@ -498,6 +548,12 @@ model falls back to the flat angular fit (§4.2).</p>
   granularity auto-selected from the span.</li>
 <li><strong>Hit / miss percentages</strong>: guarded by a non-zero denominator
   (<code>percent_hit = hit/arrows·100</code>); display-only, never part of a score.</li>
+<li><strong>Distance is canonical metres</strong> (<code>static/apollo-units.js</code>): the score/edit
+  pages keep a hidden metres field beside the visible one and convert on input and
+  on unit toggle (<code>m = yd · 0.9144</code>), so an Imperial entry never reaches the DB,
+  the submit, or the offline queue as yards. Reports and <code>/predict</code> read the column
+  as metres; the Previous-Sessions distance filter matches on metres but relabels
+  each option to the reader's unit.</li>
 </ul>
 <hr />
 <h2 id="7-archery-gb-handicaps-classifications">7. Archery GB handicaps &amp; classifications</h2>
@@ -529,11 +585,26 @@ lost to the next band out, 0 outside the last band). A round's expected score is
 are comparable across archers. The raw score itself is still scored with the
 archer's real arrow (§1.1).</p>
 <h3 id="73-score-handicap-handicap_from_score">7.3 Score → handicap — <code>handicap_from_score</code></h3>
-<p><code>⌈expected_round_score(H)⌉</code> is non-increasing in <code>H</code>. The assigned handicap is
-the <strong>largest</strong> integer <code>H</code> whose predicted (ceil-rounded) score is still <code>≥</code> the
-achieved score — a descending scale rounded up. Scores <code>≤ 0</code> or <code>&gt; max_score</code>
-return <code>None</code>; a maximum score lands on the worst <code>H</code> that still rounds up to the
-max (handled by the same scan, not a clamp).</p>
+<p><code>expected_round_score(H)</code> is strictly decreasing in <code>H</code>. The assigned handicap is
+<code>⌈</code> the <em>continuous</em> handicap that predicts the score <code>⌉</code> — i.e. the <strong>smallest</strong>
+integer <code>H</code> whose <strong>unrounded</strong> expected round score has dropped to <code>≤</code> the
+achieved score. On the descending AGB scale you round to the <em>worse</em> (higher)
+whole handicap unless the score lands exactly on the better one's tabled value.</p>
+<p>A <strong>plateau step</strong> then advances to the worst <code>H</code> whose ceil-rounded table score
+still meets the achieved score: <code>⌈expected⌉</code> is a step function, so near the
+extremes several handicaps share one tabled score and a tie must resolve to the
+worst <code>H</code> — never award a better handicap than the published table. The same step
+lands a maximum score on the worst <code>H</code> that still rounds up to the max (its
+expected value only approaches the max asymptotically), so no special-case is
+needed. Scores <code>≤ 0</code> or <code>&gt; max_score</code> return <code>None</code>.</p>
+<blockquote>
+<p>This mirrors <code>archeryutils</code>' integer AGB algorithm exactly across the usable
+score range. The earlier "largest <code>H</code> whose ceil-rounded score is still <code>≥</code> the
+achieved score" reading looked equivalent but was off by one for every score
+that doesn't sit on a rounding boundary — one handicap too <em>good</em> — which
+silently over-classified borderline scores. Fixed in <strong>v0.97</strong>; guarded by
+non-boundary regression tests in <code>tests/test_handicap.py</code>.</p>
+</blockquote>
 <h3 id="74-headline-figures-_handicap_summary">7.4 Headline figures — <code>_handicap_summary</code></h3>
 <p>From the list of completed-round handicaps (ascending by date):
 - <strong>latest</strong> — most recent round's handicap.
@@ -558,8 +629,31 @@ the figure is a personal tracking number, not a club-submitted one.</p>
 <li><code>resolve_awards</code> returns every award earned across the three schemes. NFAA is
   deferred — it's a relative multi-score scheme, not a single-round lookup.</li>
 </ul>
+<h3 id="76-goal-projection-_project_handicap">7.6 Goal projection — <code>_project_handicap</code></h3>
+<p>On the completed-round points (ascending by date, lower handicap = better) fit
+the same least-squares line as the trend report on ordinal days:
+<code>slope, intercept = polyfit(days_from_first, handicaps, 1)</code>, reported as
+<code>slope_per_year = slope · 365</code>. With a deadline <code>D</code>, the projected handicap is
+<code>intercept + slope · (D − first_date_in_days)</code>. Grading vs a target <code>H*</code>:
+- <strong>achieved</strong> — <code>latest ≤ H*</code>.
+- <strong>no_trend</strong> — only one round (no slope).
+- with a deadline: <strong>on_track</strong> if <code>projected ≤ H*</code>, else <strong>behind</strong>; the
+  required rate to hit the target from the latest round is
+  <code>((H* − latest) / days_left) · 365</code>.
+- with no deadline: <strong>on_track</strong> while the slope is improving (<code>&lt; 0</code>), else <strong>behind</strong>.
+A classification goal resolves its class's threshold handicap (<code>agb_class_thresholds</code>)
+and projects against that. Volume goals compare arrows shot in the current
+week/month (from the shot calendar) to the target, paced by the fraction of the
+period elapsed.</p>
+<h3 id="77-performance-vs-conditions-_report_conditions">7.7 Performance vs conditions — <code>_report_conditions</code></h3>
+<p>Each hit whose session captured weather is normalized by target half-width (as
+in the other reports) and bucketed by <strong>wind band</strong> (calm <code>&lt; 8</code>, light <code>8–19</code>,
+moderate <code>19–30</code>, strong <code>≥ 30</code> km/h — roughly Beaufort 0-2 / 3-4 / 5 / 6+) and
+by <strong>temperature band</strong> (<code>&lt; 8</code>, <code>8–18</code>, <code>18–26</code>, <code>≥ 26 °C</code>). <code>_archery_stats</code>
+runs per bucket; MPI and R95 are reported as a percentage of the target
+half-width. Buckets below five hits are flagged as thin.</p>
 <hr />
-<p><em>Generated and verified against the implementation for v0.71. When a formula
+<p><em>Generated and verified against the implementation for v0.97. When a formula
 changes in <code>apollo.py</code>, <code>apollo-predict.js</code>, <code>handicap.py</code>, or
 <code>classifications.py</code>, update the matching section here.</em></p>
         </div>

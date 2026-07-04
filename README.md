@@ -166,10 +166,16 @@ DBs.
 
 Pick which reports to generate from a checkbox list; each report renders
 a chart plus a table of the underlying data, an intro paragraph framing
-the question it answers, and offers CSV / Excel downloads. Hover any
-metric or test name for an inline tooltip explaining what it measures
-and why it's there. Length values render with a server-side **mm** unit
-that flips to **inches** when you click `⇄ Imperial` on the side nav.
+the question it answers, and offers CSV / Excel downloads. The picker
+POSTs once and returns immediately with a spinner card per report; the
+browser then fetches each from its own `/analyze/report/<key>` request and
+swaps it in as it lands, so the page is interactive at once and reports
+render in parallel on a multi-worker host rather than blocking on the
+slowest one. Long row-per-shot/session tables collapse to the first ten
+rows behind a "Show all N rows" toggle (grouped stat tables stay open).
+Hover any metric or test name for an inline tooltip explaining what it
+measures and why it's there. Length values render with a server-side **mm**
+unit that flips to **inches** when you click `⇄ Imperial` on the side nav.
 
 ### The accuracy / precision split
 
@@ -220,11 +226,20 @@ an empirical R95 percentile and the table flags them.
   per ring + a replay of every shot. Bar colors are sampled directly
   from the target image (works for any face you upload — NASP, FITA,
   3D, Vegas, NFAA).
-- **Expected score from fit** — for each scoring target, fits a 2D
+- **Expected score from fit** — for each scoring face, fits a 2D
   Gaussian to your history, Monte-Carlo samples 20 000 draws, and
   projects expected points/arrow and expected end scores at 3 / 6 / 10
   arrows. Empirical sentinel-miss rate is blended in so total-flyers
-  count against the projection.
+  count against the projection. A face shot at several ranges is fit
+  **per distance** (one panel each, `{face} @ {n} m`) — how tightly you
+  group grows with range, so pooling 18 m and 70 m would describe
+  neither. The Monte-Carlo is fixed-seed, so repeat renders are identical.
+- **Expected points/arrow vs distance** — lays every face's per-distance
+  projection on one axis (one line per face, a marker at each range) so
+  the score's drop-off with distance reads at a glance: a steep line
+  means distance costs you disproportionately, a flat one means your form
+  holds. Same per-distance fit as the report above. Needs shots logged
+  with a distance.
 
 **Trends over time**
 
@@ -235,6 +250,18 @@ an empirical R95 percentile and the table flags them.
   Per-bucket table also shows MR, σ_x, σ_y. Auto-buckets to day, week,
   or month based on the span. Distances are normalized by target
   half-width so mixed sizes pool fairly.
+- **Accuracy & precision traces** — up to six lines on one date axis:
+  MPI and R95 each at three granularities (per session, per completed
+  quiver, and an all-time running value), individually toggleable. Each
+  trace labels itself at its right edge and carries a faint same-colour
+  linear trend line so its direction reads at a glance. Optionally split
+  into a **head-to-head**: pick specific bows / arrows / tags and each
+  becomes its own coloured set of traces on the shared timeline.
+- **Biggest vs smallest spread per quiver** — per completed quiver, the
+  widest and tightest pairwise arrow distance (normalized by face width),
+  on a shared chronological axis. The band between them is your
+  within-quiver consistency; a trend line runs through each. Narrow by
+  session type, equipment, date, or tag.
 - **Within-session drift** — pools shots by *quiver index in session*
   (1st quiver, 2nd, …) across all sessions, then plots MPI and R95
   against quiver index. Reveals warm-up gains and late-session fatigue.

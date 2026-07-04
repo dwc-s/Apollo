@@ -163,10 +163,16 @@ bows, arrows, and target faces.</p>
 <li>Picking a flavor — <code>local</code> (SQLite) or <code>server</code> (MySQL)</li>
 <li>Installing the Python packages it needs into that env</li>
 <li>Collecting env vars (<code>SECRET_KEY</code>, <code>RESEND_API_KEY</code>, and — for
-   server — <code>DATABASE_URL</code>, <code>APOLLO_BASE_URL</code>, and the root account)</li>
+   server — <code>DATABASE_URL</code>, <code>APOLLO_BASE_URL</code>, and the root account).
+   If you opt into practice reminders it <strong>generates a VAPID keypair
+   for you</strong> (run inside the target env, where <code>pywebpush</code> was just
+   installed) and mints a <code>CRON_SECRET</code> — no keys to paste by hand.</li>
 <li>Writing those env vars to <code>.env</code> next to <code>apollo.py</code> (chmod 600).
-   For the server flavor it also writes <code>wsgi_snippet.py</code>, a ready-to-
-   paste WSGI configuration file with your real values filled in.</li>
+   If you say you're deploying under a WSGI server (PythonAnywhere,
+   gunicorn, mod_wsgi) it also writes <code>wsgi_snippet.py</code>, a ready-to-
+   paste WSGI configuration file with your real values filled in —
+   offered for either flavor, since the worker reads <code>os.environ</code>
+   rather than <code>.env</code>.</li>
 </ol>
 <p>Then to run locally:</p>
 <pre><code class="language-bash">source .env
@@ -293,6 +299,26 @@ the app.</p>
 <td>Sender address. Must be on a Resend-verified domain to mail real users.</td>
 </tr>
 <tr>
+<td><code>VAPID_PUBLIC_KEY</code></td>
+<td>Optional</td>
+<td>Web-Push public key (base64url) — <code>install.py</code> generates the pair when you enable reminders. Both VAPID keys must be set for practice-reminder push to be offered; unset ⇒ the feature hides itself.</td>
+</tr>
+<tr>
+<td><code>VAPID_PRIVATE_KEY</code></td>
+<td>Optional</td>
+<td>Web-Push private key (base64url). Pair with <code>VAPID_PUBLIC_KEY</code>.</td>
+</tr>
+<tr>
+<td><code>VAPID_CONTACT</code></td>
+<td>Optional</td>
+<td><code>mailto:</code> the push services can reach you at (VAPID <code>sub</code> claim). Defaults to a placeholder.</td>
+</tr>
+<tr>
+<td><code>CRON_SECRET</code></td>
+<td>Optional</td>
+<td>Guards <code>/cron/reminders</code>. Unset ⇒ the endpoint returns 403 to everyone (fail-closed). Hit it daily: <code>GET /cron/reminders?key=&lt;CRON_SECRET&gt;</code>.</td>
+</tr>
+<tr>
 <td><code>FLASK_ENV</code></td>
 <td>Server: <code>production</code></td>
 <td>Disables the Werkzeug debugger and makes <code>SECRET_KEY</code> + <code>APOLLO_BASE_URL</code> mandatory.</td>
@@ -320,7 +346,7 @@ DBs in place.</p>
 <tbody>
 <tr>
 <td><code>users</code></td>
-<td>One row per account (creds, lockout state, <code>is_root</code>, timezone, archer profile: <code>gender</code>, <code>age_group</code>, <code>default_bowstyle</code>).</td>
+<td>One row per account (creds, lockout state, <code>is_root</code>, timezone, archer profile: <code>gender</code>, <code>age_group</code>, <code>default_bowstyle</code>, plus reminder prefs: <code>remind_enabled</code>, <code>remind_after_days</code>, <code>last_reminder_at</code>, and an optional saved range <code>range_lat</code>/<code>range_lon</code>).</td>
 </tr>
 <tr>
 <td><code>apollo</code></td>
@@ -328,7 +354,7 @@ DBs in place.</p>
 </tr>
 <tr>
 <td><code>session_times</code></td>
-<td>Session start/end times, optional manual length override.</td>
+<td>Session start/end times, optional manual length override, and captured weather (<code>wx_*</code>: temp, wind, gust, direction, humidity, pressure).</td>
 </tr>
 <tr>
 <td><code>targets</code></td>
@@ -340,11 +366,23 @@ DBs in place.</p>
 </tr>
 <tr>
 <td><code>bows</code></td>
-<td>Bow inventory (model, type, draw weight, AMO length, nock height) plus a <code>style_settings</code> JSON column for bowstyle-specific static gear.</td>
+<td>Bow inventory (model, type, draw weight, AMO length, nock height), a <code>style_settings</code> JSON column for bowstyle-specific static gear, and string-lifecycle fields (<code>string_installed_on</code>, <code>string_shot_baseline</code>, <code>string_service_shots</code>, <code>setup_note</code>).</td>
 </tr>
 <tr>
 <td><code>arrows</code></td>
-<td>Arrow inventory (length, spine, weights, shaft, tip).</td>
+<td>Arrow inventory (length, spine, weights, shaft, tip) plus set-lifecycle fields (<code>set_size</code>, <code>in_service_on</code>, <code>retired</code>).</td>
+</tr>
+<tr>
+<td><code>goals</code></td>
+<td>Per-user performance goals (handicap / classification / round-score / accuracy / precision / volume) with an optional deadline; the projection grades on-track / behind / achieved.</td>
+</tr>
+<tr>
+<td><code>user_achievements</code></td>
+<td>First-earned ledger of AGB classes / WA Star / USAA pins (unique per user + scheme + code).</td>
+</tr>
+<tr>
+<td><code>push_subscriptions</code></td>
+<td>Web-Push subscriptions for practice reminders (endpoint + keys, unique on the endpoint's sha256).</td>
 </tr>
 <tr>
 <td><code>password_resets</code></td>
@@ -373,10 +411,16 @@ DBs.</p>
 <h2 id="analyze-analyze">Analyze (<code>/analyze</code>)</h2>
 <p>Pick which reports to generate from a checkbox list; each report renders
 a chart plus a table of the underlying data, an intro paragraph framing
-the question it answers, and offers CSV / Excel downloads. Hover any
-metric or test name for an inline tooltip explaining what it measures
-and why it's there. Length values render with a server-side <strong>mm</strong> unit
-that flips to <strong>inches</strong> when you click <code>⇄ Imperial</code> on the side nav.</p>
+the question it answers, and offers CSV / Excel downloads. The picker
+POSTs once and returns immediately with a spinner card per report; the
+browser then fetches each from its own <code>/analyze/report/&lt;key&gt;</code> request and
+swaps it in as it lands, so the page is interactive at once and reports
+render in parallel on a multi-worker host rather than blocking on the
+slowest one. Long row-per-shot/session tables collapse to the first ten
+rows behind a "Show all N rows" toggle (grouped stat tables stay open).
+Hover any metric or test name for an inline tooltip explaining what it
+measures and why it's there. Length values render with a server-side <strong>mm</strong>
+unit that flips to <strong>inches</strong> when you click <code>⇄ Imperial</code> on the side nav.</p>
 <h3 id="the-accuracy-precision-split">The accuracy / precision split</h3>
 <p>Archery error decomposes into two independent modes that <strong>need
 different fixes</strong>:</p>
@@ -440,11 +484,20 @@ an empirical R95 percentile and the table flags them.</p>
   per ring + a replay of every shot. Bar colors are sampled directly
   from the target image (works for any face you upload — NASP, FITA,
   3D, Vegas, NFAA).</li>
-<li><strong>Expected score from fit</strong> — for each scoring target, fits a 2D
+<li><strong>Expected score from fit</strong> — for each scoring face, fits a 2D
   Gaussian to your history, Monte-Carlo samples 20 000 draws, and
   projects expected points/arrow and expected end scores at 3 / 6 / 10
   arrows. Empirical sentinel-miss rate is blended in so total-flyers
-  count against the projection.</li>
+  count against the projection. A face shot at several ranges is fit
+  <strong>per distance</strong> (one panel each, <code>{face} @ {n} m</code>) — how tightly you
+  group grows with range, so pooling 18 m and 70 m would describe
+  neither. The Monte-Carlo is fixed-seed, so repeat renders are identical.</li>
+<li><strong>Expected points/arrow vs distance</strong> — lays every face's per-distance
+  projection on one axis (one line per face, a marker at each range) so
+  the score's drop-off with distance reads at a glance: a steep line
+  means distance costs you disproportionately, a flat one means your form
+  holds. Same per-distance fit as the report above. Needs shots logged
+  with a distance.</li>
 </ul>
 <p><strong>Trends over time</strong></p>
 <ul>
@@ -455,6 +508,18 @@ an empirical R95 percentile and the table flags them.</p>
 <p>Per-bucket table also shows MR, σ_x, σ_y. Auto-buckets to day, week,
   or month based on the span. Distances are normalized by target
   half-width so mixed sizes pool fairly.
+- <strong>Accuracy &amp; precision traces</strong> — up to six lines on one date axis:
+  MPI and R95 each at three granularities (per session, per completed
+  quiver, and an all-time running value), individually toggleable. Each
+  trace labels itself at its right edge and carries a faint same-colour
+  linear trend line so its direction reads at a glance. Optionally split
+  into a <strong>head-to-head</strong>: pick specific bows / arrows / tags and each
+  becomes its own coloured set of traces on the shared timeline.
+- <strong>Biggest vs smallest spread per quiver</strong> — per completed quiver, the
+  widest and tightest pairwise arrow distance (normalized by face width),
+  on a shared chronological axis. The band between them is your
+  within-quiver consistency; a trend line runs through each. Narrow by
+  session type, equipment, date, or tag.
 - <strong>Within-session drift</strong> — pools shots by <em>quiver index in session</em>
   (1st quiver, 2nd, …) across all sessions, then plots MPI and R95
   against quiver index. Reveals warm-up gains and late-session fatigue.
@@ -547,7 +612,7 @@ sees. Every scoring, statistical, and predictive formula is catalogued
 with its source function in <a href="formulas.html">documentation/FORMULAS.md</a>.</p>
 <hr />
 <h2 id="tools-tools">Tools (<code>/tools</code>)</h2>
-<p>Six client-side archery calculators on one page, each in its own
+<p>Seven client-side archery calculators on one page, each in its own
 collapsible card (collapsed by default). All math runs in the browser —
 no DB hits, no server round-trips per keystroke.</p>
 <table>
@@ -582,11 +647,17 @@ no DB hits, no server round-trips per keystroke.</p>
 <td><strong>Kinetic energy &amp; momentum</strong></td>
 <td><code>KE = mv²/450,240</code> (ft·lb), <code>momentum = mv/225,218</code> (slug·ft/s — 7000 gr/lb × 32.174 ft/s²).</td>
 </tr>
+<tr>
+<td><strong>Bow-hand elevation</strong></td>
+<td>Launch angle to hit a target, and the raise/lower <strong>change</strong> between two distances (for building a sight tape), solved with a full RK4 drag trajectory plus angle bisection — not the rifleman's rule. Every field toggles metric/imperial. Air density is computed from temperature + elevation (dry-air ISA), or from live temperature/pressure/humidity via an opt-in <strong>Use my location</strong> lookup (<a href="https://open-meteo.com">Open-Meteo</a>, only on click); drag comes from a fletching preset rather than a raw coefficient.</td>
+</tr>
 </tbody>
 </table>
 <p>(A <em>Slope compensator</em> card shipped earlier but was removed in v0.69 —
 the rifleman's-rule approximation fits a bullet better than an arrow's
-loopier trajectory, and was judged more likely to mislead than help.)</p>
+loopier trajectory, and was judged more likely to mislead than help. The
+<strong>Bow-hand elevation</strong> tool, added in v0.87, revisits the idea correctly:
+it integrates the actual drag trajectory instead of approximating it.)</p>
 <p>The energy-storage FPS model uses bow-type-tuned constants for the
 force-draw-curve area fraction <code>k</code> and mechanical efficiency <code>η</code>:
 recurve <code>k=0.45 / η=0.72</code>, compound <code>k=0.65 / η=0.85</code>, longbow
@@ -645,6 +716,50 @@ profile</strong> block on <code>/account</code> and is optional — the handicap
 without it; it only affects which classification you're awarded. NFAA
 classification is deferred (it's a relative multi-score scheme, not a
 single-round lookup).</p>
+<hr />
+<h2 id="goals-records-dashboard-reminders">Goals, records, dashboard &amp; reminders</h2>
+<ul>
+<li><strong>Goals (<code>/goals</code>).</strong> Set a target and see whether you're on track. Six
+  kinds: <strong>handicap</strong> and <strong>classification</strong> (both project your Archery GB
+  handicap trend to the deadline and grade <em>on-track / behind / achieved</em>),
+  <strong>round-score</strong> (a personal-best target on a specific round), <strong>accuracy</strong>
+  (MPI) and <strong>precision</strong> (R95) — projected the same way from your per-session
+  group stats as a percentage of target half-width — and <strong>volume</strong> (arrows per
+  week/month, paced against your shot calendar). The projection reuses the same
+  least-squares fit the <em>Handicap over time</em> report draws (<code>_project_handicap</code>).</li>
+<li><strong>Records (<code>/records</code>).</strong> Personal bests per round, the AGB classification
+  ladder (current class + the handicap gap to the next), every WA Star / USAA
+  pin / AGB class you've earned (first-earned dates cached in
+  <code>user_achievements</code>), and <strong>practice bests</strong> — your most accurate and tightest
+  completed quiver (MPI / R95 as a % of half-width), longest shooting streak,
+  and the month your accuracy improved most — plus practice milestones. Real
+  competitions are logged through the Tournament score-sheet flow (which tags
+  the session), so they show up in the PBs, handicap, and classification here
+  automatically.</li>
+<li><strong>Home dashboard.</strong> Signed-in, the splash becomes a dashboard: lifetime
+  arrows/time, current streak + days since last shot, handicap, classification,
+  active goals with their verdicts, and string-service alerts.</li>
+<li><strong>Weather per session + conditions report.</strong> On the session page, <em>Capture
+  weather</em> pulls temp/wind/humidity from Open-Meteo (client-side, opt-in) and
+  stores it on the session; you can also enter it by hand when editing a
+  session. The <code>/analyze</code> <strong>Performance vs conditions</strong> report then buckets your
+  MPI (accuracy) and R95 (precision) by wind and temperature band — so you can
+  see whether wind actually widens your group.</li>
+<li><strong>Equipment lifecycle.</strong> Edit-bow / edit-arrow pages count shots on each bow,
+  shots on the current string (from an install date + baseline), and shots on
+  an arrow set, with a <em>service due</em> badge when a string passes its
+  replace-after threshold.</li>
+<li><strong>Shareable session card.</strong> The end-of-session screen offers a <em>Share card</em>
+  button that draws a branded PNG summary on a <code>&lt;canvas&gt;</code> and shares it via the
+  Web Share API (or downloads it) — entirely client-side.</li>
+<li><strong>Practice reminders (PWA push).</strong> Opt in on <code>/account</code> to a browser
+  notification when you've gone quiet. Subscriptions are stored per device;
+  <code>/cron/reminders</code> (guarded by <code>CRON_SECRET</code>, hit daily by an external
+  scheduler such as a PythonAnywhere task) pushes anyone past their idle
+  threshold, once per lapse. Needs <code>VAPID_*</code> keys set — <code>install.py</code> generates
+  them (and the <code>CRON_SECRET</code>) when you enable reminders; without them the
+  feature hides itself and the endpoint stays fail-closed.</li>
+</ul>
 <hr />
 <h2 id="notes">Notes</h2>
 <ul>

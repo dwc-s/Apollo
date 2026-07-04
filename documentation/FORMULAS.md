@@ -135,6 +135,28 @@ extreme_spread = max pairwise distance (O(n²))
 The general radius identity is `R_q = √(χ²⁻¹(q, 2) · σ²)`, i.e.
 `R_q = σ·√(−2 ln(1 − q))` for the isotropic case — see `_chi2_ppf_df2`.
 
+### 2.1 Size- and sample-fair tightness (records board) — `_practice_pbs`
+Ranking each completed quiver's tightness for the *Records* board can't use the
+empirical R95 (`n < 10` falls back to the farthest arrow, which grows with end
+size and hands the record to 3-arrow ends). It uses a **σ-model R95 with a small-
+sample unbias**, so a full end and a short end of equal skill compare fairly:
+```
+r95_model = σ_r · √(_CHI2_2DOF_95 / 2) / c4          # σ_r from §2, half-width-normalized
+dof       = 2(n − 1)                                 # both axes contribute
+c4        = √(2/dof) · Γ((dof+1)/2) / Γ(dof/2)       # unbiases √(unbiased variance)
+```
+Without `c4`, `√` of an unbiased variance still underestimates σ for few shots
+(a 3-arrow end keeps a ~6 % edge). The winner is chosen after a **James-Stein
+shrink** of each end's `r95_model` toward the archer's own median end tightness
+(`prior`), so a lucky short end is pulled back and only a robustly tight end wins:
+```
+var   = prior² / (4(n − 1))          # scales with the prior, not the end's own r95
+w     = t² / (t² + c),  t² = (r95_model − prior)² / var,  c = _PREDICT_TREND_SHRINK_C
+score = w · r95_model + (1 − w) · prior      # ties break toward more arrows
+```
+The same `_ap_series` per-session R95 feeds the "month your precision improved
+most" figure (largest month-over-month drop in mean R95).
+
 ---
 
 ## 3. Equipment / tag head-to-head tests
@@ -213,10 +235,20 @@ pass through and don't count toward `m`.
 
 ## 4. Prediction & Monte-Carlo
 
-### 4.1 Expected score from a fit (server) — `_report_expected_score` (~12108)
-For each scoring target with ≥ 10 hits:
+### 4.1 Expected score from a fit (server) — `_expected_score_fit`, `_report_expected_score`
+The fit lives in one shared helper, `_expected_score_fit(zones, shots)`, so the
+expected-score report and the vs-distance graph (§4.4) compute it identically.
+Each **(face, distance)** group with ≥ 10 hits is fit on its own — a face shot at
+18 m and 70 m becomes two panels (`{face} @ {n} m`), not one pooled fit that
+blends a tight indoor group with a loose outdoor one into a spread describing
+neither. Shots with no recorded distance form their own labelled panel.
+
+Per group:
 1. Fit a 2D Gaussian via `_archery_stats` → `(cx, cy, σ_x, σ_y, ρ)`.
-2. Draw `N_SAMPLES = 20000` correlated samples (Cholesky of the covariance):
+2. Draw `N_SAMPLES = 20000` correlated samples (Cholesky of the covariance),
+   from a **fixed-seed** RNG (`_EXPECTED_SCORE_MC_SEED = 424242`) so repeat
+   renders are byte-identical and the two reports agree exactly on a shared
+   group (the shared draw also acts as common random numbers, smoothing §4.4):
    ```
    X = cx + σ_x · z1
    Y = cy + σ_y · (ρ_clip · z1 + √(1 − ρ_clip²) · z2),    z1,z2 ~ N(0,1)
@@ -273,6 +305,14 @@ the prior with `|t| = √c` earns half weight; larger `c` keeps the trend nearer
 its prior unless the data strongly disagrees. Below the data threshold the
 model falls back to the flat angular fit (§4.2).
 
+### 4.4 Expected points/arrow vs distance — `_report_expected_score_vs_distance`
+Reuses the §4.1 per-(face, distance) fit and lays every distance on one axis, one
+line per scoring face, so the score's drop-off with range is visible at a glance
+(a steep line = distance costs you disproportionately; a flat one = your form
+holds). A face shot at ≥ 2 known distances becomes a trend line; at a single
+distance, one marker. Because both reports share the fixed-seed helper, a point
+here equals the matching panel in §4.1 exactly. `% of max = expected / max_ring · 100`.
+
 ---
 
 ## 5. Reports built on the above
@@ -285,13 +325,16 @@ Every `/analyze` report below feeds shot clouds (raw mm or normalized) into
 | Hits by zone | `_report_hits_by_boundaries` | `count` per zone + miss; `pct = count/total·100`. |
 | Arrows over time | `_report_arrows_vs_time` | arrows per calendar day, zero-filled gaps. |
 | Accuracy over time | `_report_accuracy_over_time` | `_archery_stats` per day/week/month bucket → MPI, R95. |
-| Accuracy/precision traces | `_report_accuracy_precision_traces` | MPI & R95 per session / per quiver / all-time rolling. |
+| Accuracy/precision traces | `_report_accuracy_precision_traces` | MPI & R95 per session / per quiver / all-time rolling; optional per-bow/arrow/tag overlay; each trace carries a faint same-colour linear trend line. |
+| Biggest vs smallest spread per quiver | `_report_quiver_spread` | per quiver, max & min pairwise arrow distance (half-width normalized) with a trend line through each. |
 | Within-session drift | `_report_within_session_drift` | pool shots by quiver index across sessions → MPI, R95. |
 | Cold bore vs warmed | `_report_cold_bore_vs_warmed` | first-shot vs rest; Mann-Whitney U on distances. |
 | Draw-weight traces | `_report_draw_weight_traces` | MPI/R95 vs draw weight, split rated vs effective. |
 | Shot-density heatmap | `_report_shot_density_heatmap` | hexbin (gridsize 22) + quadrant %; needs ≥ 25 hits. |
 | Calendar heatmap | `_report_calendar_heatmap` | shots per day → colour intensity. |
-| Expected score | `_report_expected_score` | §4.1. |
+| Expected score | `_report_expected_score` | §4.1 (one panel per face × distance). |
+| Expected points/arrow vs distance | `_report_expected_score_vs_distance` | §4.4. |
+| Performance vs conditions | `_report_conditions` | §7.7. |
 | Equipment head-to-head | `_report_equipment_head_to_head` | §3. |
 | Handicap over time | `_report_handicap_trend` + `_handicap_summary` | per-round AGB handicap (§7) vs date; least-squares trend line; best-three average (§7.4). |
 
@@ -308,6 +351,12 @@ Every `/analyze` report below feeds shot clouds (raw mm or normalized) into
   granularity auto-selected from the span.
 - **Hit / miss percentages**: guarded by a non-zero denominator
   (`percent_hit = hit/arrows·100`); display-only, never part of a score.
+- **Distance is canonical metres** (`static/apollo-units.js`): the score/edit
+  pages keep a hidden metres field beside the visible one and convert on input and
+  on unit toggle (`m = yd · 0.9144`), so an Imperial entry never reaches the DB,
+  the submit, or the offline queue as yards. Reports and `/predict` read the column
+  as metres; the Previous-Sessions distance filter matches on metres but relabels
+  each option to the reader's unit.
 
 ---
 
@@ -347,11 +396,26 @@ are comparable across archers. The raw score itself is still scored with the
 archer's real arrow (§1.1).
 
 ### 7.3 Score → handicap — `handicap_from_score`
-`⌈expected_round_score(H)⌉` is non-increasing in `H`. The assigned handicap is
-the **largest** integer `H` whose predicted (ceil-rounded) score is still `≥` the
-achieved score — a descending scale rounded up. Scores `≤ 0` or `> max_score`
-return `None`; a maximum score lands on the worst `H` that still rounds up to the
-max (handled by the same scan, not a clamp).
+`expected_round_score(H)` is strictly decreasing in `H`. The assigned handicap is
+`⌈` the *continuous* handicap that predicts the score `⌉` — i.e. the **smallest**
+integer `H` whose **unrounded** expected round score has dropped to `≤` the
+achieved score. On the descending AGB scale you round to the *worse* (higher)
+whole handicap unless the score lands exactly on the better one's tabled value.
+
+A **plateau step** then advances to the worst `H` whose ceil-rounded table score
+still meets the achieved score: `⌈expected⌉` is a step function, so near the
+extremes several handicaps share one tabled score and a tie must resolve to the
+worst `H` — never award a better handicap than the published table. The same step
+lands a maximum score on the worst `H` that still rounds up to the max (its
+expected value only approaches the max asymptotically), so no special-case is
+needed. Scores `≤ 0` or `> max_score` return `None`.
+
+> This mirrors `archeryutils`' integer AGB algorithm exactly across the usable
+> score range. The earlier "largest `H` whose ceil-rounded score is still `≥` the
+> achieved score" reading looked equivalent but was off by one for every score
+> that doesn't sit on a rounding boundary — one handicap too *good* — which
+> silently over-classified borderline scores. Fixed in **v0.97**; guarded by
+> non-boundary regression tests in `tests/test_handicap.py`.
 
 ### 7.4 Headline figures — `_handicap_summary`
 From the list of completed-round handicaps (ascending by date):
@@ -405,6 +469,6 @@ half-width. Buckets below five hits are flagged as thin.
 
 ---
 
-*Generated and verified against the implementation for v0.71. When a formula
+*Generated and verified against the implementation for v0.97. When a formula
 changes in `apollo.py`, `apollo-predict.js`, `handicap.py`, or
 `classifications.py`, update the matching section here.*

@@ -169,9 +169,12 @@ cloning the repo. It walks you through four things:
   4. Collecting environment variables and writing them to a `.env`
      file next to `install.py`
 
-For the server flavor it also writes `wsgi_snippet.py` — a ready-
-to-paste WSGI configuration file with your real values filled in
-(see the PythonAnywhere section below).
+If you say you&#x27;re deploying under a WSGI server (PythonAnywhere,
+gunicorn, mod_wsgi) it also writes `wsgi_snippet.py` — a ready-to-
+paste WSGI configuration file with your real values filled in. This
+is offered for either flavor (a venv on PythonAnywhere can run SQLite
+or MySQL) and defaults on for the server flavor. See the WSGI section
+below. `.env` is always written too, for console runs.
 
 Run it with:
 
@@ -193,7 +196,7 @@ Environment manager? [conda/venv]
 Which flavor to install? [local/server]
     local  — SQLite, runs on your laptop, debug mode on.
              Installs: Flask, Flask-WTF, Pillow, SQLAlchemy,
-             openpyxl, resend, matplotlib
+             openpyxl, resend, matplotlib, pywebpush
     server — MySQL, production-mode, debug off.
              Installs everything above PLUS PyMySQL (so SQLAlchemy
              can talk to MySQL).
@@ -227,15 +230,32 @@ Root account prompts  (server flavor only)
     APOLLO_ROOT_* variables; apollo.py uses them on first boot
     to create or promote the named account.
 
+Practice-reminder prompt  (optional, either flavor)
+    &quot;Enable practice reminders?&quot; — answer yes and install.py
+    GENERATES a VAPID keypair for you (running the keygen inside the
+    target env, where pywebpush just installed `cryptography`), then
+    asks for VAPID_CONTACT (a mailto:). You never paste keys. A
+    CRON_SECRET is always minted too. These turn on the PWA web-push
+    &quot;Practice reminders&quot; toggle on each user&#x27;s Account page. See the
+    reminders note under the WSGI section for the daily trigger.
+
+WSGI deployment prompt  (either flavor)
+    &quot;Will you run Apollo under a WSGI server?&quot; — yes writes
+    wsgi_snippet.py (see below). Default: yes for server, no for
+    local. Say yes for PythonAnywhere even on the SQLite flavor: the
+    web worker reads os.environ, not .env, so the vars must live in
+    the WSGI file.
+
 
 ----------------------------------------------------------------
 3. Environment variables
 ----------------------------------------------------------------
 
-These all get written to `.env` (and, for server, also baked into
-`wsgi_snippet.py`). Apollo reads them via `os.environ` at startup
-— there is no dotenv loader, so they must already be set in the
-process environment by the time `apollo.py` is imported.
+These all get written to `.env` (and, if you opt into a WSGI
+deployment, also baked into `wsgi_snippet.py`). Apollo reads them
+via `os.environ` at startup — there is no dotenv loader, so they
+must already be set in the process environment by the time
+`apollo.py` is imported.
 
 SECRET_KEY                                            [required]
     Signs Flask session cookies and CSRF tokens. install.py
@@ -263,6 +283,32 @@ RESEND_FROM                                           [optional]
     sender. It can ONLY deliver to recipients you&#x27;ve verified in
     the Resend dashboard. For real users, replace this with an
     address on a domain you&#x27;ve verified in Resend.
+
+VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY        [optional]
+    The keypair that authorizes your server to the browsers&#x27; push
+    services (see &quot;What is VAPID&quot; below). install.py generates them
+    for you when you enable practice reminders — you shouldn&#x27;t need
+    to touch them. Both must be set for the reminder toggle to
+    appear; unset and the feature simply hides itself.
+
+    Public key: the base64url point the browser subscribes with.
+    Private key: the base64url raw scalar the server signs pushes
+    with — keep it secret, and keep BOTH stable. Rotating them logs
+    out every browser that has already subscribed.
+
+VAPID_CONTACT                                         [optional]
+    A `mailto:` the push services can reach you at (the VAPID `sub`
+    claim). Default: mailto:admin@example.com — set it to a real
+    address you own before opening reminders to real users.
+
+CRON_SECRET                                           [optional]
+    Guards the /cron/reminders endpoint that sends the daily
+    reminders. install.py always mints one. Unset ⇒ the endpoint
+    returns 403 to everyone (fail-closed), so reminders never send.
+    Trigger the sweep once a day from a scheduler:
+        curl -s &quot;&lt;APOLLO_BASE_URL&gt;/cron/reminders?key=&lt;CRON_SECRET&gt;&quot;
+    On PythonAnywhere: Tasks tab → add a daily Scheduled task with
+    that command. install.py prints the exact line at the end.
 
 FLASK_ENV                                  [server flavor only]
     Set to `production` by install.py for the server flavor. Two
@@ -344,7 +390,7 @@ FLASK_DEBUG                                    [not set by installer]
         source &lt;venv&gt;/bin/activate
         python apollo.py
 
-wsgi_snippet.py            [server flavor only]
+wsgi_snippet.py            [written when you choose a WSGI deploy]
     A complete WSGI configuration file. Sets `os.environ[...]`
     for every env var, inserts the project directory onto
     `sys.path`, then imports the Flask app. Mode 0600.
@@ -409,6 +455,13 @@ Step-by-step:
 
   7. Visit https://&lt;username&gt;.pythonanywhere.com/ and register
      your first account.
+
+  8. (Only if you enabled practice reminders) Add the daily
+     trigger so reminders actually send: Tasks tab → new Scheduled
+     task, run daily, with the command install.py printed at the
+     end (your real CRON_SECRET filled in):
+         curl -s &quot;https://&lt;username&gt;.pythonanywhere.com/cron/reminders?key=&lt;CRON_SECRET&gt;&quot;
+     Without this, subscriptions save but nothing is ever pushed.
 
 If something is broken, the first place to look is the Error log
 linked from the Web tab. Common causes:
@@ -520,6 +573,34 @@ The Web tab&#x27;s &quot;Source code&quot; field and the `project_home` value
 inside the WSGI file must both point to the directory containing
 `apollo.py`. If they disagree, you&#x27;ll get import errors in the
 error log.
+
+
+Practice reminders never fire
+-----------------------------
+The PWA &quot;Practice reminders&quot; toggle relies on Web-Push. Checklist:
+
+  a. VAPID_PUBLIC_KEY + VAPID_PRIVATE_KEY must be in the running
+     process env. On PythonAnywhere that means in the WSGI file
+     (via wsgi_snippet.py) — NOT just .env, which the worker never
+     reads. If they&#x27;re unset, the toggle hides itself.
+  b. The daily Scheduled task (step 8 above) must exist. Nothing is
+     pushed until something GETs /cron/reminders?key=&lt;CRON_SECRET&gt;.
+  c. Don&#x27;t rotate the VAPID keys once people have subscribed — new
+     keys invalidate every existing subscription.
+  d. iOS only supports Web-Push for a site the user has &quot;Add to
+     Home Screen&quot;-installed, on iOS 16.4+. Desktop Chrome/Firefox/
+     Edge and Android work without that step.
+
+What is VAPID?
+--------------
+&quot;Voluntary Application Server Identification for Web Push&quot; — the
+keypair that proves your server&#x27;s identity to the browser push
+services (Google, Mozilla, Apple) that deliver notifications. The
+browser subscribes with your PUBLIC key; your server signs each
+push with the PRIVATE key so the push service can confirm it came
+from you. VAPID_CONTACT (a mailto:) is a contact address for the
+push service. install.py generates the pair for you — you only
+need to keep the private key secret and both keys stable.
 </pre>
         </div>
         <p class="docs-footer">Apollo documentation · generated from the
