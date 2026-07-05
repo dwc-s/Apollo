@@ -1,0 +1,8 @@
+{# One dashboard graph tile: just the chart image (or a short message).
+   Rendered by /dashboard/graph/<key> and swapped into the tile body by
+   apollo-dashboard.js. No table or download row — the home page stays light. #}
+{% if graph and graph.svg_b64 %}
+<img class="dash-graph-img" src="data:image/svg+xml;base64,{{ graph.svg_b64 }}" alt="{{ graph.title }}">
+{% else %}
+<p class="dash-graph-empty">{{ error or 'No data yet — shoot a session first.' }}</p>
+{% endif %}

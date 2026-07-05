@@ -92,12 +92,21 @@ higher end total → +2 set points;  tie → +1 each.  First to 6 set points win
 `_archery_stats(xs, ys)` (`apollo.py` ~9946) is the workhorse behind most
 `/analyze` reports. It separates the two archery error modes:
 
-**Accuracy (bias of the group):**
+**Accuracy (how close the arrows land to the gold):**
 ```
 centroid (cx, cy) = (mean x, mean y)
-MPI               = hypot(cx, cy)        # how far the group sits off centre
-bias_xy           = (cx, cy)             # direction to move the sight
+mean_miss         = mean( hypot(x_i, y_i) )   # tracked accuracy — mean distance
+                                              # of each shot from the bullseye
+MPI               = hypot(cx, cy)             # centroid offset = the group's *bias*
+bias_xy           = (cx, cy)                  # direction to move the sight
 ```
+`mean_miss` is the metric every accuracy surface scores on (the accuracy
+traces, the "most accurate quiver" record, accuracy goals, within-session
+drift, conditions). Unlike MPI it penalises a *loose* group as well as an
+off-centre one: a wide group straddling the gold has MPI ≈ 0 yet a large
+`mean_miss`, so it can no longer read as "accurate". MPI and `bias_xy` are
+retained as the group's **bias** — which way to move the sight — and still
+drive the 2-D centroid test (Hotelling's T²).
 
 **Precision (spread about the group's own centroid):**
 ```
@@ -325,9 +334,10 @@ Every `/analyze` report below feeds shot clouds (raw mm or normalized) into
 | Hits by zone | `_report_hits_by_boundaries` | `count` per zone + miss; `pct = count/total·100`. |
 | Arrows over time | `_report_arrows_vs_time` | arrows per calendar day, zero-filled gaps. |
 | Accuracy over time | `_report_accuracy_over_time` | `_archery_stats` per day/week/month bucket → MPI, R95. |
-| Accuracy/precision traces | `_report_accuracy_precision_traces` | MPI & R95 per session / per quiver / all-time rolling; optional per-bow/arrow/tag overlay; each trace carries a faint same-colour linear trend line. |
+| Accuracy/precision traces | `_report_accuracy_precision_traces` | mean miss & R95 per session / per quiver / all-time rolling; optional per-bow/arrow/tag overlay; each trace carries a faint same-colour linear trend line. |
 | Biggest vs smallest spread per quiver | `_report_quiver_spread` | per quiver, max & min pairwise arrow distance (half-width normalized) with a trend line through each. |
-| Within-session drift | `_report_within_session_drift` | pool shots by quiver index across sessions → MPI, R95. |
+| Horizontal & vertical spread violins | `_report_spread_violins` | per time bucket (session, or month once there are many), pool each arrow's offset from its quiver's centroid in cm; two-row violin — horizontal spread with time on x, vertical spread with the axes transposed. |
+| Within-session drift | `_report_within_session_drift` | pool shots by quiver index across sessions → mean miss, R95. |
 | Cold bore vs warmed | `_report_cold_bore_vs_warmed` | first-shot vs rest; Mann-Whitney U on distances. |
 | Draw-weight traces | `_report_draw_weight_traces` | MPI/R95 vs draw weight, split rated vs effective. |
 | Shot-density heatmap | `_report_shot_density_heatmap` | hexbin (gridsize 22) + quadrant %; needs ≥ 25 hits. |

@@ -3,6 +3,10 @@
 <head>
     <link rel="stylesheet" href="/static/fonts/apollo-fonts.css">
     <link rel="stylesheet" type="text/css" href="{{ url_for('static', filename='style.css') }}">
+    {% if current_user %}
+    <link rel="stylesheet" href="{{ url_for('static', filename='vendor/gridstack/gridstack.min.css') }}">
+    <meta name="csrf-token" content="{{ csrf_token() }}">
+    {% endif %}
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="theme-color" content="#1a3a5c">
@@ -215,73 +219,71 @@
     {% endif %}
 </nav>
 {% if current_user %}
+    {% from '_dashboard_widget.html' import render_widget %}
     <p class="splash-greeting">Welcome back, {{ current_user.username }}!</p>
     <img class="splash-logo-dash" src="{{ url_for('static', filename='logo.png') }}" alt="Apollo">
 
-    <div class="splash-dash">
-        <div class="splash-card splash-total-card">
-            <h3 class="quantico_light">Arrows shot</h3>
-            <div class="splash-stat">{{ '{:,}'.format(splash_summary.total_arrows if splash_summary else 0) }}</div>
-            <div class="splash-sub">all-time</div>
-        </div>
-        <div class="splash-card splash-total-card">
-            <h3 class="quantico_light">Time spent</h3>
-            <div class="splash-stat">{{ splash_summary.pretty_time if splash_summary else '0m' }}</div>
-            <div class="splash-sub">on the line</div>
-        </div>
-        {% if dashboard and dashboard.streak %}
-        <div class="splash-card">
-            <h3 class="quantico_light">Streak</h3>
-            <div class="splash-stat">{{ dashboard.streak.current_streak }}🔥</div>
-            <div class="splash-sub">{{ dashboard.streak.days_since_last }} day{{ 's' if dashboard.streak.days_since_last != 1 else '' }} since last</div>
-        </div>
-        {% endif %}
-        {% if dashboard and dashboard.handicap and dashboard.handicap.latest is not none %}
-        <a class="splash-card" href="/records" style="text-decoration:none;">
-            <h3 class="quantico_light">Handicap</h3>
-            <div class="splash-stat">{{ dashboard.handicap.best_recent }}</div>
-            <div class="splash-sub">best recent{% if dashboard.handicap.agb is not none %} · AGB {{ dashboard.handicap.agb }}{% endif %}</div>
-        </a>
-        {% endif %}
-        {% if dashboard and dashboard.ladder and dashboard.ladder.current %}
-        <a class="splash-card" href="/records" style="text-decoration:none;">
-            <h3 class="quantico_light">Class</h3>
-            <div class="splash-stat" style="font-size:1.25rem;line-height:1.2;">{{ dashboard.ladder.current.name }}</div>
-            <div class="splash-sub">{% if dashboard.ladder.next %}{{ dashboard.ladder.next.gap }} to {{ dashboard.ladder.next.name }}{% else %}top class 🏆{% endif %}</div>
-        </a>
-        {% endif %}
+    <div class="dash-toolbar">
+        <button type="button" id="dash-edit-toggle" class="dash-btn">✎ Edit dashboard</button>
+        <span id="dash-edit-actions" class="dash-edit-actions" hidden>
+            <button type="button" id="dash-add" class="dash-btn">＋ Add widget</button>
+            <button type="button" id="dash-save" class="dash-btn dash-btn-primary">Save</button>
+            <button type="button" id="dash-done" class="dash-btn">Done</button>
+            <span id="dash-status" class="dash-status" role="status" aria-live="polite"></span>
+        </span>
     </div>
 
-    {% if dashboard and dashboard.alerts %}
-    <div class="splash-alerts">
-        {% for a in dashboard.alerts %}
-        <a href="/edit_bows" class="splash-alert splash-alert-{{ a.level }}">🧵 {{ a.bow }} — {{ a.text }}</a>
+    <div class="grid-stack" id="dashboard-grid">
+        {% for item in layout %}
+        {% set meta = dashboard_widgets[item.id] %}
+        <div class="grid-stack-item" gs-id="{{ item.id }}" gs-x="{{ item.x }}" gs-y="{{ item.y }}" gs-w="{{ item.w }}" gs-h="{{ item.h }}">
+            <div class="grid-stack-item-content">
+                <div class="dash-tile dash-tile-{{ meta.kind }}">
+                    <button type="button" class="dash-remove" title="Remove widget" aria-label="Remove widget">×</button>
+                    {% if meta.kind == 'graph' %}
+                    <div class="dash-graph" data-graph-key="{{ meta.report }}">
+                        <div class="dash-graph-title">{{ meta.label }}</div>
+                        <div class="dash-graph-body"><span class="dash-graph-loading">Loading…</span></div>
+                    </div>
+                    {% else %}
+                    {{ render_widget(item.id, dash) }}
+                    {% endif %}
+                </div>
+            </div>
+        </div>
         {% endfor %}
     </div>
-    {% endif %}
-
-    {% if dashboard and dashboard.goals %}
-    <div class="splash-goals">
-        <h3 class="quantico_light" style="text-align:center;margin:14px 0 4px;">Your goals</h3>
-        {% for g in dashboard.goals %}
-        <a href="/goals" class="splash-goal-row">
-            <span class="splash-goal-badge" style="background:{{ g.verdict_color }};">{{ g.verdict_label }}</span>
-            <span class="splash-goal-label">{{ g.label }}</span>
-            <span class="splash-goal-headline">{{ g.headline }}</span>
-        </a>
-        {% endfor %}
-    </div>
-    {% endif %}
-
-    {% if dashboard %}
-    <div class="splash-quicklinks">
-        <a href="/goals">Goals</a><a href="/records">Records</a>
-    </div>
-    {% endif %}
 
     {% if not splash_summary or splash_summary.total_arrows == 0 %}
     <p class="splash-empty quantico_light"><a href="/sesh">Start a session &rarr;</a></p>
     {% endif %}
+
+    {# Hidden prototypes so the Add-widget palette can clone a fully-rendered
+       stat/list tile client-side (graph tiles are built + lazy-loaded in JS). #}
+    <div id="dash-widget-templates" hidden>
+        {% for wid, meta in dashboard_widgets.items() if meta.kind != 'graph' %}
+        <div data-tpl-id="{{ wid }}">{{ render_widget(wid, dash) }}</div>
+        {% endfor %}
+    </div>
+
+    <div id="dash-palette" class="dash-palette" hidden>
+        <div class="dash-palette-panel">
+            <div class="dash-palette-head">
+                <h4>Add a widget</h4>
+                <button type="button" id="dash-palette-close" class="dash-btn">Close</button>
+            </div>
+            <div class="dash-palette-list">
+                {% for wid, meta in dashboard_widgets.items() %}
+                <button type="button" class="dash-palette-item" data-wid="{{ wid }}"
+                        data-kind="{{ meta.kind }}" data-report="{{ meta.report | default('') }}"
+                        data-w="{{ meta.w }}" data-h="{{ meta.h }}">
+                    <span class="dash-palette-kind dash-palette-kind-{{ meta.kind }}">{{ meta.kind }}</span>
+                    <span class="dash-palette-label">{{ meta.label }}</span>
+                </button>
+                {% endfor %}
+            </div>
+        </div>
+    </div>
 {% else %}
 <h1 class="title-splash">Apollo</h1>
 
@@ -341,7 +343,7 @@
     <details class="splash-section">
         <summary><h3 class="quantico_light">Analytics</h3></summary>
         <ul class="quantico_light">
-            <li>Every report splits the two error modes apart: accuracy (where your group sits) vs. precision (how tight it is)</li>
+            <li>Every report splits the two error modes apart: accuracy (how close your arrows land to the gold, on average) vs. precision (how tight the group is)</li>
             <li>A full report suite — hits by zone, arrows over time, accuracy &amp; precision trends, within-session drift, cold-bore vs. warmed-up, draw-weight tuning, shot-density and calendar heatmaps, and expected-score projection</li>
             <li>Head-to-head equipment and tag comparisons with proper statistics: Hotelling's T² (accuracy), Brown-Forsythe (precision), and Mann-Whitney U with Cliff's δ (total error), Holm-Bonferroni corrected and target-size-normalized</li>
             <li>SVG charts plus full data tables, with CSV and Excel download</li>
@@ -426,5 +428,9 @@ document.getElementById('units-toggle').addEventListener('click', () => {
 });
 applyUnits();
 </script>
+{% if current_user %}
+<script src="{{ url_for('static', filename='vendor/gridstack/gridstack-all.js') }}"></script>
+<script src="{{ url_for('static', filename='apollo-dashboard.js') }}"></script>
+{% endif %}
 </body>
 </html>

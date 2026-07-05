@@ -242,11 +242,20 @@ archers' end totals (WA 12.1.4.1):</p>
 <h2 id="2-shot-cloud-statistics">2. Shot-cloud statistics</h2>
 <p><code>_archery_stats(xs, ys)</code> (<code>apollo.py</code> ~9946) is the workhorse behind most
 <code>/analyze</code> reports. It separates the two archery error modes:</p>
-<p><strong>Accuracy (bias of the group):</strong></p>
+<p><strong>Accuracy (how close the arrows land to the gold):</strong></p>
 <pre><code>centroid (cx, cy) = (mean x, mean y)
-MPI               = hypot(cx, cy)        # how far the group sits off centre
-bias_xy           = (cx, cy)             # direction to move the sight
+mean_miss         = mean( hypot(x_i, y_i) )   # tracked accuracy — mean distance
+                                              # of each shot from the bullseye
+MPI               = hypot(cx, cy)             # centroid offset = the group's *bias*
+bias_xy           = (cx, cy)                  # direction to move the sight
 </code></pre>
+<p><code>mean_miss</code> is the metric every accuracy surface scores on (the accuracy
+traces, the "most accurate quiver" record, accuracy goals, within-session
+drift, conditions). Unlike MPI it penalises a <em>loose</em> group as well as an
+off-centre one: a wide group straddling the gold has MPI ≈ 0 yet a large
+<code>mean_miss</code>, so it can no longer read as "accurate". MPI and <code>bias_xy</code> are
+retained as the group's <strong>bias</strong> — which way to move the sight — and still
+drive the 2-D centroid test (Hotelling's T²).</p>
 <p><strong>Precision (spread about the group's own centroid):</strong></p>
 <pre><code>d_i      = hypot(x_i − cx, y_i − cy)
 MR       = mean(d_i)                                   # mean radius
@@ -477,7 +486,7 @@ here equals the matching panel in §4.1 exactly. <code>% of max = expected / max
 <tr>
 <td>Accuracy/precision traces</td>
 <td><code>_report_accuracy_precision_traces</code></td>
-<td>MPI &amp; R95 per session / per quiver / all-time rolling; optional per-bow/arrow/tag overlay; each trace carries a faint same-colour linear trend line.</td>
+<td>mean miss &amp; R95 per session / per quiver / all-time rolling; optional per-bow/arrow/tag overlay; each trace carries a faint same-colour linear trend line.</td>
 </tr>
 <tr>
 <td>Biggest vs smallest spread per quiver</td>
@@ -485,9 +494,14 @@ here equals the matching panel in §4.1 exactly. <code>% of max = expected / max
 <td>per quiver, max &amp; min pairwise arrow distance (half-width normalized) with a trend line through each.</td>
 </tr>
 <tr>
+<td>Horizontal &amp; vertical spread violins</td>
+<td><code>_report_spread_violins</code></td>
+<td>per time bucket (session, or month once there are many), pool each arrow's offset from its quiver's centroid in cm; two-row violin — horizontal spread with time on x, vertical spread with the axes transposed.</td>
+</tr>
+<tr>
 <td>Within-session drift</td>
 <td><code>_report_within_session_drift</code></td>
-<td>pool shots by quiver index across sessions → MPI, R95.</td>
+<td>pool shots by quiver index across sessions → mean miss, R95.</td>
 </tr>
 <tr>
 <td>Cold bore vs warmed</td>

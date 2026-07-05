@@ -166,7 +166,7 @@
             <div class="rec-card{% if rp %} with-replay{% endif %}">
                 <div class="k">Most accurate quiver</div>
                 <div class="v">{{ practice.best_accuracy.value|round(1) }}%</div>
-                <div class="s">MPI · {{ practice.best_accuracy.date.strftime('%Y-%m-%d') if practice.best_accuracy.date else '—' }}</div>
+                <div class="s">mean miss · {{ practice.best_accuracy.date.strftime('%Y-%m-%d') if practice.best_accuracy.date else '—' }}</div>
                 {% if rp %}
                 <div class="shot-replay"
                      data-shots='{{ rp.shots | tojson }}'

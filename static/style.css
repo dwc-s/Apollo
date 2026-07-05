@@ -1358,3 +1358,132 @@ h4 {
     }
 }
 
+/* ─── Customizable home dashboard (Gridstack) ───────────────────────────── */
+.dash-toolbar {
+    max-width: 1180px;
+    margin: 0 auto 6px;
+    padding: 0 12px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    justify-content: flex-end;
+}
+.dash-btn {
+    font-family: "Quantico", sans-serif;
+    font-weight: 700;
+    font-size: 0.9rem;
+    color: #1a3a5c;
+    background: #b3c6e3;
+    border: none;
+    border-radius: 999px;
+    padding: 7px 16px;
+    cursor: pointer;
+}
+.dash-btn:hover { background: #a3b9db; }
+.dash-btn-primary { background: #1a3a5c; color: #fff; }
+.dash-btn-primary:hover { background: #24507f; }
+.dash-edit-actions { display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.dash-status { font-family: "Quantico", sans-serif; font-size: 0.82rem; color: #33507d; }
+/* The `hidden` attribute must win over the display rules below (a class
+   selector would otherwise beat the UA `[hidden] { display:none }`). */
+.dash-edit-actions[hidden], .dash-palette[hidden] { display: none !important; }
+
+.grid-stack {
+    max-width: 1180px;
+    margin: 0 auto 18px;
+    min-height: 120px;
+}
+
+/* Tile shell — matches the app's card aesthetic. */
+.dash-tile {
+    position: relative;
+    height: 100%;
+    box-sizing: border-box;
+    background: #b3c6e3;
+    border-radius: 18px;
+    padding: 10px 14px;
+    font-family: "Quantico", sans-serif;
+    color: #1a3a5c;
+    text-align: center;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+}
+.dash-tile h3 { margin: 0 0 5px; font-weight: 700; font-size: 0.92rem; letter-spacing: 0.03em; }
+.dash-tile .splash-stat { font-size: 2rem; font-weight: 700; line-height: 1.05; }
+.dash-tile .splash-sub { font-size: 0.82rem; opacity: 0.85; margin-top: 3px; }
+.dash-tile .splash-empty { font-size: 0.85rem; opacity: 0.85; margin: 4px 0; max-width: none; }
+.dash-tile .splash-sub a, .dash-tile .splash-empty a { color: inherit; }
+
+/* List tiles (goals, alerts) scroll internally rather than clip. */
+.dash-tile-list { justify-content: flex-start; }
+.dash-scroll { width: 100%; overflow-y: auto; margin-top: 2px; }
+.dash-tile .splash-goal-row, .dash-tile .splash-alert { text-align: left; margin: 4px 0; }
+
+/* Graph tiles: lighter background, title top-left, chart fills the rest. */
+.dash-tile-graph {
+    background: #eef2f8;
+    text-align: left;
+    justify-content: flex-start;
+    align-items: stretch;
+    padding: 10px 12px;
+}
+.dash-graph { display: flex; flex-direction: column; height: 100%; width: 100%; }
+.dash-graph-title { font-weight: 700; font-size: 0.9rem; letter-spacing: 0.03em; margin-bottom: 6px; }
+.dash-graph-body { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; }
+.dash-graph-img { max-width: 100%; max-height: 100%; object-fit: contain; }
+.dash-graph-loading, .dash-graph-empty { font-size: 0.85rem; color: #5a6b8a; opacity: 0.85; text-align: center; }
+
+/* Remove button — only visible while editing. */
+.dash-remove {
+    position: absolute; top: 6px; right: 8px;
+    width: 24px; height: 24px; line-height: 22px;
+    border: none; border-radius: 50%;
+    background: #c0392b; color: #fff;
+    font-size: 1.05rem; font-weight: 700; cursor: pointer;
+    display: none; z-index: 5; padding: 0;
+}
+.dash-editing .dash-remove { display: block; }
+.dash-editing .grid-stack-item-content { cursor: move; }
+.dash-editing .dash-tile { outline: 2px dashed #7a97c4; outline-offset: -4px; }
+
+/* Add-widget palette overlay. */
+.dash-palette {
+    position: fixed; inset: 0; z-index: 60;
+    background: rgba(26, 58, 92, 0.35);
+    display: flex; align-items: center; justify-content: center;
+    padding: 20px;
+}
+.dash-palette-panel {
+    background: #fff; border-radius: 16px; padding: 18px 20px;
+    max-width: 520px; width: 100%; max-height: 80vh; overflow-y: auto;
+    font-family: "Quantico", sans-serif; color: #1a3a5c;
+    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.25);
+}
+.dash-palette-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+.dash-palette-head h4 { margin: 0; font-size: 1.1rem; }
+.dash-palette-list { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.dash-palette-item {
+    display: flex; align-items: center; gap: 8px;
+    text-align: left; font-family: "Quantico", sans-serif;
+    background: #eef2f8; border: 1px solid #cdd8ea; border-radius: 10px;
+    padding: 9px 11px; cursor: pointer; color: #1a3a5c; font-size: 0.9rem;
+}
+.dash-palette-item:hover:not(:disabled) { background: #dfe8f5; }
+.dash-palette-item:disabled { opacity: 0.4; cursor: default; }
+.dash-palette-kind {
+    font-size: 0.6rem; text-transform: uppercase; font-weight: 700;
+    padding: 2px 6px; border-radius: 999px; color: #fff; white-space: nowrap;
+}
+.dash-palette-kind-stat { background: #2f74c0; }
+.dash-palette-kind-list { background: #37a866; }
+.dash-palette-kind-graph { background: #c79b5a; }
+.dash-palette-label { flex: 1; }
+
+@media (max-width: 640px) {
+    .dash-palette-list { grid-template-columns: 1fr; }
+    .dash-toolbar { justify-content: center; flex-wrap: wrap; }
+}
+

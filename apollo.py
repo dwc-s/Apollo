@@ -3088,7 +3088,7 @@ goals_table = Table('goals', metadata,
     Column('target_class_code', String(32)),
     Column('round_key', String(64)),
     Column('target_score', Integer),
-    # accuracy / precision goals: target MPI or R95 as a percentage of the
+    # accuracy / precision goals: target mean-miss or R95 as a percentage of the
     # target's half-width (the same normalized unit the /analyze reports use).
     Column('target_metric', Float),
     Column('volume_arrows', Integer),
@@ -5238,17 +5238,101 @@ def _pretty_duration(total_seconds):
 def index():
     """Render the splash/landing page.
 
-    Public: the splash works for signed-out users too, showing a sign-up
-    CTA. The template branches on ``current_user`` exposed by the context
-    processor above. Signed-in users get a small dashboard (greeting, logo,
-    lifetime arrow count, total time shot) in place of the feature tour —
-    see ``_splash_user_summary``.
+    Public: the splash works for signed-out users too, showing a sign-up CTA.
+    The template branches on ``current_user``. Signed-in users get a
+    customizable drag-and-drop dashboard (Gridstack) in place of the feature
+    tour — the layout comes from ``_dashboard_layout_for`` and the tile data
+    from ``_dashboard_data`` (see ``DASHBOARD_WIDGETS``).
     """
     user_id = current_user_id()
     summary = _splash_user_summary(user_id)
-    dashboard = _home_dashboard(user_id)
+    if user_id is None:
+        return render_template('splash.html', splash_summary=summary,
+                               dash=None, layout=None,
+                               dashboard_widgets=DASHBOARD_WIDGETS)
+    layout = _dashboard_layout_for(user_id)
+    needed = {it['id'] for it in layout}
+    dash = _dashboard_data(user_id, needed=needed)
     return render_template('splash.html', splash_summary=summary,
-                           dashboard=dashboard)
+                           dash=dash, layout=layout,
+                           dashboard_widgets=DASHBOARD_WIDGETS)
+
+
+@app.route('/dashboard/save', methods=['POST'])
+@login_required
+def dashboard_save():
+    """Persist the signed-in user's dashboard layout (JSON body).
+
+    Body: ``{"layout": [{"id","x","y","w","h"}, ...]}``. Every id is
+    whitelisted against DASHBOARD_WIDGETS and the geometry is clamped to the
+    12-column grid, so a malicious or stale payload can't inject an unknown
+    tile or absurd size. Stored in form_prefs under 'dashboard'.
+    """
+    user_id = current_user_id()
+    data = request.get_json(silent=True) or {}
+    raw = data.get('layout')
+    if not isinstance(raw, list):
+        return jsonify({'ok': False, 'error': 'layout must be a list'}), 400
+
+    def _clamp(v, lo, hi, default):
+        try:
+            iv = int(v)
+        except (TypeError, ValueError):
+            return default
+        return max(lo, min(hi, iv))
+
+    clean = []
+    seen = set()
+    for it in raw:
+        if not isinstance(it, dict):
+            continue
+        wid = it.get('id')
+        meta = DASHBOARD_WIDGETS.get(wid)
+        if meta is None or wid in seen:
+            continue
+        seen.add(wid)
+        clean.append({
+            'id': wid,
+            'x': _clamp(it.get('x'), 0, 11, 0),
+            'y': _clamp(it.get('y'), 0, 500, 0),
+            'w': _clamp(it.get('w'), 1, 12, meta.get('w', 3)),
+            'h': _clamp(it.get('h'), 1, 40, meta.get('h', 2)),
+        })
+    save_form_prefs(user_id, 'dashboard', {'layout': clean})
+    return jsonify({'ok': True, 'count': len(clean)})
+
+
+@app.route('/dashboard/graph/<key>', methods=['GET'])
+@login_required
+def dashboard_graph(key):
+    """Render one dashboard graph tile as an SVG-only HTML fragment.
+
+    ``key`` is an /analyze report key, whitelisted to the graph-capable subset
+    (DASHBOARD_GRAPH_KEYS). Runs the report with default (no) filters and hands
+    back just its chart — no table or download row — so the home page can
+    lazy-load graphs the way /analyze streams its report cards.
+    """
+    user_id = current_user_id()
+    if key not in DASHBOARD_GRAPH_KEYS or key not in REPORTS:
+        return "Unknown graph", 404
+    graph, error = None, None
+    try:
+        results = _run_report(user_id, key)
+        for item in results:
+            if item.get('svg_b64'):
+                graph = item
+                break
+        if graph is None:
+            for item in results:
+                if item.get('empty') and item.get('empty_reason'):
+                    error = item['empty_reason']
+                    break
+            error = error or 'No data yet — shoot a session first.'
+    except ImportError:
+        error = 'matplotlib is not installed on the server.'
+    except SQLAlchemyError:
+        error = 'Database error while building this graph.'
+    return render_template('_dashboard_graph.html', graph=graph, error=error)
 
 
 # ─── PWA: service worker + manifest ──────────────────────────────────────
@@ -12568,9 +12652,14 @@ def _archery_stats(xs, ys, with_extreme_spread=True):
     (the caller handles mm vs normalized). Splits the two archery error
     modes cleanly:
 
-      * Accuracy  = bias of the group centroid relative to (0, 0). MPI is
-        the magnitude; (bias_x, bias_y) carries the direction so the user
-        knows which way to move the sight.
+      * Accuracy  = how close the arrows land to the gold on average
+        (``mean_miss`` — the mean distance of each shot from the origin).
+        Penalizes a loose group and an off-centre one alike. ``mpi`` and
+        (bias_x, bias_y) are kept as the *bias* readout: the centroid offset
+        magnitude and direction, so the user still knows which way to move the
+        sight. (A wide group straddling the gold has a small MPI but a large
+        mean_miss — that gap is exactly why the tracked accuracy uses the
+        latter.)
       * Precision = spread *about the group's own centroid* — independent
         of bias. Reported as Mean Radius (MR), σ-about-centroid (sigma_r,
         unbiased), per-axis σ_x / σ_y for stringing, and R95 from a fitted
@@ -12595,6 +12684,13 @@ def _archery_stats(xs, ys, with_extreme_spread=True):
         math.sqrt((x - cx) ** 2 + (y - cy) ** 2) for x, y in zip(xs, ys)
     ]
     mr = sum(dists_from_centroid) / n
+    # Accuracy that penalizes spread: the mean distance of each arrow from the
+    # bullseye (origin), not from the group's own centroid. Unlike MPI — which
+    # is the centroid offset and so reads ~0 for a loose group that happens to
+    # straddle the gold — every arrow's miss counts here, so a wide group can
+    # never look accurate. O(n), so it's safe even on the all-time rolling
+    # recompute (where extreme_spread's O(n²) is skipped).
+    mean_miss = sum(math.hypot(x, y) for x, y in zip(xs, ys)) / n
     extreme_spread = 0.0
     # Naive O(n²) pairwise. Fine for a single group (one target / session /
     # quiver), but callers that re-stat an ever-growing cumulative cloud (the
@@ -12672,6 +12768,7 @@ def _archery_stats(xs, ys, with_extreme_spread=True):
         'centroid': (cx, cy),
         'bias_xy': (cx, cy),
         'mpi': mpi,
+        'mean_miss': mean_miss,
         'mr': mr,
         'sigma_r': sigma_r,
         'sigma_x': sigma_x,
@@ -13478,14 +13575,15 @@ def _quiver_xy(shots):
 
 
 def _report_within_session_drift(user_id):
-    """MPI and R95 by quiver-index-in-session, pooled across sessions.
+    """Accuracy (mean miss) and R95 by quiver-index-in-session, pooled across
+    sessions.
 
     Reveals whether the user tightens up after a warm-up quiver or
     starts to loosen late in the session (fatigue). Each quiver index
     contributes shots from every session that reached at least that
     many completed quivers — so later indices come from progressively
-    fewer sessions. A "n sessions" bar is rendered alongside MPI/R95
-    so the user can see where confidence drops off.
+    fewer sessions. A "n sessions" bar is rendered alongside the two
+    metrics so the user can see where confidence drops off.
     """
     by_idx = {}  # quiver_idx → {sessions: set, xs: [...], ys: [...]}
     for sid, qidx, shots, _tgt in _iter_quivers(user_id):
@@ -13504,7 +13602,7 @@ def _report_within_session_drift(user_id):
     indices = sorted(by_idx.keys())
     rows_out = []
     line_x = []
-    line_mpi = []
+    line_acc = []
     line_r95 = []
     line_sessions = []
     for q in indices:
@@ -13513,12 +13611,12 @@ def _report_within_session_drift(user_id):
         if s is None:
             continue
         line_x.append(q)
-        line_mpi.append(s['mpi'])
+        line_acc.append(s['mean_miss'])
         line_r95.append(s['r95'])
         line_sessions.append(len(b['sessions']))
         rows_out.append([
             q, len(b['sessions']), s['n'],
-            round(s['mpi'], 3), round(s['r95'], 3),
+            round(s['mean_miss'], 3), round(s['r95'], 3),
             round(s['mr'], 3),
         ])
 
@@ -13538,9 +13636,9 @@ def _report_within_session_drift(user_id):
                label='Sessions reaching this quiver')
     ax_bar.set_ylabel('Sessions reaching this quiver', color='#5a6b8a')
     ax_bar.tick_params(axis='y', labelcolor='#5a6b8a')
-    ax.plot(line_x, line_mpi, color='#1a3a5c', marker='o',
+    ax.plot(line_x, line_acc, color='#1a3a5c', marker='o',
             linewidth=1.8, markersize=5, zorder=3,
-            label='Accuracy — MPI')
+            label='Accuracy — mean miss')
     ax.plot(line_x, line_r95, color='#c79b5a', marker='s',
             linewidth=1.8, markersize=5, zorder=3,
             label='Precision — R95')
@@ -13575,9 +13673,10 @@ def _report_within_session_drift(user_id):
         'svg_b64': svg_b64,
         'columns': [
             'Quiver index', 'Sessions', 'Shots',
-            _tip('MPI (norm)',
-                 'Mean Point of Impact at this quiver position, pooled '
-                 'across sessions. Lower = better accuracy.'),
+            _tip('Mean miss (norm)',
+                 'Mean distance from the gold at this quiver position, '
+                 'pooled across sessions. Lower = better accuracy; a loose '
+                 'group is penalised even when centred.'),
             _tip('R95 (norm)',
                  'R95 about each quiver-position\'s pooled centroid. '
                  'Lower = tighter group.'),
@@ -13593,11 +13692,11 @@ def _report_within_session_drift(user_id):
 # category pills from this list, and the report reads it to decide which
 # series to draw.
 _TRACE_DEFS = [
-    ('session_acc',  'session', 'acc',  'Accuracy — per session (MPI)'),
+    ('session_acc',  'session', 'acc',  'Accuracy — per session (mean miss)'),
     ('session_prec', 'session', 'prec', 'Precision — per session (R95)'),
-    ('quiver_acc',   'quiver',  'acc',  'Accuracy — per quiver (MPI)'),
+    ('quiver_acc',   'quiver',  'acc',  'Accuracy — per quiver (mean miss)'),
     ('quiver_prec',  'quiver',  'prec', 'Precision — per quiver (R95)'),
-    ('alltime_acc',  'alltime', 'acc',  'Accuracy — all-time rolling (MPI)'),
+    ('alltime_acc',  'alltime', 'acc',  'Accuracy — all-time rolling (mean miss)'),
     ('alltime_prec', 'alltime', 'prec', 'Precision — all-time rolling (R95)'),
 ]
 _TRACE_CATEGORIES = [
@@ -13617,11 +13716,11 @@ def _report_accuracy_precision_traces(user_id, date_from=None, date_to=None,
 
     Plots up to six lines on one date-axis, each independently toggleable
     via ``categories`` (see ``_TRACE_DEFS``):
-      * Accuracy per session  (MPI of every shot in the session)
+      * Accuracy per session  (mean miss of every shot in the session)
       * Precision per session (R95 about the session centroid)
-      * Accuracy per quiver   (MPI of every shot in each completed quiver)
+      * Accuracy per quiver   (mean miss of every shot in each completed quiver)
       * Precision per quiver  (R95 about the quiver centroid)
-      * Accuracy all-time     (running MPI through every shot to date)
+      * Accuracy all-time     (running mean miss through every shot to date)
       * Precision all-time    (running R95 through every shot to date)
 
     Optional head-to-head: ``bow_filter`` / ``arrow_filter`` / ``tag_filter``
@@ -13764,11 +13863,11 @@ def _report_accuracy_precision_traces(user_id, date_from=None, date_to=None,
         return subj['key'] in shot['tags']  # tag
 
     def _compute_series(sessions_sorted):
-        """Per-session / per-quiver / all-time MPI & R95 series + table rows
-        for one subject's sessions (already date-sorted). Mirrors the
+        """Per-session / per-quiver / all-time mean-miss & R95 series + table
+        rows for one subject's sessions (already date-sorted). Mirrors the
         original single-group aggregation."""
         out = {
-            'session': ([], [], []),   # dates, mpi, r95
+            'session': ([], [], []),   # dates, mean_miss, r95
             'quiver':  ([], [], []),
             'alltime': ([], [], []),
             'table': [],
@@ -13785,7 +13884,7 @@ def _report_accuracy_precision_traces(user_id, date_from=None, date_to=None,
             if s_sess is None:
                 continue
             out['session'][0].append(sess_dt)
-            out['session'][1].append(s_sess['mpi'])
+            out['session'][1].append(s_sess['mean_miss'])
             out['session'][2].append(s_sess['r95'])
 
             # Walk quivers using the recorded quiver_size on the first shot
@@ -13808,7 +13907,7 @@ def _report_accuracy_precision_traces(user_id, date_from=None, date_to=None,
                                          with_extreme_spread=False)
                     if s_q is not None:
                         out['quiver'][0].append(sess_dt)
-                        out['quiver'][1].append(s_q['mpi'])
+                        out['quiver'][1].append(s_q['mean_miss'])
                         out['quiver'][2].append(s_q['r95'])
                         n_quivers_in_session += 1
                     buf_x, buf_y, buf_size = [], [], 0
@@ -13819,7 +13918,7 @@ def _report_accuracy_precision_traces(user_id, date_from=None, date_to=None,
                                    with_extreme_spread=False)
             if s_all is not None:
                 out['alltime'][0].append(sess_dt)
-                out['alltime'][1].append(s_all['mpi'])
+                out['alltime'][1].append(s_all['mean_miss'])
                 out['alltime'][2].append(s_all['r95'])
 
             out['table'].append([
@@ -13827,9 +13926,9 @@ def _report_accuracy_precision_traces(user_id, date_from=None, date_to=None,
                 sid,
                 s_sess['n'],
                 n_quivers_in_session,
-                round(s_sess['mpi'], 3),
+                round(s_sess['mean_miss'], 3),
                 round(s_sess['r95'], 3),
-                round(s_all['mpi'], 3) if s_all else '',
+                round(s_all['mean_miss'], 3) if s_all else '',
                 round(s_all['r95'], 3) if s_all else '',
             ])
         return out
@@ -13886,10 +13985,10 @@ def _report_accuracy_precision_traces(user_id, date_from=None, date_to=None,
         for key, gran, metric, base_label in _TRACE_DEFS:
             if key not in enabled:
                 continue
-            dates, mpis, r95s = series[gran]
+            dates, accs, r95s = series[gran]
             if not dates:
                 continue
-            yvals = mpis if metric == 'acc' else r95s
+            yvals = accs if metric == 'acc' else r95s
             color = subj_color if split else (
                 ACC_SHADES[gran] if metric == 'acc' else PREC_SHADES[gran])
             label = f"{subj['name']} — {base_label}" if split else base_label
@@ -13940,8 +14039,9 @@ def _report_accuracy_precision_traces(user_id, date_from=None, date_to=None,
             'line showing its direction.')
     else:
         overlay = (
-            ' Blue traces are accuracy (MPI); green traces are precision '
-            '(R95) — each granularity is a distinct shade. Lines are solid '
+            ' Blue traces are accuracy (mean distance from the gold); green '
+            'traces are precision (R95) — each granularity is a distinct '
+            'shade. Lines are solid '
             'and labeled in place at the right (no legend); small dots mark '
             'the dates and a faint same-color trend line shows each '
             "trace's direction. Pick bows, arrows, or tags to overlay them "
@@ -13949,8 +14049,8 @@ def _report_accuracy_precision_traces(user_id, date_from=None, date_to=None,
     intro = Markup(
         '<p class="report-intro">'
         '<strong>What this answers:</strong> are you getting more '
-        'accurate (centroid closer to bullseye) or more precise '
-        '(tighter group), and on what timescale?' + overlay +
+        'accurate (arrows landing closer to the gold on average) or more '
+        'precise (tighter group), and on what timescale?' + overlay +
         ' All values are normalized by target half-width so mixed targets '
         'are comparable. Misses are excluded.'
         '</p>'
@@ -13964,13 +14064,14 @@ def _report_accuracy_precision_traces(user_id, date_from=None, date_to=None,
         _tip('Quivers',
              'Number of completed quivers in this session — a '
              'partial last quiver is intentionally skipped.'),
-        _tip('Session MPI (norm)',
-             'Accuracy for this session: distance from origin to '
-             "this session's shot centroid."),
+        _tip('Session mean miss (norm)',
+             'Accuracy for this session: the mean distance of every shot '
+             'from the gold. A loose group scores poorly even when its '
+             'centroid sits on the bullseye.'),
         _tip('Session R95 (norm)',
              'Precision for this session: 95% radius about the '
              "session's centroid."),
-        _tip('All-time MPI (norm)',
+        _tip('All-time mean miss (norm)',
              'Rolling accuracy across every shot through this '
              'session, inclusive.'),
         _tip('All-time R95 (norm)',
@@ -15320,7 +15421,7 @@ def _band_of(value, bands):
 
 
 def _report_conditions(user_id, date_from=None, date_to=None):
-    """Accuracy (MPI) / precision (R95) bucketed by wind and temperature band.
+    """Accuracy (mean miss) / precision (R95) bucketed by wind and temp band.
 
     Pools every hit whose session captured weather, normalizes distances by
     target half-width (so mixed faces pool fairly, exactly like the other
@@ -15390,12 +15491,12 @@ def _report_conditions(user_id, date_from=None, date_to=None):
             g = groups[lab]
             n = len(g['xs'])
             if n == 0:
-                out.append({'label': lab, 'n': 0, 'mpi': None, 'r95': None,
+                out.append({'label': lab, 'n': 0, 'acc': None, 'r95': None,
                             'low': False})
                 continue
             a = _archery_stats(g['xs'], g['ys'])
-            out.append({'label': lab, 'n': n, 'mpi': a['mpi'], 'r95': a['r95'],
-                        'low': n < 5})
+            out.append({'label': lab, 'n': n, 'acc': a['mean_miss'],
+                        'r95': a['r95'], 'low': n < 5})
         return out
 
     wind_stats = _band_stats(wind_groups, _WIND_BANDS)
@@ -15411,14 +15512,15 @@ def _report_conditions(user_id, date_from=None, date_to=None):
     if nonempty:
         fig, ax = plt.subplots(figsize=(8, 4.2))
         labels = [w['label'] for w in nonempty]
-        mpis = [w['mpi'] * 100 for w in nonempty]
+        accs = [w['acc'] * 100 for w in nonempty]
         r95s = [w['r95'] * 100 for w in nonempty]
         xpos = np.arange(len(labels))
         bw = 0.38
-        ax.bar(xpos - bw / 2, mpis, bw, label='MPI (accuracy)', color='#c0504d')
+        ax.bar(xpos - bw / 2, accs, bw, label='Mean miss (accuracy)',
+               color='#c0504d')
         ax.bar(xpos + bw / 2, r95s, bw, label='R95 (precision)', color='#3f7d3f')
         for i, w in enumerate(nonempty):
-            ax.annotate(f"n={w['n']}", (i, max(mpis[i], r95s[i])),
+            ax.annotate(f"n={w['n']}", (i, max(accs[i], r95s[i])),
                         textcoords='offset points', xytext=(0, 3),
                         ha='center', fontsize=7, color='#5a6a82')
         ax.set_xticks(xpos)
@@ -15433,20 +15535,21 @@ def _report_conditions(user_id, date_from=None, date_to=None):
     def _cell(v):
         return '—' if v is None else f'{v * 100:.1f}'
 
-    columns = ['Condition', 'Band', 'Shots', 'MPI (% hw)', 'R95 (% hw)']
+    columns = ['Condition', 'Band', 'Shots', 'Mean miss (% hw)', 'R95 (% hw)']
     rows_out = [[Markup('<em>— Wind —</em>'), '', '', '', '']]
     for w in wind_stats:
         lab = w['label'] + (' ⚠' if w['low'] else '')
-        rows_out.append(['Wind', lab, w['n'], _cell(w['mpi']), _cell(w['r95'])])
+        rows_out.append(['Wind', lab, w['n'], _cell(w['acc']), _cell(w['r95'])])
     rows_out.append([Markup('<em>— Temperature —</em>'), '', '', '', ''])
     for t in temp_stats:
         lab = t['label'] + (' ⚠' if t['low'] else '')
-        rows_out.append(['Temp', lab, t['n'], _cell(t['mpi']), _cell(t['r95'])])
+        rows_out.append(['Temp', lab, t['n'], _cell(t['acc']), _cell(t['r95'])])
 
     intro = Markup(
         '<p class="report-intro">'
-        '<strong>What this shows:</strong> your accuracy (MPI, where the group '
-        'centres) and precision (R95, how tightly it clusters) split out by the '
+        '<strong>What this shows:</strong> your accuracy (mean miss — how close '
+        'arrows land to the gold on average) and precision (R95, how tightly it '
+        'clusters) split out by the '
         'wind and temperature logged for each session, as a percentage of the '
         'target half-width so mixed faces pool fairly. Lower is tighter. Bands '
         'marked ⚠ have fewer than five shots — read them lightly. Wind that '
@@ -15837,6 +15940,328 @@ def _report_quiver_spread(user_id, date_from=None, date_to=None,
     }
 
 
+def _report_spread_violins(user_id, date_from=None, date_to=None,
+                           tag_filter=None, categories=None,
+                           bow_filter=None, arrow_filter=None):
+    """Two-row violin chart of horizontal and vertical spread over time.
+
+    For every completed quiver matching the filters, take each hit arrow's
+    offset from that quiver's *own* centroid — dx (left/right) and dy
+    (up/down) — in centimetres. Pool those per-arrow offsets into time
+    buckets (one violin per session, or per calendar month once there are
+    many sessions) and draw the distribution as a violin:
+
+      * Top row: horizontal spread. Time on the x-axis, offset (cm) on the
+        y-axis — upright violins, centred on 0.
+      * Bottom row: vertical spread, with the axes transposed. Offset (cm)
+        on the x-axis, time running down the y-axis — sideways violins.
+
+    Measuring the offset from each quiver's own centroid strips out
+    between-quiver aim bias, so a violin narrows purely as the archer's
+    groups tighten. Values are physical centimetres (raw mm ÷ 10), *not*
+    normalized by face size — a 5 cm group reads as 5 cm on any target.
+
+    Filters mirror ``_report_quiver_spread`` exactly (date range,
+    session-type categories, bow/arrow allow-lists, tags). Misses are
+    dropped and a quiver needs ≥2 hits to have a centroid offset at all.
+    """
+    range_from = None
+    range_to = None
+    if date_from:
+        try:
+            range_from = datetime.strptime(date_from, '%Y-%m-%d')
+        except ValueError:
+            range_from = None
+    if date_to:
+        try:
+            range_to = datetime.strptime(date_to, '%Y-%m-%d') \
+                + timedelta(days=1) - timedelta(microseconds=1)
+        except ValueError:
+            range_to = None
+
+    def _norm_set(values):
+        if not values:
+            return None
+        norm = {str(v).strip().lower() for v in values if str(v).strip()}
+        return norm or None
+
+    wanted_tags = _norm_set(tag_filter)
+    wanted_bows = _norm_set(bow_filter)
+    wanted_arrows = _norm_set(arrow_filter)
+
+    ALL_TYPES = {'regular', 'tournament_practice'}
+    if categories:
+        wanted_types = {c for c in categories if c in ALL_TYPES}
+        if not wanted_types:
+            wanted_types = set(ALL_TYPES)
+    else:
+        wanted_types = set(ALL_TYPES)
+
+    with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
+        rows = cur.execute(
+            "SELECT a.session_id, a.id, a.quiver_size, "
+            "       a.x_coord, a.y_coord, a.session_tags, "
+            "       a.bow, a.arrow_type, "
+            "       st.session_begin_time "
+            "FROM apollo a "
+            "LEFT JOIN session_times st "
+            "  ON st.session_id = a.session_id AND st.user_id = a.user_id "
+            "WHERE a.user_id = %s "
+            "ORDER BY a.session_id ASC, a.id ASC",
+            (user_id,)
+        ).fetchall()
+
+    # Slice into completed quivers (same rule as _iter_quivers); apply the
+    # active filters at close time. Each kept quiver contributes its arrows'
+    # offsets from its own centroid, in centimetres.
+    quivers = []
+    current_session = None
+    buf = []
+    buf_size = 0
+    buf_begin = None
+    buf_tags = set()
+    buf_bow = ''
+    buf_arrow = ''
+    for r in rows:
+        sid = r['session_id']
+        if sid != current_session:
+            current_session = sid
+            buf = []
+            buf_size = 0
+        try:
+            row_qs = int(r['quiver_size']) if r['quiver_size'] else 0
+        except (TypeError, ValueError):
+            row_qs = 0
+        if row_qs <= 0:
+            buf = []
+            buf_size = 0
+            continue
+        if not buf:
+            buf_size = row_qs
+            raw_begin = r['session_begin_time']
+            if isinstance(raw_begin, str):
+                buf_begin = None
+                for fmt in ('%Y-%m-%d %H:%M:%S.%f', '%Y-%m-%d %H:%M:%S',
+                            '%Y-%m-%dT%H:%M:%S.%f', '%Y-%m-%dT%H:%M:%S'):
+                    try:
+                        buf_begin = datetime.strptime(raw_begin, fmt)
+                        break
+                    except ValueError:
+                        continue
+            else:
+                buf_begin = raw_begin
+            tag_str = r['session_tags'] or ''
+            buf_tags = {t.strip().lower()
+                        for t in tag_str.split(',') if t.strip()}
+            buf_bow = (r['bow'] or '').strip().lower()
+            buf_arrow = (r['arrow_type'] or '').strip().lower()
+        buf.append(r)
+        if len(buf) >= buf_size:
+            keep = True
+            # A time bucket needs a real date — drop undated quivers, they
+            # can't be placed on the timeline.
+            if not buf_begin:
+                keep = False
+            if keep and range_from and buf_begin < range_from:
+                keep = False
+            if keep and range_to and buf_begin > range_to:
+                keep = False
+            if keep:
+                has_auto = any(t == 'practice' or t.startswith('tournament:')
+                               for t in buf_tags)
+                stype = 'tournament_practice' if has_auto else 'regular'
+                if stype not in wanted_types:
+                    keep = False
+            if keep and wanted_bows is not None and buf_bow not in wanted_bows:
+                keep = False
+            if (keep and wanted_arrows is not None
+                    and buf_arrow not in wanted_arrows):
+                keep = False
+            if keep and wanted_tags is not None and not (buf_tags & wanted_tags):
+                keep = False
+            if keep:
+                hits = []
+                for s in buf:
+                    xraw = (str(s['x_coord']).strip()
+                            if s['x_coord'] is not None else '')
+                    yraw = (str(s['y_coord']).strip()
+                            if s['y_coord'] is not None else '')
+                    if xraw == MISS_SENTINEL and yraw == MISS_SENTINEL:
+                        continue
+                    try:
+                        hits.append((float(xraw), float(yraw)))
+                    except ValueError:
+                        continue
+                if len(hits) >= 2:
+                    cx = sum(h[0] for h in hits) / len(hits)
+                    cy = sum(h[1] for h in hits) / len(hits)
+                    dxs = [(h[0] - cx) / 10.0 for h in hits]  # mm → cm
+                    dys = [(h[1] - cy) / 10.0 for h in hits]
+                    quivers.append({'begin_dt': buf_begin, 'sid': sid,
+                                    'dxs': dxs, 'dys': dys})
+            buf = []
+            buf_size = 0
+
+    empty_title = 'Horizontal & vertical spread (violins over time)'
+    if not quivers:
+        return {
+            'key': 'spread_violins',
+            'title': empty_title,
+            'empty': True,
+            'empty_reason': ('No completed quivers with ≥2 hits match these '
+                             'filters, so there is no spread to plot.'),
+        }
+
+    # One violin per session, unless there are many sessions — then pool by
+    # calendar month so the violins stay legible and well-populated.
+    session_ids = {q['sid'] for q in quivers}
+    by_session = len(session_ids) <= 16
+    buckets = {}
+    for q in quivers:
+        dt = q['begin_dt']
+        if by_session:
+            key = q['sid']
+            label = dt.strftime('%Y-%m-%d')
+            order = dt
+        else:
+            key = (dt.year, dt.month)
+            label = dt.strftime('%Y-%m')
+            order = datetime(dt.year, dt.month, 1)
+        b = buckets.get(key)
+        if b is None:
+            b = buckets[key] = {'label': label, 'order': order,
+                                'dx': [], 'dy': []}
+        b['dx'].extend(q['dxs'])
+        b['dy'].extend(q['dys'])
+
+    import numpy as np
+    ordered = sorted(buckets.values(), key=lambda bk: bk['order'])
+    # A violin's KDE needs a handful of points with real variance on both
+    # axes; drop thin or degenerate buckets so matplotlib doesn't choke.
+    ordered = [b for b in ordered
+               if len(b['dx']) >= 5
+               and float(np.std(b['dx'])) > 1e-9
+               and float(np.std(b['dy'])) > 1e-9]
+    if not ordered:
+        return {
+            'key': 'spread_violins',
+            'title': empty_title,
+            'empty': True,
+            'empty_reason': ('Not enough arrows per '
+                             + ('session' if by_session else 'month')
+                             + ' yet (need ~5 hits with some spread) to draw '
+                             'a distribution.'),
+        }
+
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+
+    positions = list(range(1, len(ordered) + 1))
+    data_dx = [b['dx'] for b in ordered]
+    data_dy = [b['dy'] for b in ordered]
+    labels = [b['label'] for b in ordered]
+    time_label = 'Session date' if by_session else 'Month'
+
+    def _style(vp, face):
+        for body in vp['bodies']:
+            body.set_facecolor(face)
+            body.set_edgecolor('#1a3a5c')
+            body.set_alpha(0.55)
+        for part in ('cmedians', 'cmaxes', 'cmins', 'cbars'):
+            if part in vp:
+                vp[part].set_color('#1a3a5c')
+                vp[part].set_linewidth(1.0)
+
+    def _tick_positions(n):
+        if n <= 14:
+            return list(range(1, n + 1))
+        step = max(1, n // 12)
+        tp = list(range(1, n + 1, step))
+        if tp[-1] != n:
+            tp.append(n)
+        return tp
+
+    fig, (ax_h, ax_v) = plt.subplots(2, 1, figsize=(9, 9))
+
+    # ── Top: horizontal spread — upright violins, time on x, cm on y ──
+    vp_h = ax_h.violinplot(data_dx, positions=positions, showmedians=True,
+                           widths=0.8)
+    _style(vp_h, '#2f74c0')
+    ax_h.axhline(0, color='#8a97ac', linewidth=0.8, linestyle='--', zorder=1)
+    # Faint ±1σ envelope so the tightening (or drift) reads at a glance.
+    sd_dx = [float(np.std(b['dx'])) for b in ordered]
+    ax_h.plot(positions, sd_dx, color='#c0392b', linewidth=1.0, alpha=0.5)
+    ax_h.plot(positions, [-v for v in sd_dx], color='#c0392b',
+              linewidth=1.0, alpha=0.5)
+    ax_h.set_title('Horizontal spread over time (left / right)')
+    ax_h.set_xlabel(time_label)
+    ax_h.set_ylabel('Horizontal offset from group centre (cm)')
+    ax_h.grid(True, axis='y', linestyle='--', alpha=0.35)
+    tp = _tick_positions(len(ordered))
+    ax_h.set_xticks(tp)
+    ax_h.set_xticklabels([labels[p - 1] for p in tp], rotation=35, ha='right')
+
+    # ── Bottom: vertical spread — sideways violins, cm on x, time on y ──
+    vp_v = ax_v.violinplot(data_dy, positions=positions, showmedians=True,
+                           widths=0.8, vert=False)
+    _style(vp_v, '#37a866')
+    ax_v.axvline(0, color='#8a97ac', linewidth=0.8, linestyle='--', zorder=1)
+    sd_dy = [float(np.std(b['dy'])) for b in ordered]
+    ax_v.plot(sd_dy, positions, color='#c0392b', linewidth=1.0, alpha=0.5)
+    ax_v.plot([-v for v in sd_dy], positions, color='#c0392b',
+              linewidth=1.0, alpha=0.5)
+    ax_v.set_title('Vertical spread over time (up / down)')
+    ax_v.set_xlabel('Vertical offset from group centre (cm)')
+    ax_v.set_ylabel(time_label)
+    ax_v.grid(True, axis='x', linestyle='--', alpha=0.35)
+    ax_v.set_yticks(tp)
+    ax_v.set_yticklabels([labels[p - 1] for p in tp])
+    ax_v.invert_yaxis()  # earliest bucket at the top; time reads downward
+
+    fig.tight_layout()
+    svg_b64 = _render_matplotlib_svg(fig)
+
+    def _iqr(vals):
+        return float(np.percentile(vals, 75) - np.percentile(vals, 25))
+    rows_out = []
+    for b in ordered:
+        rows_out.append([
+            b['label'], len(b['dx']),
+            round(float(np.std(b['dx'])), 2),
+            round(float(np.std(b['dy'])), 2),
+            round(_iqr(b['dx']), 2),
+            round(_iqr(b['dy']), 2),
+        ])
+
+    intro = Markup(
+        '<p class="report-intro">'
+        '<strong>What this shows:</strong> the <em>shape</em> of your '
+        'left/right and up/down scatter over time, not just a single spread '
+        "number. Each violin pools every arrow's offset from its own "
+        "quiver's centre — so it is pure grouping, with aim bias removed — "
+        'for one ' + ('session' if by_session else 'month') + '. The top row '
+        'is horizontal spread with time on the x-axis; the bottom row is '
+        'vertical spread with the axes flipped (time runs down the y-axis). '
+        'A fatter violin means a looser group on that axis; the faint red '
+        'lines mark ±1σ so you can watch the group tighten (or drift) as you '
+        'go. Values are physical centimetres, so a 5&nbsp;cm group reads as '
+        '5&nbsp;cm on any face. Misses are excluded and a quiver needs at '
+        'least two hits to count.'
+        '</p>'
+    )
+
+    return {
+        'key': 'spread_violins',
+        'title': empty_title,
+        'intro_html': intro,
+        'svg_b64': svg_b64,
+        'columns': ['Bucket', 'Arrows', 'σx (cm)', 'σy (cm)',
+                    'IQR x (cm)', 'IQR y (cm)'],
+        'rows': rows_out,
+    }
+
+
 REPORTS = {
     'arrows_vs_time': {
         'label': 'Arrows shot vs time',
@@ -15940,11 +16365,31 @@ REPORTS = {
             {'key': 'tournament_practice', 'label': 'Tournament practice'},
         ],
     },
+    'spread_violins': {
+        'label': 'Horizontal & vertical spread (violins)',
+        'description': 'Violin plots of your left/right and up/down scatter '
+                       'over time — the shape of the group, not just one '
+                       'number. Each arrow\'s offset from its own quiver\'s '
+                       'centre is pooled per session (or per month once there '
+                       'are many), in centimetres. Top row: horizontal spread '
+                       'with time on the x-axis; bottom row: vertical spread '
+                       'with the axes flipped. Narrow with the session-type '
+                       'pills, equipment picker, date range, or tag picker.',
+        'fn': _report_spread_violins,
+        'accepts_date_range': True,
+        'tag_picker': True,
+        'equipment_picker': True,
+        'category_label': 'Include session types:',
+        'categories': [
+            {'key': 'regular',             'label': 'Regular sessions'},
+            {'key': 'tournament_practice', 'label': 'Tournament practice'},
+        ],
+    },
     'within_session_drift': {
         'label': 'Within-session drift',
-        'description': 'How MPI and R95 change by quiver position across '
-                       'all your sessions. Reveals warm-up gains and '
-                       'late-session fatigue.',
+        'description': 'How accuracy (mean miss) and R95 change by quiver '
+                       'position across all your sessions. Reveals warm-up '
+                       'gains and late-session fatigue.',
         'fn': _report_within_session_drift,
     },
     'cold_bore_vs_warmed': {
@@ -15996,8 +16441,8 @@ REPORTS = {
     },
     'conditions_performance': {
         'label': 'Performance vs conditions',
-        'description': 'Accuracy (MPI) and precision (R95) bucketed by the '
-                       'wind and temperature captured for each session, '
+        'description': 'Accuracy (mean miss) and precision (R95) bucketed by '
+                       'the wind and temperature captured for each session, '
                        'normalized by target size. Shows whether wind really '
                        'widens your group. Only sessions with logged weather '
                        'count; optionally restrict to a date range.',
@@ -16005,6 +16450,123 @@ REPORTS = {
         'accepts_date_range': True,
     },
 }
+
+
+# ---------------------------------------------------------------------------
+# Customizable home dashboard
+# ---------------------------------------------------------------------------
+# The signed-in splash is a drag-and-drop grid (Gridstack). Each tile is one
+# widget from this registry. Two families:
+#   * stat / list — cheap, rendered inline server-side from _dashboard_data.
+#   * graph       — an /analyze report's SVG, lazy-loaded after page load via
+#                   /dashboard/graph/<report-key> so the home page stays fast.
+# The per-user layout (which widgets, where, what size) is persisted as JSON in
+# the form_prefs store under form_key 'dashboard'. Widget ids are whitelisted
+# against this registry on save, so a stale or hand-edited blob can't inject an
+# unknown tile. 'w'/'h' are the default grid span (12-column grid).
+DASHBOARD_WIDGETS = {
+    # ── stat cards ──
+    'arrows':         {'label': 'Arrows shot',          'kind': 'stat', 'w': 3, 'h': 2},
+    'time':           {'label': 'Time spent',           'kind': 'stat', 'w': 3, 'h': 2},
+    'streak':         {'label': 'Current streak',       'kind': 'stat', 'w': 3, 'h': 2},
+    'longest_streak': {'label': 'Longest streak',       'kind': 'stat', 'w': 3, 'h': 2},
+    'days_since':     {'label': 'Days since last shot', 'kind': 'stat', 'w': 3, 'h': 2},
+    'handicap':       {'label': 'Handicap',             'kind': 'stat', 'w': 3, 'h': 2},
+    'classification': {'label': 'Classification',       'kind': 'stat', 'w': 3, 'h': 2},
+    'best_accuracy':  {'label': 'Most accurate quiver', 'kind': 'stat', 'w': 3, 'h': 2},
+    'best_precision': {'label': 'Most precise quiver',  'kind': 'stat', 'w': 3, 'h': 2},
+    'active_goals':   {'label': 'Active goals',         'kind': 'stat', 'w': 3, 'h': 2},
+    # ── lists ──
+    'goals_list':     {'label': 'Goals',                'kind': 'list', 'w': 6, 'h': 4},
+    'service_alerts': {'label': 'Service alerts',       'kind': 'list', 'w': 6, 'h': 3},
+    # ── graphs (lazy-loaded; 'report' names the REPORTS key to render) ──
+    # Every graph defaults to w=6 (exactly half the 12-col grid) so two can sit
+    # side by side; resize freely in edit mode.
+    'graph:handicap_trend': {
+        'label': 'Handicap over time', 'kind': 'graph', 'w': 6, 'h': 5,
+        'report': 'handicap_trend'},
+    'graph:accuracy_precision_traces': {
+        'label': 'Accuracy & precision', 'kind': 'graph', 'w': 6, 'h': 5,
+        'report': 'accuracy_precision_traces'},
+    'graph:spread_violins': {
+        'label': 'Spread violins', 'kind': 'graph', 'w': 6, 'h': 6,
+        'report': 'spread_violins'},
+    'graph:calendar_heatmap': {
+        'label': 'Shot volume calendar', 'kind': 'graph', 'w': 6, 'h': 4,
+        'report': 'calendar_heatmap'},
+    'graph:arrows_vs_time': {
+        'label': 'Arrows shot vs time', 'kind': 'graph', 'w': 6, 'h': 4,
+        'report': 'arrows_vs_time'},
+}
+
+# Report keys a graph tile is allowed to render (guards /dashboard/graph).
+DASHBOARD_GRAPH_KEYS = {
+    m['report'] for m in DASHBOARD_WIDGETS.values() if m['kind'] == 'graph'
+}
+
+# First-run layout: reproduces the cards the fixed dashboard used to show.
+DEFAULT_DASHBOARD_LAYOUT = [
+    {'id': 'arrows',         'x': 0, 'y': 0, 'w': 3, 'h': 2},
+    {'id': 'time',           'x': 3, 'y': 0, 'w': 3, 'h': 2},
+    {'id': 'streak',         'x': 6, 'y': 0, 'w': 3, 'h': 2},
+    {'id': 'handicap',       'x': 9, 'y': 0, 'w': 3, 'h': 2},
+    {'id': 'classification', 'x': 0, 'y': 2, 'w': 3, 'h': 2},
+    {'id': 'service_alerts', 'x': 3, 'y': 2, 'w': 3, 'h': 2},
+    {'id': 'goals_list',     'x': 6, 'y': 2, 'w': 6, 'h': 4},
+]
+
+
+def _dashboard_data(user_id, needed=None):
+    """Everything the stat / list dashboard widgets can render, computed once.
+
+    Reuses the aggregates the fixed dashboard already built
+    (``_splash_user_summary`` for arrows/time, ``_home_dashboard`` for
+    streak/handicap/classification/goals/alerts) and pulls the practice
+    personal bests (``_practice_pbs``) only when a PB tile is actually on the
+    dashboard — that scan is O(all quivers), too heavy to run on every home
+    load unless the user asked for it. ``needed`` is the set of widget ids in
+    the layout; expensive bits are gated on it.
+    """
+    needed = needed or set()
+    summary = _splash_user_summary(user_id) or {}
+    home = _home_dashboard(user_id) or {}
+    streak = home.get('streak') or {}
+    pbs = {}
+    if needed & {'best_accuracy', 'best_precision'}:
+        try:
+            pbs = _practice_pbs(user_id) or {}
+        except (SQLAlchemyError, ValueError, TypeError):
+            pbs = {}
+    active_goals = 0
+    if 'active_goals' in needed:
+        try:
+            active_goals = len(_fetch_goals(user_id, statuses=('active',)))
+        except SQLAlchemyError:
+            active_goals = 0
+    return {
+        'arrows': summary.get('total_arrows', 0),
+        'pretty_time': summary.get('pretty_time', '0m'),
+        'streak': streak,
+        'handicap': home.get('handicap'),
+        'ladder': home.get('ladder'),
+        'goals': home.get('goals') or [],
+        'alerts': home.get('alerts') or [],
+        'best_accuracy': pbs.get('best_accuracy'),
+        'best_precision': pbs.get('best_precision'),
+        'active_goals': active_goals,
+    }
+
+
+def _dashboard_layout_for(user_id):
+    """The user's saved dashboard layout, filtered to known widgets, or the
+    default when there's nothing valid saved yet."""
+    prefs = get_form_prefs(user_id, 'dashboard') or {}
+    layout = prefs.get('layout')
+    if not isinstance(layout, list):
+        layout = []
+    layout = [it for it in layout
+              if isinstance(it, dict) and it.get('id') in DASHBOARD_WIDGETS]
+    return layout or DEFAULT_DASHBOARD_LAYOUT
 
 
 # ---------------------------------------------------------------------------
@@ -17633,12 +18195,14 @@ def _volume_progress(user_id, goal):
 
 
 def _ap_series(user_id, metric, min_hits=6):
-    """Per-session accuracy (MPI) or precision (R95) over time, as a percentage
-    of the target's half-width (the normalized unit the /analyze reports use).
+    """Per-session accuracy (mean miss) or precision (R95) over time, as a
+    percentage of the target's half-width (the normalized unit /analyze uses).
 
-    ``metric`` is 'mpi' or 'r95'. Sessions with fewer than ``min_hits`` hits are
-    skipped (too few to fit a meaningful group). Returns ``[{date, value}]``
-    ascending; value is the metric × 100 (so ~30 means 30% of half-width).
+    ``metric`` is 'acc' (mean distance from the gold — the tracked accuracy),
+    'r95' (precision), or 'mpi' (raw centroid bias). Sessions with fewer than
+    ``min_hits`` hits are skipped (too few to fit a meaningful group). Returns
+    ``[{date, value}]`` ascending; value is the metric × 100 (so ~30 means 30%
+    of half-width).
     """
     with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
         rows = cur.execute(
@@ -17683,8 +18247,13 @@ def _ap_series(user_id, metric, min_hits=6):
         stat = _archery_stats(s['xs'], s['ys'])
         if stat is None:
             continue
-        pts.append({'date': s['date'],
-                    'value': (stat['mpi'] if metric == 'mpi' else stat['r95']) * 100.0})
+        if metric == 'r95':
+            raw = stat['r95']
+        elif metric == 'mpi':
+            raw = stat['mpi']
+        else:  # 'acc' / 'mean_miss' — accuracy = mean distance from the gold
+            raw = stat['mean_miss']
+        pts.append({'date': s['date'], 'value': raw * 100.0})
     pts.sort(key=lambda p: p['date'])
     return pts
 
@@ -17787,8 +18356,8 @@ def _goal_progress(goal, user_id, points=None, want_chart=True):
                 'sub': label, 'metrics': metrics, 'svg_b64': svg}
 
     if kind in ('accuracy', 'precision'):
-        metric = 'mpi' if kind == 'accuracy' else 'r95'
-        mlabel = 'MPI' if metric == 'mpi' else 'R95'
+        metric = 'acc' if kind == 'accuracy' else 'r95'
+        mlabel = 'Mean miss' if kind == 'accuracy' else 'R95'
         target = goal.get('target_metric')
         if target is None:
             return {'verdict': 'no_data', 'headline': f'{mlabel} goal — no target set',
@@ -17921,7 +18490,7 @@ def _create_goal_from_form(user_id, form):
         if not (0 < tv <= 100):
             return 'Target must be between 0 and 100 (% of target half-width).'
         f['target_metric'] = tv
-        mlabel = 'MPI' if kind == 'accuracy' else 'R95'
+        mlabel = 'Mean miss' if kind == 'accuracy' else 'R95'
         label = label or f'{mlabel} ≤ {tv:g}%'
 
     try:
@@ -18128,7 +18697,7 @@ def _quiver_replay_payload(ctx, user_id):
 
 def _practice_pbs(user_id):
     """Practice personal bests for the records board: the most accurate and most
-    precise completed quiver (MPI / R95 as a % of target half-width), and the
+    precise completed quiver (mean miss / R95 as a % of target half-width), and the
     calendar month where precision improved most vs the prior active month.
     The two quiver bests carry a ``replay`` payload so the board can draw the
     winning group. (Longest streak comes from _streak_stats.) Keys are None
@@ -18171,9 +18740,9 @@ def _practice_pbs(user_id):
         if st is None:
             continue
         d = sid_date.get(sid)
-        mpi = st['mpi'] * 100
-        if best_acc is None or mpi < best_acc['value']:
-            best_acc = {'value': mpi, 'date': d, 'n': len(xs)}
+        acc = st['mean_miss'] * 100
+        if best_acc is None or acc < best_acc['value']:
+            best_acc = {'value': acc, 'date': d, 'n': len(xs)}
             best_acc_ctx = {'shots': list(shots), 'target_id': _tid}
         # Precision: score by a size-invariant σ-model R95 (the Rayleigh form
         # the n≥10 path already uses), NOT the sample-max percentile

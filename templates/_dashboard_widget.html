@@ -1,0 +1,90 @@
+{# Renders the inner content of one stat/list dashboard tile by widget id.
+   The grid-item wrapper + remove button live in splash.html; this macro is
+   only the tile body. Tolerant of missing data (new users) so a tile degrades
+   to a friendly hint instead of a blank box or a template error. #}
+{% macro render_widget(wid, dash) %}
+{%- if wid == 'arrows' %}
+    <h3 class="quantico_light">Arrows shot</h3>
+    <div class="splash-stat">{{ '{:,}'.format(dash.arrows or 0) }}</div>
+    <div class="splash-sub">all-time</div>
+{%- elif wid == 'time' %}
+    <h3 class="quantico_light">Time spent</h3>
+    <div class="splash-stat">{{ dash.pretty_time or '0m' }}</div>
+    <div class="splash-sub">on the line</div>
+{%- elif wid == 'streak' %}
+    <h3 class="quantico_light">Streak</h3>
+    <div class="splash-stat">{{ (dash.streak.current_streak if dash.streak else 0) or 0 }}🔥</div>
+    {%- set d = (dash.streak.days_since_last if dash.streak else 0) or 0 %}
+    <div class="splash-sub">{{ d }} day{{ 's' if d != 1 else '' }} since last</div>
+{%- elif wid == 'longest_streak' %}
+    <h3 class="quantico_light">Longest streak</h3>
+    <div class="splash-stat">{{ (dash.streak.longest_streak if dash.streak else 0) or 0 }}🔥</div>
+    <div class="splash-sub">best run of days</div>
+{%- elif wid == 'days_since' %}
+    <h3 class="quantico_light">Days since last</h3>
+    <div class="splash-stat">{{ (dash.streak.days_since_last if dash.streak else 0) or 0 }}</div>
+    <div class="splash-sub">days off the line</div>
+{%- elif wid == 'handicap' %}
+    <h3 class="quantico_light">Handicap</h3>
+    {%- if dash.handicap and dash.handicap.latest is not none %}
+    <div class="splash-stat">{{ dash.handicap.best_recent }}</div>
+    <div class="splash-sub">best recent{% if dash.handicap.agb is not none %} · AGB {{ dash.handicap.agb }}{% endif %}</div>
+    {%- else %}
+    <div class="splash-empty">Shoot a full AGB round to get a handicap.</div>
+    {%- endif %}
+{%- elif wid == 'classification' %}
+    <h3 class="quantico_light">Class</h3>
+    {%- if dash.ladder and dash.ladder.current %}
+    <div class="splash-stat" style="font-size:1.25rem;line-height:1.2;">{{ dash.ladder.current.name }}</div>
+    <div class="splash-sub">{% if dash.ladder.next %}{{ dash.ladder.next.gap }} to {{ dash.ladder.next.name }}{% else %}top class 🏆{% endif %}</div>
+    {%- else %}
+    <div class="splash-empty">No classification yet.</div>
+    {%- endif %}
+{%- elif wid == 'best_accuracy' %}
+    <h3 class="quantico_light">Most accurate quiver</h3>
+    {%- if dash.best_accuracy %}
+    <div class="splash-stat">{{ dash.best_accuracy.value|round(1) }}%</div>
+    <div class="splash-sub">mean miss · {{ dash.best_accuracy.date.strftime('%Y-%m-%d') if dash.best_accuracy.date else '—' }}</div>
+    {%- else %}
+    <div class="splash-empty">No completed quivers yet.</div>
+    {%- endif %}
+{%- elif wid == 'best_precision' %}
+    <h3 class="quantico_light">Most precise quiver</h3>
+    {%- if dash.best_precision %}
+    <div class="splash-stat">{{ dash.best_precision.value|round(1) }}%</div>
+    <div class="splash-sub">R95 · {{ dash.best_precision.date.strftime('%Y-%m-%d') if dash.best_precision.date else '—' }}</div>
+    {%- else %}
+    <div class="splash-empty">No completed quivers yet.</div>
+    {%- endif %}
+{%- elif wid == 'active_goals' %}
+    <h3 class="quantico_light">Active goals</h3>
+    <div class="splash-stat">{{ dash.active_goals or 0 }}</div>
+    <div class="splash-sub"><a href="/goals" style="color:inherit;">view goals →</a></div>
+{%- elif wid == 'goals_list' %}
+    <h3 class="quantico_light">Your goals</h3>
+    {%- if dash.goals %}
+    <div class="dash-scroll">
+        {%- for g in dash.goals %}
+        <a href="/goals" class="splash-goal-row">
+            <span class="splash-goal-badge" style="background:{{ g.verdict_color }};">{{ g.verdict_label }}</span>
+            <span class="splash-goal-label">{{ g.label }}</span>
+            <span class="splash-goal-headline">{{ g.headline }}</span>
+        </a>
+        {%- endfor %}
+    </div>
+    {%- else %}
+    <div class="splash-empty"><a href="/goals">Set a goal →</a></div>
+    {%- endif %}
+{%- elif wid == 'service_alerts' %}
+    <h3 class="quantico_light">Service alerts</h3>
+    {%- if dash.alerts %}
+    <div class="dash-scroll">
+        {%- for a in dash.alerts %}
+        <a href="/edit_bows" class="splash-alert splash-alert-{{ a.level }}">🧵 {{ a.bow }} — {{ a.text }}</a>
+        {%- endfor %}
+    </div>
+    {%- else %}
+    <div class="splash-empty">All strings within service life. 🎯</div>
+    {%- endif %}
+{%- endif %}
+{% endmacro %}
