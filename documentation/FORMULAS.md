@@ -178,9 +178,9 @@ in the same session are dropped (`_cooccurring_pairs`), and each side needs
 
 | Question | Test | Input |
 |---|---|---|
-| **Accuracy** — do the centroids differ? | Hotelling's T² | 2D normalized shot vectors |
+| **Bias** — do the centroids differ? | Hotelling's T² | 2D normalized shot vectors |
 | **Precision** — does one group cluster tighter about *its own* centroid? | Brown-Forsythe | distance from each group's own centroid |
-| **Total error** — does one simply land closer to the bull? | Mann-Whitney U + Cliff's δ | distance from target centre |
+| **Total error** — does one simply land closer to the bull? (this is the tracked accuracy, mean miss) | Mann-Whitney U + Cliff's δ | distance from target centre |
 
 ### 3.1 Mann-Whitney U (total error) — `_mann_whitney_u` (~9696)
 Two-sided; returns the smaller conventional U. Rank-based (so it ignores the
@@ -212,7 +212,7 @@ SE = √( s_pooled · (1/n1 + 1/n2) )
 t  = (m1 − m2)/SE,   F = t²,   df = (1, n1+n2−2),   p = _f_sf(F, 1, df2)
 ```
 
-### 3.4 Hotelling's T² (accuracy) — `_hotelling_t2` (~9806)
+### 3.4 Hotelling's T² (bias) — `_hotelling_t2` (~9806)
 Two-sample multivariate test on the 2D centroids; needs n ≥ 3 per side and a
 non-singular pooled covariance:
 ```

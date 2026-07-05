@@ -669,7 +669,7 @@
         /* CSS tooltip — appears immediately, no browser delay. Mirrors
            the pattern used in previous_sessions.html. data-tip spans
            explain each statistical test (Mann-Whitney U, Brown-Forsythe,
-           Hotelling's T², …) and each metric (MPI, R95, σ_x/y, …). */
+           Hotelling's T², …) and each metric (bias/MPI, R95, σ_x/y, …). */
         .report-table [data-tip] {
             position: relative;
             cursor: help;
@@ -998,10 +998,14 @@
 <summary>Glossary — what the numbers mean</summary>
 <div class="glossary-panel">
     <div class="glossary-group">
-        <h4>Accuracy — where the group sits</h4>
+        <h4>Accuracy &amp; bias</h4>
         <div class="glossary-item">
-            <span class="glossary-term">MPI</span>
-            <span class="glossary-def">Mean Point of Impact: magnitude of the group's centroid offset from the bullseye — the group's <em>bias</em>, i.e. which way to move the sight or anchor. (Tracked accuracy now uses <em>mean miss</em>, which also counts spread, so a loose group can't look accurate.)</span>
+            <span class="glossary-term">Mean miss</span>
+            <span class="glossary-def">The tracked <em>accuracy</em> metric: the average distance of each arrow from the gold. It counts both a group that sits off-centre and a loose one, so a wide spray can't read as accurate.</span>
+        </div>
+        <div class="glossary-item">
+            <span class="glossary-term">Bias (MPI)</span>
+            <span class="glossary-def">Mean Point of Impact: magnitude of the group's centroid offset from the bullseye — the group's <em>bias</em>, i.e. which way to move the sight or anchor. Not the same as accuracy: a loose group centred on the gold has near-zero bias but a large mean miss.</span>
         </div>
         <div class="glossary-item">
             <span class="glossary-term">Bias Δx, Δy</span>
@@ -1031,7 +1035,7 @@
         <h4>Head-to-head tests</h4>
         <div class="glossary-item">
             <span class="glossary-term">Hotelling's T²</span>
-            <span class="glossary-def">On the 2D shot vectors: tests whether two groups' centroids sit in different places — an accuracy (bias) difference, independent of how tight either group is.</span>
+            <span class="glossary-def">On the 2D shot vectors: tests whether two groups' centroids sit in different places — a <em>bias</em> difference, independent of how tight either group is.</span>
         </div>
         <div class="glossary-item">
             <span class="glossary-term">Brown-Forsythe F</span>

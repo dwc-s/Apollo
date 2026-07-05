@@ -321,7 +321,7 @@ in the same session are dropped (<code>_cooccurring_pairs</code>), and each side
 </thead>
 <tbody>
 <tr>
-<td><strong>Accuracy</strong> — do the centroids differ?</td>
+<td><strong>Bias</strong> — do the centroids differ?</td>
 <td>Hotelling's T²</td>
 <td>2D normalized shot vectors</td>
 </tr>
@@ -331,7 +331,7 @@ in the same session are dropped (<code>_cooccurring_pairs</code>), and each side
 <td>distance from each group's own centroid</td>
 </tr>
 <tr>
-<td><strong>Total error</strong> — does one simply land closer to the bull?</td>
+<td><strong>Total error</strong> — does one simply land closer to the bull? (this is the tracked accuracy, mean miss)</td>
 <td>Mann-Whitney U + Cliff's δ</td>
 <td>distance from target centre</td>
 </tr>
@@ -361,7 +361,7 @@ s_pooled = [ Σ(z1−m1)² + Σ(z2−m2)² ] / (n1+n2−2)
 SE = √( s_pooled · (1/n1 + 1/n2) )
 t  = (m1 − m2)/SE,   F = t²,   df = (1, n1+n2−2),   p = _f_sf(F, 1, df2)
 </code></pre>
-<h3 id="34-hotellings-t2-accuracy-_hotelling_t2-9806">3.4 Hotelling's T² (accuracy) — <code>_hotelling_t2</code> (~9806)</h3>
+<h3 id="34-hotellings-t2-bias-_hotelling_t2-9806">3.4 Hotelling's T² (bias) — <code>_hotelling_t2</code> (~9806)</h3>
 <p>Two-sample multivariate test on the 2D centroids; needs n ≥ 3 per side and a
 non-singular pooled covariance:</p>
 <pre><code>pooled cov S = [ (n1−1)S1 + (n2−1)S2 ] / (n1+n2−2)

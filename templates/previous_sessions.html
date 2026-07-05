@@ -707,13 +707,13 @@ function renderQuiverStats() {
         slot.innerHTML = `
             <span class="stat-label">Shots</span>
               <span class="stat-value">${n}${misses ? ` &middot; ${misses} miss` : ''}</span>
-            <span class="stat-label" data-tip="Mean point of impact — the group's centroid (X̄, Ȳ).">MPI (${u})</span>
+            <span class="stat-label" data-tip="Bias — the group's centroid offset from the bullseye (X̄, Ȳ), a.k.a. the Mean Point of Impact. Which way to move the sight. (Tracked accuracy is mean miss.)">Bias (${u})</span>
               <span class="stat-value">${mpi}</span>
             <span class="stat-label" data-tip="Standard deviation of shot coordinates from (0,0). Combines aim error and precision.">σ ctr (${u})</span>
               <span class="stat-value">${fmt(sigma0)}</span>
-            <span class="stat-label" data-tip="Standard deviation from the group's MPI — pure precision, independent of where the group is centered.">σ MPI (${u})</span>
+            <span class="stat-label" data-tip="Standard deviation about the group's own centre — pure precision, independent of where the group sits.">σ centre (${u})</span>
               <span class="stat-value">${fmt(sigmaM)}</span>
-            <span class="stat-label" data-tip="Largest distance from MPI — group radius / extreme spread.">Grp rad (${u})</span>
+            <span class="stat-label" data-tip="Largest distance from the group's centre — group radius / extreme spread.">Grp rad (${u})</span>
               <span class="stat-value">${fmt(maxFromMPI)}</span>
             <span class="stat-label" data-tip="Closest shot to center (0,0).">Best (${u})</span>
               <span class="stat-value">${fmt(best)}</span>

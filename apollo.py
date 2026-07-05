@@ -3574,6 +3574,27 @@ def _migrate_poundage_to_draw_weight():
                     ))
 
 
+def _migrate_mpi_goal_labels():
+    """Rewrite the stale 'MPI ≤ N%' auto-label on pre-v0.98 accuracy goals.
+
+    Before v0.98 the tracked accuracy metric was MPI, so a new accuracy goal
+    left unlabeled got the auto-label 'MPI ≤ {target}%'. v0.98 renamed the
+    metric to mean miss, which leaves those stored labels stale. Rewrite only
+    the exact auto-generated form (kind='accuracy', label beginning 'MPI ≤ ')
+    to 'Mean miss ≤ …'; a label the user typed themselves is left untouched.
+    Uses REPLACE (portable across SQLite and MySQL) and is idempotent — once
+    run, no accuracy-goal label starts with 'MPI ≤ '.
+    """
+    insp = sa_inspect(engine)
+    if 'goals' not in set(insp.get_table_names()):
+        return
+    with engine.begin() as conn:
+        conn.execute(text(
+            "UPDATE goals SET label = REPLACE(label, 'MPI ≤ ', 'Mean miss ≤ ') "
+            "WHERE kind = 'accuracy' AND label LIKE 'MPI ≤ %'"
+        ))
+
+
 def _ensure_shot_snapshot_columns():
     """Add denormalized bow + arrow snapshot columns to apollo.
 
@@ -4060,6 +4081,7 @@ def migrate_db():
     _ensure_targets_user_name_unique_index()
     _ensure_apollo_client_uuid_unique_index()
     _ensure_root_user()
+    _migrate_mpi_goal_labels()
 
 
 def get_default_target(user_id):
@@ -12205,9 +12227,10 @@ def _report_all_shots_per_target(user_id, date_from=None, date_to=None):
             sy_mm = stats['sigma_y']
             es_mm = stats['extreme_spread']
             mpi_tip = (
-                "MPI (Mean Point of Impact): magnitude of the group's "
-                "centroid offset from the bullseye. Pure accuracy — "
-                "fix with sight or anchor adjustments, not tuning."
+                "Bias: magnitude of the group's centroid offset from the "
+                "bullseye (the Mean Point of Impact). Tells you which way to "
+                "move the sight or anchor — this is the group's bias, not the "
+                "tracked accuracy (which is mean miss)."
             )
             bias_tip = (
                 "Signed bias of the centroid: (Δx, Δy). Direction tells "
@@ -12245,8 +12268,8 @@ def _report_all_shots_per_target(user_id, date_from=None, date_to=None):
             else:
                 r95_label = _tip('R95', r95_tip)
             rows_out.extend([
-                [Markup('<em>— Accuracy —</em>'), ''],
-                [_tip('MPI', mpi_tip),
+                [Markup('<em>— Bias —</em>'), ''],
+                [_tip('Bias', mpi_tip),
                  Markup(f'{_mm_val(mpi_mm)} {_mm_unit()}')],
                 [_tip('Bias Δx, Δy (signed)', bias_tip),
                  _mm_pair(bx_mm, by_mm)],
@@ -13075,7 +13098,7 @@ def _summarize_equipment(shots):
         # — feeds Brown-Forsythe in the "Precision" family.
         'dists_from_centroid': dists_from_centroid,
         # Per-shot normalized coords — Hotelling's T² needs the 2D points
-        # to test for centroid-level (accuracy) bias.
+        # to test for centroid-level bias.
         'xs_norm': xs_norm,
         'ys_norm': ys_norm,
         'n_targets': len(targets),
@@ -13089,14 +13112,15 @@ def _report_equipment_head_to_head(user_id, categories=None, tag_filter=None):
     Each pair is judged on three independent axes so the user can tell
     *what* differs, not just *that* something does:
 
-      * Accuracy — does the centroid sit in a different place?
+      * Bias — does the centroid sit in a different place?
         Hotelling's T² on the 2D (x, y) shot vectors.
       * Precision — does the group cluster more tightly about its own
         centroid? Brown-Forsythe on distance-from-each-group's-centroid
-        (not from the bullseye; that one mixes accuracy and precision).
+        (not from the bullseye; that one mixes bias and spread).
       * Total error — does one piece simply land closer to the bull on
-        average? Mann-Whitney U on distance-from-center. Useful as a
-        practical tiebreaker but cannot attribute the cause.
+        average? Mann-Whitney U on distance-from-center (this is the same
+        quantity as the tracked accuracy, mean miss). Useful as a practical
+        tiebreaker but cannot attribute the cause.
 
     All distances are normalized by target half-size so shots from
     mixed face sizes (40cm vs 60cm etc.) pool fairly. Skips pairs where
@@ -13192,7 +13216,7 @@ def _report_equipment_head_to_head(user_id, categories=None, tag_filter=None):
                 a_d_prec = a_sum['dists_from_centroid']
                 b_d_prec = b_sum['dists_from_centroid']
                 f_bf, df1_bf, df2_bf, p_bf = _brown_forsythe(a_d_prec, b_d_prec)
-                # Accuracy input: full 2D points for Hotelling.
+                # Bias input: full 2D points for Hotelling.
                 a_xy = list(zip(a_sum['xs_norm'], a_sum['ys_norm']))
                 b_xy = list(zip(b_sum['xs_norm'], b_sum['ys_norm']))
                 t2, f_ht, df1_ht, df2_ht, p_ht = _hotelling_t2(a_xy, b_xy)
@@ -13224,8 +13248,8 @@ def _report_equipment_head_to_head(user_id, categories=None, tag_filter=None):
 
         # ── Pass 2: render each pair's panel ─────────────────────────
         # The bar chart shows the three headline numbers archers care
-        # about — MPI (accuracy), R95 (precision), hit rate (practical
-        # outcome). Mean-distance-from-center is intentionally dropped:
+        # about — bias/MPI (centroid offset), R95 (precision), hit rate
+        # (practical outcome). Mean-distance-from-center is left in the table:
         # it duplicates the muddled signal the overhaul targets.
         for ps in pair_stats:
             a_name, b_name = ps['a_name'], ps['b_name']
@@ -13233,7 +13257,7 @@ def _report_equipment_head_to_head(user_id, categories=None, tag_filter=None):
 
             fig, axes = plt.subplots(1, 3, figsize=(11, 4))
             metric_titles = [
-                'Accuracy — MPI\n(normalized: 1.0 = target edge)',
+                'Bias — MPI\n(normalized: 1.0 = target edge)',
                 'Precision — R95\n(normalized, about each group’s centroid)',
                 'Hit rate (%)',
             ]
@@ -13288,29 +13312,28 @@ def _report_equipment_head_to_head(user_id, categories=None, tag_filter=None):
                 return f'{label}: inconclusive (p = {_fmt_p(p)})'
 
             verdict = ' · '.join([
-                _verdict(ps['p_ht'], 'Accuracy'),
+                _verdict(ps['p_ht'], 'Bias'),
                 _verdict(ps['p_bf'], 'Precision'),
                 _verdict(ps['p_mw'], 'Total error'),
             ])
 
             ht_tip = (
                 "Hotelling's T² on the 2D shot vectors: tests whether the "
-                "two groups' centroids sit in different places — i.e. an "
-                "*accuracy* (bias) difference, independent of how tight "
-                "either group is."
+                "two groups' centroids sit in different places — i.e. a "
+                "*bias* difference, independent of how tight either group is."
             )
             bf_tip = (
                 "Brown-Forsythe on distance-from-each-group's-own-centroid: "
                 "tests whether one group clusters more tightly than the "
                 "other — pure *precision*, independent of bias. (Earlier "
                 "versions fed this distance-from-bullseye, which mixed "
-                "accuracy and precision.)"
+                "bias and spread.)"
             )
             mw_tip = (
                 "Mann-Whitney U on distance-from-target-center: practical "
                 "tiebreaker — does one piece simply land closer to the "
                 "bull on average? Cannot attribute *why* (bias vs spread); "
-                "use the Accuracy / Precision rows above for that."
+                "use the Bias / Precision rows above for that."
             )
             delta_tip = (
                 "Cliff's δ: effect size for Mann-Whitney. Range −1…+1. "
@@ -13320,7 +13343,7 @@ def _report_equipment_head_to_head(user_id, categories=None, tag_filter=None):
             )
             holm_tip = (
                 "Holm-Bonferroni step-down adjustment, applied separately "
-                "within each test family (Accuracy / Precision / Total). "
+                "within each test family (Bias / Precision / Total). "
                 "Multiplies each raw p by the family size minus its rank. "
                 "Keeps the family-wise false-positive rate at α even when "
                 "many pairs are tested."
@@ -13333,9 +13356,10 @@ def _report_equipment_head_to_head(user_id, categories=None, tag_filter=None):
                 "these tests don't model — treat as exploratory."
             )
             mpi_tip = (
-                "MPI (Mean Point of Impact): magnitude of the group's "
-                "centroid offset from the bullseye. Pure *accuracy* — "
-                "sight or anchor adjustment, not equipment tuning."
+                "Bias (MPI): magnitude of the group's centroid offset from "
+                "the bullseye. The group's *bias* — sight or anchor "
+                "adjustment, not equipment tuning. (Accuracy proper is mean "
+                "miss; see 'Mean distance from center' above.)"
             )
             r95_tip = (
                 "R95: radius about each group's own centroid that contains "
@@ -13359,7 +13383,7 @@ def _report_equipment_head_to_head(user_id, categories=None, tag_filter=None):
                 "the sight, not just by how much."
             )
 
-            section_a = Markup('<em>— Accuracy (bias) —</em>')
+            section_a = Markup('<em>— Bias (centroid offset) —</em>')
             section_p = Markup('<em>— Precision (spread about centroid) —</em>')
             section_t = Markup('<em>— Total error & basics —</em>')
             section_tests = Markup('<em>— Pairwise tests —</em>')
@@ -13379,7 +13403,7 @@ def _report_equipment_head_to_head(user_id, categories=None, tag_filter=None):
                 ['Distinct targets used',
                  a_sum['n_targets'], b_sum['n_targets']],
                 [section_a, '', ''],
-                [_tip('MPI (normalized)', mpi_tip),
+                [_tip('Bias / MPI (normalized)', mpi_tip),
                  f"{a_sum['mpi_norm']:.3f}",
                  f"{b_sum['mpi_norm']:.3f}"],
                 [_tip('Bias Δx, Δy (normalized, signed)', bias_tip),
@@ -13400,12 +13424,12 @@ def _report_equipment_head_to_head(user_id, categories=None, tag_filter=None):
                  f"({b_sum['sigma_x_norm']:.3f}, "
                  f"{b_sum['sigma_y_norm']:.3f})"],
                 [section_tests, '', ''],
-                [_tip("Accuracy — Hotelling's T²", ht_tip),
+                [_tip("Bias — Hotelling's T²", ht_tip),
                  (f"{ps['t2']:.3f} (F={ps['f_ht']:.3f}, "
                   f"df={ps['df1_ht']},{ps['df2_ht']})"
                   if ps['t2'] is not None else '—'),
                  ''],
-                [_tip('Accuracy — p, Holm-adjusted', holm_tip),
+                [_tip('Bias — p, Holm-adjusted', holm_tip),
                  _fmt_p(ps['p_ht']), ''],
                 [_tip('Precision — Brown-Forsythe F', bf_tip),
                  (f"{ps['f_bf']:.3f} (df={ps['df1_bf']},{ps['df2_bf']})"
@@ -14150,7 +14174,7 @@ def _report_cold_bore_vs_warmed(user_id):
     EDGE = '#1a3a5c'
     fig, axes = plt.subplots(1, 3, figsize=(11, 4))
     titles = [
-        'Accuracy — MPI\n(normalized: 1.0 = target edge)',
+        'Bias — MPI\n(normalized: 1.0 = target edge)',
         'Precision — R95\n(normalized, about each pool\'s centroid)',
         'Shots in pool',
     ]
@@ -14195,7 +14219,7 @@ def _report_cold_bore_vs_warmed(user_id):
         return f'{label}: inconclusive (p = {_fmt_p(p)})'
 
     verdict = ' · '.join([
-        _verdict(p_ht, 'Accuracy'),
+        _verdict(p_ht, 'Bias'),
         _verdict(p_bf, 'Precision'),
     ])
 
@@ -14205,13 +14229,14 @@ def _report_cold_bore_vs_warmed(user_id):
         'each session enough to warm you up, or are you losing points '
         'before you settle in? Pool 1 = the first completed quiver of '
         'every session; pool 2 = every quiver after that. Two '
-        'independent tests run: <em>Hotelling\'s T²</em> for an '
-        'accuracy shift, <em>Brown-Forsythe</em> for a precision shift.'
+        'independent tests run: <em>Hotelling\'s T²</em> for a shift in '
+        'bias (where the group centres), <em>Brown-Forsythe</em> for a '
+        'precision shift.'
         '</p>'
     )
 
     section_basics = Markup('<em>— Pool basics —</em>')
-    section_acc = Markup('<em>— Accuracy —</em>')
+    section_acc = Markup('<em>— Bias —</em>')
     section_prec = Markup('<em>— Precision —</em>')
     section_tests = Markup('<em>— Pairwise tests —</em>')
 
@@ -14222,9 +14247,9 @@ def _report_cold_bore_vs_warmed(user_id):
          len(sessions_with_cold), len(sessions_with_warm)],
         ['Shots', cold['n'], warm['n']],
         [section_acc, '', ''],
-        [_tip('MPI (normalized)',
+        [_tip('Bias / MPI (normalized)',
               'Mean Point of Impact: magnitude of the centroid offset. '
-              'Lower = more accurate.'),
+              'Lower = less bias (group more centred).'),
          f"{cold['mpi']:.3f}", f"{warm['mpi']:.3f}"],
         [_tip('Bias Δx, Δy (normalized, signed)',
               'Signed centroid offset; direction tells you which way the '
@@ -14240,14 +14265,14 @@ def _report_cold_bore_vs_warmed(user_id):
               'Average distance from each pool\'s own centroid.'),
          f"{cold['mr']:.3f}", f"{warm['mr']:.3f}"],
         [section_tests, '', ''],
-        [_tip("Accuracy — Hotelling's T²",
+        [_tip("Bias — Hotelling's T²",
               "Hotelling's T² on the 2D shot vectors: tests whether the "
-              "two pools' centroids sit in different places — i.e. an "
-              "accuracy shift after warm-up, independent of spread."),
+              "two pools' centroids sit in different places — i.e. a "
+              "bias shift after warm-up, independent of spread."),
          (f"{t2:.3f} (F={f_ht:.3f}, df={df1_ht},{df2_ht})"
           if t2 is not None else '—'),
          ''],
-        [_tip('Accuracy — p-value', 'Two-sided p from Hotelling F-test.'),
+        [_tip('Bias — p-value', 'Two-sided p from Hotelling F-test.'),
          _fmt_p(p_ht), ''],
         [_tip('Precision — Brown-Forsythe F',
               "Brown-Forsythe on distance-from-own-centroid: tests "
@@ -15383,7 +15408,7 @@ def _report_handicap_trend(user_id):
 # Sessions can capture weather (wind / temperature) at the range via Open-Meteo
 # (see /api/session_conditions). This report pools every shot whose session has
 # weather, buckets it by wind band and temperature band, and reports the same
-# accuracy (MPI) / precision (R95) split the rest of /analyze uses — so an
+# bias (MPI) / precision (R95) split the rest of /analyze uses — so an
 # archer can see, honestly, whether wind actually widens their group.
 
 # (label, lo_inclusive, hi_exclusive) in km/h — roughly Beaufort 0-2 / 3-4 / 5 / 6+.

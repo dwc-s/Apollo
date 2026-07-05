@@ -17,13 +17,16 @@ middle are both, correctly, less accurate than a tight group in the ten.
 
 *Where it changed.* Everything that *tracks* accuracy as a number now scores on
 mean miss: the accuracy/precision traces, within-session drift, performance-vs-
-conditions, the "most accurate quiver" record, and accuracy goals. MPI hasn't
-gone anywhere — it's still shown as the group's **bias** (the centroid offset and
-the direction to move your sight) on the per-target and per-quiver stat panels,
-and it still drives the head-to-head and cold-bore centroid tests (Hotelling's
-T²), which are genuinely about where the group sits. Existing histories recompute
-from your raw shots, so records and goal progress will shift to the new metric —
-that's the correction, not a regression.
+conditions, the "most accurate quiver" record, and accuracy goals. The centroid
+offset itself hasn't gone anywhere, but it's no longer *labelled* "MPI" — it now
+reads **Bias** on the per-target and per-quiver stat panels and in the head-to-head
+and cold-bore reports, where it's the direction to move your sight and the input to
+the centroid tests (Hotelling's T², unchanged). So "accuracy" always means mean
+miss now, and "bias" always means the centroid offset — the two can't be confused.
+Accuracy goals created before this change have their auto-generated "MPI ≤ …"
+labels migrated to "Mean miss ≤ …" on first run (labels you wrote yourself are left
+alone). Existing histories recompute from your raw shots, so records and goal
+progress will shift to the new metric — that's the correction, not a regression.
 
 **Violin plots of horizontal and vertical spread over time.** A new `/analyze`
 report, *Horizontal & vertical spread (violins)*, shows the *shape* of your
