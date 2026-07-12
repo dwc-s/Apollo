@@ -667,9 +667,48 @@ by <strong>temperature band</strong> (<code>&lt; 8</code>, <code>8–18</code>, 
 runs per bucket; MPI and R95 are reported as a percentage of the target
 half-width. Buckets below five hits are flagged as thin.</p>
 <hr />
-<p><em>Generated and verified against the implementation for v0.97. When a formula
-changes in <code>apollo.py</code>, <code>apollo-predict.js</code>, <code>handicap.py</code>, or
-<code>classifications.py</code>, update the matching section here.</em></p>
+<h2 id="8-trigonometry-tools-tools">8. Trigonometry tools (<code>/tools</code>)</h2>
+<p>The geometry helpers on the Tools page are pure client-side calculators in
+<code>templates/tools.html</code> — no server or DB, live on every keystroke, and they
+follow the global metric/imperial toggle (values convert at the display
+boundary via <code>trigUnitGroups</code>; the math below is in SI). <code>g = 9.81 m/s²</code>.</p>
+<h3 id="81-arrow-trajectory-parabola-recalctraj-drawtrajplot">8.1 Arrow trajectory (parabola) — <code>recalcTraj</code> / <code>drawTrajPlot</code></h3>
+<p>Idealized, drag-free projectile: speed <code>v</code> (m/s) to a <strong>level</strong> target at range
+<code>D</code> (m).
+- <strong>Reachable</strong> iff <code>g·D/v² ≤ 1</code>; beyond that the target is past the 45° vacuum
+  range <code>v²/g</code>.
+- <strong>Elevation angle</strong> (low root): <code>θ = ½·asin(g·D/v²)</code>.
+- <strong>Arc over the line of sight</strong>: <code>y(x) = x·tanθ − g·x²/(2·v²·cos²θ)</code>, <code>x ∈ [0, D]</code>.
+- <strong>Peak above the line of sight</strong>: <code>H = v²·sin²θ / (2g)</code>.
+- <strong>Time of flight</strong>: <code>T = D / (v·cosθ)</code>.
+- <strong>Drop if aimed level</strong> (<code>θ = 0</code>): <code>g·D² / (2v²)</code>.
+The plot samples <code>y(x)</code> at 64 points and auto-scales the apex to the top of the
+box; the dashed baseline is the line of sight. It is a <em>floor</em> — a real arrow
+fights drag and drops more, growing with distance.</p>
+<h3 id="82-bow-hand-error-deviation-recalcformerr">8.2 Bow-hand error → deviation — <code>recalcFormErr</code></h3>
+<p>A lateral launch-point error <code>e</code> over lever arm <code>L</code> (≈ draw length) rotates the
+shot by <code>α = atan(e/L)</code>; at range <code>D</code> the miss is <code>D·tan(α)</code> (<code>≈ D·e/L</code> for small
+<code>α</code>). The <strong>amplification</strong> is <code>A = D/L</code> ("1 mm at the bow → <code>A</code> mm at the
+target"). Angular error is reported in degrees and MOA (<code>×60</code>). Applies to any
+launch-point error — nocking point, release, sight — not just the bow hand.</p>
+<h3 id="83-moa-mrad-sight-clicks-recalcangle">8.3 MOA / mrad + sight clicks — <code>recalcAngle</code></h3>
+<p>Linear size <code>s</code> an angle subtends at range <code>D</code> (metres):
+- <strong>mrad</strong>: <code>s = D</code> mm per mrad (1 mrad = 70 mm at 70 m) — <code>mradMm(D) = D</code>.
+- <strong>MOA</strong>: <code>s = D·1000·tan(π/(180·60)) ≈ 0.2909·D</code> mm — <code>moaMm(D)</code> (≈ 29.1 mm at
+  100 m).
+Both directions (<code>angle → size</code>, and <code>size → angle</code> via <code>mrad = s_mm/D</code>,
+<code>MOA = s_mm / moaMm(D)</code>), plus a sight click of <code>c</code> units → <code>c · (mm per unit)</code>
+at <code>D</code>.</p>
+<h3 id="84-group-dispersion-projection-recalcdisp">8.4 Group → dispersion projection — <code>recalcDisp</code></h3>
+<p>A group of size <code>g</code> at range <code>D₁</code> is angular dispersion <code>g/D₁</code>
+(<code>mrad = g_mm/D₁</code>, <code>MOA = g_mm / moaMm(D₁)</code>); the projected group at <code>D₂</code> is
+<code>g · D₂/D₁</code> (similar triangles). A geometric best case — real groups grow faster
+with distance as drop and wind accumulate.</p>
+<hr />
+<p><em>Generated and verified against the implementation for v0.99. When a formula
+changes in <code>apollo.py</code>, <code>apollo-predict.js</code>, <code>handicap.py</code>,
+<code>classifications.py</code>, or the <code>/tools</code> calculators in <code>templates/tools.html</code>,
+update the matching section here.</em></p>
         </div>
         <p class="docs-footer">Apollo documentation · generated from the
         project Markdown by <code>documentation/build_docs.py</code>.</p>

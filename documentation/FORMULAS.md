@@ -479,6 +479,52 @@ half-width. Buckets below five hits are flagged as thin.
 
 ---
 
-*Generated and verified against the implementation for v0.97. When a formula
-changes in `apollo.py`, `apollo-predict.js`, `handicap.py`, or
-`classifications.py`, update the matching section here.*
+## 8. Trigonometry tools (`/tools`)
+
+The geometry helpers on the Tools page are pure client-side calculators in
+`templates/tools.html` — no server or DB, live on every keystroke, and they
+follow the global metric/imperial toggle (values convert at the display
+boundary via `trigUnitGroups`; the math below is in SI). `g = 9.81 m/s²`.
+
+### 8.1 Arrow trajectory (parabola) — `recalcTraj` / `drawTrajPlot`
+Idealized, drag-free projectile: speed `v` (m/s) to a **level** target at range
+`D` (m).
+- **Reachable** iff `g·D/v² ≤ 1`; beyond that the target is past the 45° vacuum
+  range `v²/g`.
+- **Elevation angle** (low root): `θ = ½·asin(g·D/v²)`.
+- **Arc over the line of sight**: `y(x) = x·tanθ − g·x²/(2·v²·cos²θ)`, `x ∈ [0, D]`.
+- **Peak above the line of sight**: `H = v²·sin²θ / (2g)`.
+- **Time of flight**: `T = D / (v·cosθ)`.
+- **Drop if aimed level** (`θ = 0`): `g·D² / (2v²)`.
+The plot samples `y(x)` at 64 points and auto-scales the apex to the top of the
+box; the dashed baseline is the line of sight. It is a *floor* — a real arrow
+fights drag and drops more, growing with distance.
+
+### 8.2 Bow-hand error → deviation — `recalcFormErr`
+A lateral launch-point error `e` over lever arm `L` (≈ draw length) rotates the
+shot by `α = atan(e/L)`; at range `D` the miss is `D·tan(α)` (`≈ D·e/L` for small
+`α`). The **amplification** is `A = D/L` ("1 mm at the bow → `A` mm at the
+target"). Angular error is reported in degrees and MOA (`×60`). Applies to any
+launch-point error — nocking point, release, sight — not just the bow hand.
+
+### 8.3 MOA / mrad + sight clicks — `recalcAngle`
+Linear size `s` an angle subtends at range `D` (metres):
+- **mrad**: `s = D` mm per mrad (1 mrad = 70 mm at 70 m) — `mradMm(D) = D`.
+- **MOA**: `s = D·1000·tan(π/(180·60)) ≈ 0.2909·D` mm — `moaMm(D)` (≈ 29.1 mm at
+  100 m).
+Both directions (`angle → size`, and `size → angle` via `mrad = s_mm/D`,
+`MOA = s_mm / moaMm(D)`), plus a sight click of `c` units → `c · (mm per unit)`
+at `D`.
+
+### 8.4 Group → dispersion projection — `recalcDisp`
+A group of size `g` at range `D₁` is angular dispersion `g/D₁`
+(`mrad = g_mm/D₁`, `MOA = g_mm / moaMm(D₁)`); the projected group at `D₂` is
+`g · D₂/D₁` (similar triangles). A geometric best case — real groups grow faster
+with distance as drop and wind accumulate.
+
+---
+
+*Generated and verified against the implementation for v0.99. When a formula
+changes in `apollo.py`, `apollo-predict.js`, `handicap.py`,
+`classifications.py`, or the `/tools` calculators in `templates/tools.html`,
+update the matching section here.*
