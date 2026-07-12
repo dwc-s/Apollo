@@ -612,7 +612,7 @@ sees. Every scoring, statistical, and predictive formula is catalogued
 with its source function in <a href="formulas.html">documentation/FORMULAS.md</a>.</p>
 <hr />
 <h2 id="tools-tools">Tools (<code>/tools</code>)</h2>
-<p>Seven client-side archery calculators on one page, each in its own
+<p>Ten client-side archery calculators on one page, each in its own
 collapsible card (collapsed by default). All math runs in the browser —
 no DB hits, no server round-trips per keystroke.</p>
 <table>
@@ -648,16 +648,23 @@ no DB hits, no server round-trips per keystroke.</p>
 <td><code>KE = mv²/450,240</code> (ft·lb), <code>momentum = mv/225,218</code> (slug·ft/s — 7000 gr/lb × 32.174 ft/s²).</td>
 </tr>
 <tr>
-<td><strong>Bow-hand elevation</strong></td>
-<td>Launch angle to hit a target, and the raise/lower <strong>change</strong> between two distances (for building a sight tape), solved with a full RK4 drag trajectory plus angle bisection — not the rifleman's rule. Every field toggles metric/imperial. Air density is computed from temperature + elevation (dry-air ISA), or from live temperature/pressure/humidity via an opt-in <strong>Use my location</strong> lookup (<a href="https://open-meteo.com">Open-Meteo</a>, only on click); drag comes from a fletching preset rather than a raw coefficient.</td>
+<td><strong>Arrow trajectory (parabola)</strong></td>
+<td>Idealized, drag-free projectile arc: the elevation angle to hit a level target, peak height above the line of sight, time of flight, and drop-if-aimed-level, with a live SVG plot of the arc. Clearly labeled as a geometric ideal — real arrows drop more, especially at distance.</td>
+</tr>
+<tr>
+<td><strong>Bow-hand error → deviation</strong></td>
+<td>How a small error at the bow is amplified downrange: <code>miss = distance × error / lever-arm</code>. Reports the amplification factor ("1 mm at the bow → N mm at the target") and the equivalent angular error. Generalizes to any launch-point error (nock, release, sight).</td>
+</tr>
+<tr>
+<td><strong>MOA / mrad + sight clicks</strong></td>
+<td>Two-way angle ↔ linear-size conversion at any distance (<code>1 mrad @ D(m) = D mm</code>; <code>1 MOA ≈ 0.291·D mm</code>), plus a per-click sight-movement helper.</td>
+</tr>
+<tr>
+<td><strong>Group → dispersion projection</strong></td>
+<td>Turns a group size at one distance into an angular spread (MOA/mrad) and projects the expected group at another distance by pure angular scaling — a geometric lower bound (real groups grow faster with drop/wind).</td>
 </tr>
 </tbody>
 </table>
-<p>(A <em>Slope compensator</em> card shipped earlier but was removed in v0.69 —
-the rifleman's-rule approximation fits a bullet better than an arrow's
-loopier trajectory, and was judged more likely to mislead than help. The
-<strong>Bow-hand elevation</strong> tool, added in v0.87, revisits the idea correctly:
-it integrates the actual drag trajectory instead of approximating it.)</p>
 <p>The energy-storage FPS model uses bow-type-tuned constants for the
 force-draw-curve area fraction <code>k</code> and mechanical efficiency <code>η</code>:
 recurve <code>k=0.45 / η=0.72</code>, compound <code>k=0.65 / η=0.85</code>, longbow

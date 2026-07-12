@@ -729,8 +729,14 @@ const TOUCH_INPUT_KEY = 'apollo_touch_input_mode';
 const touchInputBar    = document.getElementById('touch-input-bar');
 const touchInputRadios = document.querySelectorAll('input[name="touch_input_mode"]');
 
+// Hold mode is active when its radio is selected — read the DOM rather
+// than localStorage so a stale stored value can't arm the gesture when
+// the mode bar isn't even shown (the bar stays hidden on a plain desktop,
+// where the HTML's default-checked "Tap" wins).
+// Works for mouse and touch alike; the gesture below uses Pointer Events.
 function isHoldMode() {
-    return IS_TOUCH && localStorage.getItem(TOUCH_INPUT_KEY) === 'hold';
+    const r = document.querySelector('input[name="touch_input_mode"][value="hold"]');
+    return !!(r && r.checked);
 }
 
 function applyTouchInputMode(value) {
@@ -744,9 +750,17 @@ function applyTouchInputMode(value) {
     }
 }
 
+// The input-mode bar (Tap / Press & hold) is touch-only — a mouse
+// records with a plain click, so desktop never needs it. Press & hold
+// itself uses Pointer Events, so it still works with a mouse when the
+// bar is shown on a touch device.
 if (IS_TOUCH) {
     touchInputBar.style.display = '';
-    applyTouchInputMode(localStorage.getItem(TOUCH_INPUT_KEY) || 'tap');
+    // Sanitize the stored mode: a value left by a since-removed option
+    // (e.g. the old "photo" mode) has no radio, so passing it through
+    // would leave every radio unchecked. Fall back to Tap.
+    const storedMode = localStorage.getItem(TOUCH_INPUT_KEY);
+    applyTouchInputMode(['tap', 'hold'].includes(storedMode) ? storedMode : 'tap');
     touchInputRadios.forEach(r => r.addEventListener('change', () => applyTouchInputMode(r.value)));
 }
 
@@ -866,39 +880,51 @@ function hideAimShaftRing() {
     if (aimShaftRing) aimShaftRing.classList.remove('active');
 }
 
-stage.addEventListener('touchstart', e => {
+// Press & hold uses Pointer Events so the same gesture works with a
+// finger or a mouse: press the board (it zooms 2.5× around the pointer),
+// drag to fine-tune the aim, release to record. `holdPointerId` tracks
+// the one pointer that owns the gesture so a stray second touch can't
+// hijack it. `.touch-hold-mode` sets `touch-action:none` on the stage,
+// which is what stops the page scrolling under a touch drag.
+let holdPointerId = null;
+
+stage.addEventListener('pointerdown', e => {
     if (!isHoldMode()) return;
-    const t = e.touches[0];
-    if (!t) return;
+    if (e.pointerType === 'mouse' && e.button !== 0) return;  // primary button only
+    if (holdActive) return;                                   // ignore a second pointer
+    e.preventDefault();
     preRect = img.getBoundingClientRect();
-    const { dx: touchDx, dy: touchDy } = clampToImage(t.clientX, t.clientY);
-    // Lift the aim above the fingertip when there's room; flip below near
-    // the top edge. Decided once at touchstart so dragging through the
-    // threshold doesn't snap the aim across the finger mid-gesture.
+    const { dx: touchDx, dy: touchDy } = clampToImage(e.clientX, e.clientY);
+    // Lift the aim above the pointer when there's room; flip below near
+    // the top edge. Decided once at press so dragging through the
+    // threshold doesn't snap the aim across the pointer mid-gesture.
     aimAbove = touchDy >= AIM_OFFSET + 4;
     const { dx, dy } = fingertipToAim(touchDx, touchDy);
     holdActive = true;
+    holdPointerId = e.pointerId;
     holdCx = dx; holdCy = dy;
     applyZoom(touchDx, touchDy);
     showAimCrosshair(dx, dy);
     showAimShaftRing(dx, dy);
-}, { passive: true });
+    // Capture so move/up keep firing even if the pointer leaves the stage.
+    try { stage.setPointerCapture(e.pointerId); } catch (_) {}
+});
 
-stage.addEventListener('touchmove', e => {
-    if (!holdActive) return;
-    const t = e.touches[0];
-    if (!t) return;
-    const { dx: touchDx, dy: touchDy } = touchToPreScale(t.clientX, t.clientY);
+stage.addEventListener('pointermove', e => {
+    if (!holdActive || e.pointerId !== holdPointerId) return;
+    const { dx: touchDx, dy: touchDy } = touchToPreScale(e.clientX, e.clientY);
     const { dx, dy } = fingertipToAim(touchDx, touchDy);
     holdCx = dx; holdCy = dy;
     moveAimCrosshair(dx, dy);
     moveAimShaftRing(dx, dy);
-}, { passive: true });
+});
 
-stage.addEventListener('touchend', e => {
-    if (!holdActive) return;
+stage.addEventListener('pointerup', e => {
+    if (!holdActive || e.pointerId !== holdPointerId) return;
     holdActive = false;
+    holdPointerId = null;
     e.preventDefault();   // suppress the synthetic click that follows
+    try { stage.releasePointerCapture(e.pointerId); } catch (_) {}
 
     const scaleX = window.APOLLO.target_width_mm  / preRect.width;
     const scaleY = window.APOLLO.target_height_mm / preRect.height;
@@ -920,9 +946,10 @@ stage.addEventListener('touchend', e => {
     form.submit();
 });
 
-stage.addEventListener('touchcancel', () => {
-    if (!holdActive) return;
+stage.addEventListener('pointercancel', e => {
+    if (!holdActive || e.pointerId !== holdPointerId) return;
     holdActive = false;
+    holdPointerId = null;
     hideAimCrosshair();
     hideAimShaftRing();
     clearZoom();

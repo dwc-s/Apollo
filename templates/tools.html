@@ -341,40 +341,73 @@
     <p class="tool-note">KE (ft·lb) = mass × velocity² ÷ 450,240. Momentum (slug·ft/s) = mass × velocity ÷ 225,400.</p>
 </details>
 
-<!-- ── Bow-hand elevation ─────────────────────────────────────────────── -->
-<details class="tool-panel" id="tool-elev">
-    <summary><h3>Bow-hand elevation</h3></summary>
-    <p class="tool-desc">Launch angle to put an arrow on target, solved with air drag rather than a vacuum lob. Read how far above horizontal your bow hand sits, and enter a compare distance to see how much you raise or lower between the two — the change that builds a sight tape. Air density is worked out from temperature and elevation, and drag from your fletching, so you never have to guess a raw coefficient.</p>
+<!-- ── Arrow trajectory (parabola) ────────────────────────────────────── -->
+<details class="tool-panel" id="tool-traj">
+    <summary><h3>Arrow trajectory (parabola)</h3></summary>
+    <p class="tool-desc">The idealized, drag-free flight path — a true parabola. Enter your arrow speed and the target distance to get the elevation angle to hit dead-on, how high the arrow arcs above your line of sight, the time of flight, and how far it would drop if you aimed straight at the target. A real arrow drops <em>more</em> than this (air drag), so treat the numbers as a floor and the shape as intuition.</p>
     <div class="tool-row">
-        <label><span>Distance (<span class="elev-u-len">ft</span>)</span><input type="number" id="elev-dist" value="164.04" min="0.1" step="1"></label>
-        <label><span>Height difference (<span class="elev-u-len">ft</span>)</span><input type="number" id="elev-height" value="0" step="0.5"></label>
-        <label><span>Arrow speed (<span class="elev-u-spd">fps</span>)</span><input type="number" id="elev-speed" value="200" min="1" step="1"></label>
-        <label><span>Arrow mass (<span class="elev-u-mass">gr</span>)</span><input type="number" id="elev-mass" value="350" min="1" step="1"></label>
-        <label><span>Shaft OD (<span id="elev-arrow-dia-unit-label">in</span>)</span><input type="number" id="elev-arrow-dia" value="0.217" min="0.05" max="25" step="0.001"></label>
-        <label><span>Compare distance (<span class="elev-u-len">ft</span>)</span><input type="number" id="elev-dist2" value="131.23" min="0" step="1"></label>
+        <label><span>Arrow speed (<span class="trig-u-spd">m/s</span>)</span><input type="number" id="traj-speed" value="61" min="1" step="1"></label>
+        <label><span>Target distance (<span class="trig-u-dist">m</span>)</span><input type="number" id="traj-dist" value="18" min="1" step="1"></label>
     </div>
-    <p class="tool-desc" style="margin:8px 0 8px 0;">Conditions — set what you know; air density is computed for you.</p>
+    <div class="tool-result" id="traj-result">—</div>
+    <svg id="traj-plot" viewBox="0 0 320 170" width="100%" style="max-width:520px;display:block;margin:10px auto 0;background:#eef2f9;border-radius:10px;" aria-label="trajectory plot"></svg>
+    <p class="tool-note">Idealized model: θ = ½·asin(g·D/v²) (low trajectory), arc y = x·tanθ − g·x²/(2v²cos²θ). The dashed line is your line of sight; the curve is the arrow's path. Speed can be estimated with the <em>Arrow speed</em> tool above.</p>
+</details>
+
+<!-- ── Bow-hand error → deviation ─────────────────────────────────────── -->
+<details class="tool-panel" id="tool-formerr">
+    <summary><h3>Bow-hand error → deviation</h3></summary>
+    <p class="tool-desc">A tiny error at the bow is a big miss downrange. The bow hand is the front pivot: shift it sideways by a hair and the arrow's launch line rotates about your anchor, and that angle is magnified all the way to the target. Miss ≈ distance × error ÷ lever-arm.</p>
     <div class="tool-row">
-        <label><span>Temperature (<span class="elev-u-temp">°F</span>)</span><input type="number" id="elev-temp" value="59" step="1"></label>
-        <label><span>Elevation ASL (<span class="elev-u-len">ft</span>)</span><input type="number" id="elev-alt" value="0" step="50"></label>
-        <label>Fletching
-            <select id="elev-fletch">
-                <option value="1.2">Bare shaft (no fletching)</option>
-                <option value="1.8">Target — low-profile / spin vanes</option>
-                <option value="2.2" selected>Target — standard 2″ vanes</option>
-                <option value="2.6">Field / 3D — large vanes</option>
-                <option value="3.0">Feather fletched</option>
-                <option value="custom">Custom Cd…</option>
+        <label><span>Bow-hand error (<span class="trig-u-mm">mm</span>)</span><input type="number" id="formerr-err" value="1" min="0" step="0.1"></label>
+        <label><span>Lever arm ≈ draw length (<span class="trig-u-mm">mm</span>)</span><input type="number" id="formerr-lever" value="711" min="1" step="1"></label>
+        <label><span>Target distance (<span class="trig-u-dist">m</span>)</span><input type="number" id="formerr-dist" value="18" min="1" step="1"></label>
+    </div>
+    <div class="tool-result" id="formerr-result">—</div>
+    <p class="tool-note">The amplification factor is just distance ÷ lever-arm. This generalizes to any launch-point error — nocking point, release, sight — not only the bow hand. Lever arm defaults to a 28″ (711 mm) draw.</p>
+</details>
+
+<!-- ── MOA / mrad + sight clicks ──────────────────────────────────────── -->
+<details class="tool-panel" id="tool-angle">
+    <summary><h3>MOA / mrad + sight clicks</h3></summary>
+    <p class="tool-desc">Convert between an angle and the distance it covers on the target, both ways, and work out how far one sight click moves your group.</p>
+    <div class="tool-row">
+        <label><span>Distance (<span class="trig-u-dist">m</span>)</span><input type="number" id="angle-dist" value="70" min="1" step="1"></label>
+    </div>
+    <div class="tool-row">
+        <label>Angle<input type="number" id="angle-angle" value="1" min="0" step="0.1"></label>
+        <label>Angle unit
+            <select id="angle-angle-unit">
+                <option value="moa" selected>MOA</option>
+                <option value="mrad">mrad</option>
             </select>
         </label>
-        <label id="elev-cd-wrap" style="display:none;">Drag coefficient<input type="number" id="elev-cd" value="2.2" min="0" step="0.1"></label>
+        <label><span>Size on target (<span class="trig-u-cm">cm</span>)</span><input type="number" id="angle-size" value="10" min="0" step="0.1"></label>
     </div>
-    <div class="tool-row" style="align-items:center; gap:10px;">
-        <button type="button" class="tool-btn" id="elev-geo-btn" style="margin-top:0;">📍 Use my location</button>
-        <span id="elev-geo-status" style="font-size:0.78rem; color:#2c4a6b;"></span>
+    <div class="tool-row">
+        <label>Sight click value<input type="number" id="angle-click" value="0.5" min="0" step="0.05"></label>
+        <label>Click unit
+            <select id="angle-click-unit">
+                <option value="moa" selected>MOA/click</option>
+                <option value="mrad">mrad/click</option>
+            </select>
+        </label>
     </div>
-    <div class="tool-result" id="elev-result">—</div>
-    <p class="tool-note">Height difference is target minus arrow: positive uphill, negative downhill. Air density comes from temperature and elevation (dry-air ISA model), or from live temperature, pressure and humidity when you use your location. Fletching sets an effective drag coefficient on the shaft cross-section — these presets are approximate, so trust the distance-to-distance change far more than the absolute degrees. Pick “Custom Cd” and enter 0 for a textbook vacuum angle. Weather by <a href="https://open-meteo.com" target="_blank" rel="noopener" style="color:#2c4a6b;">Open-Meteo</a>.</p>
+    <div class="tool-result" id="angle-result">—</div>
+    <p class="tool-note">1 mrad subtends the distance ÷ 1000 (so 1 mrad = 70 mm at 70 m); 1 MOA ≈ 0.291 × distance in mm (≈ 29.1 mm at 100 m, ≈ 20.4 mm at 70 m). The angle→size, size→angle, and per-click lines each compute from their own input.</p>
+</details>
+
+<!-- ── Group → dispersion projection ──────────────────────────────────── -->
+<details class="tool-panel" id="tool-disp">
+    <summary><h3>Group → dispersion projection</h3></summary>
+    <p class="tool-desc">Turn a group you actually shot into an angular dispersion, then project the group you'd expect at another distance if your form held. Pure geometry — real groups grow a bit faster with distance (drop and wind), so this is a best-case floor.</p>
+    <div class="tool-row">
+        <label><span>Group size (<span class="trig-u-cm">cm</span>)</span><input type="number" id="disp-group" value="10" min="0" step="0.1"></label>
+        <label><span>At distance (<span class="trig-u-dist">m</span>)</span><input type="number" id="disp-d1" value="30" min="1" step="1"></label>
+        <label><span>Project to distance (<span class="trig-u-dist">m</span>)</span><input type="number" id="disp-d2" value="70" min="1" step="1"></label>
+    </div>
+    <div class="tool-result" id="disp-result">—</div>
+    <p class="tool-note">Angular size = group ÷ distance; projected group = group × (new distance ÷ old distance). Measure the group the same way at both ends (extreme spread, or centre-to-centre).</p>
 </details>
 
 <script>
@@ -384,11 +417,19 @@
     const fmt = (v, d) => Number.isFinite(v) ? v.toFixed(d) : '—';
     const $ = (id) => document.getElementById(id);
     const gv = (id) => parseFloat($(id).value);
-    const ELEV_G = 9.81;  // gravity (m/s²); declared up here because the units
-                          // toggle's initial recalcElev() runs before the
-                          // elevation section, and a const can't be in its TDZ.
-    let elevGeo = null;   // measured {pPa, rh} from the location lookup, or null
-                          // (same TDZ reason — recalcElev reads it at init).
+    // True when the global ⇄ toggle is set to imperial. The trig tools
+    // display distances in yd, speeds in fps, small lengths in in, and
+    // convert to SI at compute time using this.
+    const isImp = () => localStorage.getItem('apollo_units') === 'imperial';
+    // Display formatters shared by the trig tools. Declared up here (not
+    // in the trig section below) because refreshUnits()'s initial call
+    // runs the trig recalcs before that section — a const there would be
+    // in its temporal dead zone, exactly the TDZ the old elevation tool
+    // hit. Function declarations (the recalc*/drawTrajPlot below) hoist,
+    // so only these consts need lifting.
+    const fmtDist  = (m) => isImp() ? fmt(m / 0.9144, 1) + ' yd' : fmt(m, 1) + ' m';
+    const moaMm    = (Dm) => Dm * 1000 * Math.tan(Math.PI / (180 * 60)); // mm per MOA at D
+    const mradMm   = (Dm) => Dm;                                          // mm per mrad at D
 
     // ── Wind drift ───────────────────────────────────────────────────
     // Drag-based lateral drift. Wind² in the drag formula means a 1.5×
@@ -457,56 +498,61 @@
     // First recalcWind() runs from refreshUnits() below — odDisplayUnit
     // (closed over by recalcWind) must be initialized first.
 
-    // ── Global units toggle (shaft OD) ───────────────────────────────
-    // The sidebar's ⇄ button drives the unit shown alongside Shaft OD.
-    // The math always operates in inches; we just convert at the display
-    // boundary so the user can think in whichever system they prefer.
+    // ── Global units toggle ──────────────────────────────────────────
+    // The sidebar's ⇄ button flips a single localStorage flag shared with
+    // the rest of the app. Dimensioned inputs are converted at the display
+    // boundary so the user can think in whichever system they prefer; the
+    // math inside each tool works in one fixed system.
     const UNITS_KEY = 'apollo_units';
     const toggleBtn = $('units-toggle');
-    // Shaft-OD inputs (mm ⇄ in) on the wind and elevation tools; their math
-    // always works in inches and we convert only at the display boundary.
+    // Shaft-OD input (mm ⇄ in) on the wind tool; its math always works in
+    // inches and we convert only at the display boundary.
     const odFields = [
         { input: $('wind-arrow-dia'), label: $('wind-arrow-dia-unit-label') },
-        { input: $('elev-arrow-dia'), label: $('elev-arrow-dia-unit-label') },
     ];
-    // The elevation tool's other dimensioned inputs. HTML values are authored
-    // in imperial; we convert to metric on load and on every toggle. Each group
-    // lists its inputs, the unit-label class, the unit strings, the metric⇄
-    // imperial conversions, and the display decimals to use per system.
-    const elevUnitGroups = [
-        { ids: ['elev-dist', 'elev-height', 'elev-dist2', 'elev-alt'], cls: 'elev-u-len',
-          met: 'm', imp: 'ft', toMet: v => v * 0.3048, toImp: v => v / 0.3048, dM: 1, dI: 1 },
-        { ids: ['elev-speed'], cls: 'elev-u-spd',
-          met: 'm/s', imp: 'fps', toMet: v => v * 0.3048, toImp: v => v / 0.3048, dM: 1, dI: 0 },
-        { ids: ['elev-mass'], cls: 'elev-u-mass',
-          met: 'g', imp: 'gr', toMet: v => v * 0.06479891, toImp: v => v / 0.06479891, dM: 1, dI: 0 },
-        { ids: ['elev-temp'], cls: 'elev-u-temp',
-          met: '°C', imp: '°F', toMet: v => (v - 32) * 5 / 9, toImp: v => v * 9 / 5 + 32, dM: 1, dI: 0 },
+    // The trig tools' dimensioned inputs. HTML values are authored in
+    // METRIC; we convert to imperial on load and on every toggle. Each
+    // group lists its inputs, the unit-label class, the unit strings, the
+    // metric⇄imperial conversions, and the display decimals per system.
+    const trigUnitGroups = [
+        { ids: ['traj-dist', 'formerr-dist', 'angle-dist', 'disp-d1', 'disp-d2'],
+          cls: 'trig-u-dist', met: 'm', imp: 'yd',
+          toImp: v => v / 0.9144, toMet: v => v * 0.9144, dM: 1, dI: 1 },
+        { ids: ['traj-speed'], cls: 'trig-u-spd', met: 'm/s', imp: 'fps',
+          toImp: v => v / 0.3048, toMet: v => v * 0.3048, dM: 0, dI: 0 },
+        { ids: ['formerr-err', 'formerr-lever'], cls: 'trig-u-mm', met: 'mm', imp: 'in',
+          toImp: v => v / 25.4, toMet: v => v * 25.4, dM: 1, dI: 3 },
+        { ids: ['angle-size', 'disp-group'], cls: 'trig-u-cm', met: 'cm', imp: 'in',
+          toImp: v => v / 2.54, toMet: v => v * 2.54, dM: 1, dI: 2 },
     ];
-    function setElevLabels(metric) {
-        elevUnitGroups.forEach(g => {
+    function setTrigLabels(imperial) {
+        trigUnitGroups.forEach(g => {
             document.querySelectorAll('.' + g.cls)
-                .forEach(el => { el.textContent = metric ? g.met : g.imp; });
+                .forEach(el => { el.textContent = imperial ? g.imp : g.met; });
         });
     }
-    function convertElevFields(toMetric) {
-        elevUnitGroups.forEach(g => g.ids.forEach(id => {
-            const el = $(id), v = parseFloat(el.value);
+    function convertTrigFields(toImperial) {
+        trigUnitGroups.forEach(g => g.ids.forEach(id => {
+            const el = $(id);
+            if (!el) return;
+            const v = parseFloat(el.value);
             if (Number.isFinite(v)) {
-                el.value = toMetric ? g.toMet(v).toFixed(g.dM) : g.toImp(v).toFixed(g.dI);
+                el.value = toImperial ? g.toImp(v).toFixed(g.dI) : g.toMet(v).toFixed(g.dM);
             }
         }));
     }
     let odDisplayUnit = (localStorage.getItem(UNITS_KEY) === 'imperial') ? 'in' : 'mm';
-    // Initial render: authored values are imperial; convert to metric if needed.
+    // Initial render: OD is authored imperial → convert to mm when metric;
+    // trig fields are authored metric → convert to imperial when imperial.
     if (odDisplayUnit === 'mm') {
         odFields.forEach(({ input }) => {
             const v = parseFloat(input.value);
             if (Number.isFinite(v)) input.value = (v * 25.4).toFixed(2);
         });
-        convertElevFields(true);
+    } else {
+        convertTrigFields(true);
     }
-    setElevLabels(odDisplayUnit === 'mm');
+    setTrigLabels(odDisplayUnit === 'in');
     function refreshUnits() {
         const imperial = (localStorage.getItem(UNITS_KEY) === 'imperial');
         const wanted = imperial ? 'in' : 'mm';
@@ -520,13 +566,16 @@
                         : (v * 25.4).toFixed(2);  // in → mm
                 }
             });
-            convertElevFields(!imperial);
+            convertTrigFields(imperial);
             odDisplayUnit = wanted;
         }
         odFields.forEach(({ label }) => { label.textContent = wanted; });
-        setElevLabels(!imperial);
+        setTrigLabels(imperial);
         recalcWind();
-        recalcElev();
+        recalcTraj();
+        recalcFormErr();
+        recalcAngle();
+        recalcDisp();
     }
     toggleBtn.addEventListener('click', () => {
         const current = localStorage.getItem(UNITS_KEY) || 'metric';
@@ -787,234 +836,155 @@
         .forEach(id => $(id).addEventListener('input', recalcKe));
     recalcKe();
 
-    // ── Bow-hand elevation ───────────────────────────────────────────
-    // Vertical-plane point-mass trajectory with quadratic drag. We RK4 the
-    // arc for a trial launch angle, read the height where it crosses the
-    // target's horizontal distance, and bisect on the angle until the arc
-    // passes through the target. Drag depends on the ballistic coefficient
-    // m/(Cd·A), so mass, diameter, air density and Cd all matter; zeroing
-    // Cd (or air density) collapses this to the vacuum angle-of-reach case.
-
-    // Height (m) where the arc launched at `theta` (rad) crosses x = targetX,
-    // with flight time and velocity there. k = 0.5·ρ·Cd·A / m (drag per mass).
-    // Returns null if the arrow never reaches targetX (range too short).
-    function elevSim(theta, v0, targetX, k) {
-        const dt = 0.001, maxT = 15;  // s; no realistic archery shot flies longer
-        let x = 0, y = 0, vx = v0 * Math.cos(theta), vy = v0 * Math.sin(theta), t = 0;
-        const ax = (ux, uy) => -k * Math.hypot(ux, uy) * ux;
-        const ay = (ux, uy) => -ELEV_G - k * Math.hypot(ux, uy) * uy;
-        let px = x, py = y, pvx = vx, pvy = vy, pt = t;
-        while (x < targetX && t < maxT && vx > 0) {
-            px = x; py = y; pvx = vx; pvy = vy; pt = t;
-            const k1vx = ax(vx, vy), k1vy = ay(vx, vy);
-            const v2x = vx + k1vx*dt/2, v2y = vy + k1vy*dt/2;
-            const k2vx = ax(v2x, v2y), k2vy = ay(v2x, v2y);
-            const v3x = vx + k2vx*dt/2, v3y = vy + k2vy*dt/2;
-            const k3vx = ax(v3x, v3y), k3vy = ay(v3x, v3y);
-            const v4x = vx + k3vx*dt, v4y = vy + k3vy*dt;
-            const k4vx = ax(v4x, v4y), k4vy = ay(v4x, v4y);
-            x  += dt/6 * (vx + 2*v2x + 2*v3x + v4x);
-            y  += dt/6 * (vy + 2*v2y + 2*v3y + v4y);
-            vx += dt/6 * (k1vx + 2*k2vx + 2*k3vx + k4vx);
-            vy += dt/6 * (k1vy + 2*k2vy + 2*k3vy + k4vy);
-            t  += dt;
-        }
-        if (x < targetX) return null;
-        const f = (targetX - px) / (x - px);
-        return {
-            y:  py  + (y  - py)  * f,
-            t:  pt  + (t  - pt)  * f,
-            vx: pvx + (vx - pvx) * f,
-            vy: pvy + (vy - pvy) * f,
-        };
-    }
-
-    // Bisect for the launch angle whose arc passes through (targetX, targetY).
-    // Arrival height rises monotonically with angle over the reachable band,
-    // so we scan for the sign change, then bisect inside it.
-    function elevSolve(v0, targetX, targetY, k) {
-        const deg = Math.PI / 180;
-        let loA = null, hiA = null, reached = false;
-        // Wide enough to cover steep field/3D shots in either direction; the
-        // scan breaks as soon as the arrival height crosses the target.
-        for (let d = -80; d <= 85; d += 1) {
-            const r = elevSim(d * deg, v0, targetX, k);
-            if (!r) { if (reached) break; else continue; }
-            reached = true;
-            if (r.y - targetY > 0) { hiA = d * deg; break; }
-            loA = d * deg;
-        }
-        // No reachable angle lofts the arc up to the target height: the
-        // target is out of range (too far) or simply too high to reach.
-        if (loA === null || hiA === null) return { error: true };
-        let lo = loA, hi = hiA;
-        for (let i = 0; i < 24; i++) {
-            const mid = 0.5 * (lo + hi);
-            const r = elevSim(mid, v0, targetX, k);
-            if (r && r.y - targetY > 0) hi = mid; else lo = mid;
-        }
-        const theta = 0.5 * (lo + hi);
-        return { theta, sim: elevSim(theta, v0, targetX, k) };
-    }
-
-    function recalcElev() {
-        const metric = (localStorage.getItem(UNITS_KEY) !== 'imperial');
-        const dist   = gv('elev-dist');
-        const height = gv('elev-height');
-        const speed  = gv('elev-speed');
-        const mass   = gv('elev-mass');
-        const diaRaw = gv('elev-arrow-dia');
-        const dist2  = gv('elev-dist2');
-        const temp   = gv('elev-temp');
-        const alt    = gv('elev-alt');
-        const fl     = $('elev-fletch').value;
-        const cd     = (fl === 'custom') ? gv('elev-cd') : parseFloat(fl);
-        const out = $('elev-result');
-
-        // Convert the current display values to SI for the physics.
-        const dist_m   = metric ? dist   : dist   * 0.3048;
-        const dist2_m  = metric ? dist2  : dist2  * 0.3048;
-        const height_m = metric ? height : height * 0.3048;
-        const v0       = metric ? speed  : speed  * 0.3048;          // m/s
-        const mass_kg  = metric ? mass / 1000 : mass * 6.479891e-5;  // kg
-        const dia_m    = (odDisplayUnit === 'mm') ? diaRaw / 1000 : diaRaw * 0.0254;
-        const tempC    = metric ? temp : (temp - 32) * 5 / 9;        // °C
-        const alt_m    = metric ? alt : alt * 0.3048;                // m
-        const lenU = metric ? 'm' : 'ft';
-        const spdU = metric ? 'm/s' : 'fps';
-
-        if (!(dist_m > 0) || !Number.isFinite(height_m) || !(v0 > 0)
-            || !(mass_kg > 0) || !(dia_m > 0) || !Number.isFinite(tempC)
-            || !Number.isFinite(alt_m) || !(cd >= 0)) {
-            out.textContent = '—';
+    // ── Arrow trajectory (parabola) ──────────────────────────────────
+    // Idealized drag-free projectile. Given speed v and level target
+    // distance D: the low launch angle is θ = ½·asin(g·D/v²); the arc is
+    // y = x·tanθ − g·x²/(2v²cos²θ). Everything runs in SI internally.
+    function recalcTraj() {
+        const out = $('traj-result'), plot = $('traj-plot');
+        const v = gv('traj-speed'), D = gv('traj-dist');
+        if (!(v > 0) || !(D > 0)) { out.textContent = '—'; if (plot) plot.innerHTML = ''; return; }
+        const g = 9.81;
+        const v_ms = isImp() ? v * 0.3048 : v;
+        const D_m  = isImp() ? D * 0.9144 : D;
+        const maxRange = v_ms * v_ms / g;                 // 45° vacuum range
+        const s = g * D_m / (v_ms * v_ms);
+        if (s > 1) {
+            out.innerHTML =
+                '<div class="result-line"><strong>Out of range (idealized).</strong></div>' +
+                '<div class="result-sub">Even a 45° lob reaches only ' + fmtDist(maxRange) +
+                ' at this speed. Increase speed or shorten the shot.</div>';
+            drawTrajPlot(plot, null, D_m, v_ms);
             return;
         }
-
-        // Air density: from measured pressure + humidity when a location lookup
-        // is active (more accurate), otherwise the dry-air ISA model from
-        // temperature + elevation. Temperature stays live in both paths.
-        const T_K = tempC + 273.15;
-        let rho, airSrc;
-        if (elevGeo) {
-            const psat = 610.94 * Math.exp(17.625 * tempC / (tempC + 243.04)); // Pa (Tetens)
-            const pv = (elevGeo.rh / 100) * psat;
-            rho = (elevGeo.pPa - pv) / (287.05 * T_K) + pv / (461.495 * T_K);
-            airSrc = 'measured ' + fmt(elevGeo.pPa / 100, 0) + ' hPa, ' + fmt(elevGeo.rh, 0) + '% RH';
-        } else {
-            const p = 101325 * Math.pow(Math.max(1 - 2.25577e-5 * alt_m, 1e-6), 5.25588);
-            rho = p / (287.05 * T_K);
-            airSrc = fmt(temp, 0) + '°' + (metric ? 'C' : 'F') + ', ' + fmt(alt, 0) + ' ' + lenU + ' ASL';
-        }
-        if (!(T_K > 0) || !(rho >= 0)) { out.textContent = '—'; return; }
-
-        const area = Math.PI * (dia_m / 2) * (dia_m / 2);
-        const k    = 0.5 * rho * cd * area / mass_kg;
-
-        const sol = elevSolve(v0, dist_m, height_m, k);
-        if (sol.error) {
-            out.textContent = 'Out of range — no bow-hand angle reaches ' + fmt(dist, 1) +
-                ' ' + lenU + (Math.abs(height_m) > 1e-9 ? ' at that height' : '') +
-                ' at this speed.';
-            return;
-        }
-        const deg      = sol.theta * 180 / Math.PI;
-        const arr_ms   = Math.hypot(sol.sim.vx, sol.sim.vy);
-        const arr_disp = metric ? arr_ms : arr_ms / 0.3048;
-        // Speed change: usually a loss to drag, but a steep downhill shot can
-        // arrive faster than it launched (gravity adds kinetic energy).
-        const dv       = (1 - arr_ms / v0) * 100;
-        const dvStr    = dv >= 0 ? '−' + fmt(dv, 0) + '% loss' : '+' + fmt(-dv, 0) + '% gain';
-
-        let deltaLine = '';
-        if (dist2_m > 0 && Math.abs(dist2_m - dist_m) > 1e-6) {
-            const sol2 = elevSolve(v0, dist2_m, height_m, k);
-            if (sol2.error) {
-                deltaLine = '<div class="result-sub">Compare distance ' + fmt(dist2, 1) +
-                    ' ' + lenU + ' is out of range.</div>';
-            } else {
-                const deg2 = sol2.theta * 180 / Math.PI;
-                const dd   = deg2 - deg;
-                const verb = dd >= 0 ? 'Raise' : 'Lower';
-                deltaLine =
-                    '<div class="result-line"><strong>' + verb + ' bow hand ' +
-                        fmt(Math.abs(dd), 3) + '°</strong> going ' + fmt(dist, 1) +
-                        ' → ' + fmt(dist2, 1) + ' ' + lenU + '</div>' +
-                    '<div class="result-sub">Elevation at ' + fmt(dist2, 1) + ' ' + lenU +
-                        ': ' + fmt(deg2, 3) + '° above horizontal</div>';
-            }
-        }
+        const theta = 0.5 * Math.asin(s);                 // radians (low root)
+        const st = Math.sin(theta), ct = Math.cos(theta);
+        const H = v_ms * v_ms * st * st / (2 * g);        // peak above line of sight
+        const T = D_m / (v_ms * ct);                      // time of flight
+        const dropLevel = g * D_m * D_m / (2 * v_ms * v_ms); // drop if aimed level
+        const degs = theta * 180 / Math.PI;
         out.innerHTML =
-            '<div class="result-line"><strong>Elevation:</strong> ' + fmt(deg, 3) +
-                '° above horizontal</div>' +
-            deltaLine +
-            '<div class="result-sub">Air density ' + fmt(rho, 3) + ' kg/m³ (' +
-                airSrc + ') · drag Cd ' + fmt(cd, 2) + '</div>' +
-            '<div class="result-sub">Flight time ' + fmt(sol.sim.t, 2) + ' s · ' +
-                'arrival speed ' + fmt(arr_disp, metric ? 1 : 0) + ' ' + spdU +
-                ' (' + dvStr + ')</div>';
+            '<div class="result-line"><strong>Elevation angle:</strong> ' + fmt(degs, 2) +
+                '° (' + fmt(degs * 60, 0) + ' MOA)</div>' +
+            '<div class="result-line"><strong>Peak above line of sight:</strong> ' +
+                fmt(H * 100, 1) + ' cm (' + fmt(H / 0.0254, 1) + ' in)</div>' +
+            '<div class="result-sub">Time of flight: ' + fmt(T, 2) + ' s · ' +
+                'drop if aimed level: ' + fmt(dropLevel * 100, 1) + ' cm (' +
+                fmt(dropLevel / 0.0254, 1) + ' in) · idealized max range: ' + fmtDist(maxRange) +
+                '</div>';
+        drawTrajPlot(plot, theta, D_m, v_ms);
     }
-    ['elev-dist', 'elev-height', 'elev-speed', 'elev-mass', 'elev-arrow-dia',
-     'elev-dist2', 'elev-temp', 'elev-alt', 'elev-cd']
-        .forEach(id => $(id).addEventListener('input', recalcElev));
-    $('elev-fletch').addEventListener('change', () => {
-        $('elev-cd-wrap').style.display = ($('elev-fletch').value === 'custom') ? '' : 'none';
-        recalcElev();
-    });
-
-    // Location → live conditions. Opt-in (only on click): pulls real temperature
-    // + measured surface pressure + humidity from Open-Meteo (free, no API key,
-    // CORS-enabled) and computes density from the measured pressure — more
-    // accurate than the altitude model. Sending coordinates to Open-Meteo is the
-    // cost of real weather; the browser can't read local conditions itself.
-    const geoBtn = $('elev-geo-btn'), geoStatus = $('elev-geo-status');
-    function clearGeo() {
-        elevGeo = null;
-        $('elev-alt').disabled = false;
-        geoStatus.textContent = '';
-        geoBtn.textContent = '📍 Use my location';
-        recalcElev();
-    }
-    geoBtn.addEventListener('click', () => {
-        if (elevGeo) { clearGeo(); return; }
-        if (!navigator.geolocation) {
-            geoStatus.textContent = 'Location not available on this device.';
-            return;
+    // Draw the arc + line of sight as an inline SVG path, auto-scaled so
+    // the apex touches the top padding. theta === null clears the curve.
+    function drawTrajPlot(svg, theta, D, v) {
+        if (!svg) return;
+        const W = 320, Hh = 170, padL = 10, padR = 10, padT = 14, padB = 20;
+        const xL = padL, xR = W - padR, yB = Hh - padB;
+        if (theta == null || !(D > 0)) { svg.innerHTML = ''; return; }
+        const g = 9.81, N = 64, ct = Math.cos(theta);
+        const pts = [];
+        let peak = 0, apex = [0, 0];
+        for (let i = 0; i <= N; i++) {
+            const x = D * i / N;
+            const y = x * Math.tan(theta) - g * x * x / (2 * v * v * ct * ct);
+            const yy = Math.max(0, y);
+            pts.push([x, yy]);
+            if (yy > peak) { peak = yy; apex = [x, yy]; }
         }
-        geoStatus.textContent = 'Locating…';
-        navigator.geolocation.getCurrentPosition(pos => {
-            const lat = pos.coords.latitude.toFixed(3), lon = pos.coords.longitude.toFixed(3);
-            geoStatus.textContent = 'Fetching conditions…';
-            fetch('https://api.open-meteo.com/v1/forecast?latitude=' + lat + '&longitude=' + lon +
-                  '&current=temperature_2m,surface_pressure,relative_humidity_2m',
-                  { cache: 'no-store' })  // never serve a stale cached reading
-                .then(r => r.ok ? r.json() : Promise.reject(r.status))
-                .then(d => {
-                    const c = d && d.current;
-                    if (!c || !Number.isFinite(c.surface_pressure) || !Number.isFinite(c.temperature_2m)) {
-                        return Promise.reject('no data');
-                    }
-                    elevGeo = {
-                        pPa: c.surface_pressure * 100,
-                        rh: Number.isFinite(c.relative_humidity_2m) ? c.relative_humidity_2m : 50,
-                    };
-                    // Fill the temperature field in the current display unit.
-                    const metric = (localStorage.getItem(UNITS_KEY) !== 'imperial');
-                    $('elev-temp').value = metric ? c.temperature_2m.toFixed(1)
-                                                  : (c.temperature_2m * 9 / 5 + 32).toFixed(0);
-                    $('elev-alt').disabled = true;  // density now comes from measured pressure
-                    geoBtn.textContent = '✕ Clear location';
-                    // Pressure/RH are unit-agnostic, so this line stays correct
-                    // after a later units toggle (temperature lives in its field).
-                    geoStatus.textContent = '📍 From your location · ' +
-                        c.surface_pressure.toFixed(0) + ' hPa · ' + elevGeo.rh.toFixed(0) + '% RH';
-                    recalcElev();
-                })
-                .catch(() => { geoStatus.textContent = 'Weather lookup failed — enter conditions manually.'; });
-        }, () => { geoStatus.textContent = 'Location denied — enter conditions manually.'; },
-        { timeout: 10000, maximumAge: 0 });  // maximumAge:0 → fresh fix, not a cached location
-    });
-    // Initial recalcElev() runs from refreshUnits() above — the unit state it
-    // closes over must be initialized first.
+        const sx = (x) => xL + (x / D) * (xR - xL);
+        const sy = (y) => yB - (peak > 1e-6 ? (y / peak) * (yB - padT) : 0);
+        const path = pts.map((p, i) => (i ? 'L' : 'M') + fmt(sx(p[0]), 1) + ' ' + fmt(sy(p[1]), 1)).join(' ');
+        svg.innerHTML =
+            '<line x1="' + fmt(sx(0), 1) + '" y1="' + fmt(sy(0), 1) + '" x2="' + fmt(sx(D), 1) +
+                '" y2="' + fmt(sy(0), 1) + '" stroke="#95abcf" stroke-width="1.5" stroke-dasharray="4 3"/>' +
+            '<path d="' + path + '" fill="none" stroke="#1a3a5c" stroke-width="2"/>' +
+            '<circle cx="' + fmt(sx(apex[0]), 1) + '" cy="' + fmt(sy(apex[1]), 1) +
+                '" r="3.2" fill="#fcba03" stroke="#1a3a5c" stroke-width="1"/>' +
+            '<circle cx="' + fmt(sx(D), 1) + '" cy="' + fmt(sy(0), 1) + '" r="3.2" fill="#1a3a5c"/>';
+    }
+    ['traj-speed', 'traj-dist'].forEach(id => $(id).addEventListener('input', recalcTraj));
+
+    // ── Bow-hand error → deviation ───────────────────────────────────
+    // A launch-point error e over lever arm L rotates the shot by
+    // atan(e/L); at distance D that is D·tan(atan(e/L)) = D·e/L.
+    function recalcFormErr() {
+        const out = $('formerr-result');
+        const e = gv('formerr-err'), L = gv('formerr-lever'), D = gv('formerr-dist');
+        if (!(e >= 0) || !(L > 0) || !(D > 0)) { out.textContent = '—'; return; }
+        const e_mm = isImp() ? e * 25.4 : e;
+        const L_mm = isImp() ? L * 25.4 : L;
+        const D_mm = (isImp() ? D * 0.9144 : D) * 1000;
+        const alpha = Math.atan(e_mm / L_mm);             // radians
+        const miss_mm = D_mm * Math.tan(alpha);
+        const amp = D_mm / L_mm;
+        out.innerHTML =
+            '<div class="result-line"><strong>Miss at target:</strong> ' + fmt(miss_mm, 1) +
+                ' mm (' + fmt(miss_mm / 10, 2) + ' cm · ' + fmt(miss_mm / 25.4, 2) + ' in)</div>' +
+            '<div class="result-line"><strong>Amplification ' + fmt(amp, 0) + '×:</strong> 1 mm at the bow → ' +
+                fmt(amp, 0) + ' mm at the target</div>' +
+            '<div class="result-sub">Angular error: ' + fmt(alpha * 180 / Math.PI, 3) +
+                '° (' + fmt(alpha * 180 / Math.PI * 60, 1) + ' MOA)</div>';
+    }
+    ['formerr-err', 'formerr-lever', 'formerr-dist']
+        .forEach(id => $(id).addEventListener('input', recalcFormErr));
+
+    // ── MOA / mrad + sight clicks ────────────────────────────────────
+    function recalcAngle() {
+        const out = $('angle-result');
+        const D = gv('angle-dist');
+        if (!(D > 0)) { out.textContent = '—'; return; }
+        const D_m = isImp() ? D * 0.9144 : D;
+        const perMoa = moaMm(D_m), perMrad = mradMm(D_m);
+        let html = '';
+        // angle → size
+        const ang = gv('angle-angle');
+        if (ang >= 0) {
+            const size_mm = ($('angle-angle-unit').value === 'moa') ? ang * perMoa : ang * perMrad;
+            html += '<div class="result-line"><strong>' + fmt(ang, 2) + ' ' +
+                ($('angle-angle-unit').value === 'moa' ? 'MOA' : 'mrad') + ' at ' + fmtDist(D_m) +
+                ':</strong> ' + fmt(size_mm / 10, 1) + ' cm (' + fmt(size_mm / 25.4, 2) + ' in)</div>';
+        }
+        // size → angle
+        const sz = gv('angle-size');
+        if (sz >= 0) {
+            const sz_mm = isImp() ? sz * 25.4 : sz * 10;
+            html += '<div class="result-line"><strong>' + fmt(sz, 1) + (isImp() ? ' in' : ' cm') +
+                ' at ' + fmtDist(D_m) + ':</strong> ' + fmt(sz_mm / perMoa, 2) + ' MOA (' +
+                fmt(sz_mm / perMrad, 2) + ' mrad)</div>';
+        }
+        // one click
+        const clk = gv('angle-click');
+        if (clk >= 0) {
+            const mm = ($('angle-click-unit').value === 'moa') ? clk * perMoa : clk * perMrad;
+            html += '<div class="result-sub">1 click (' + fmt(clk, 2) + ' ' +
+                ($('angle-click-unit').value === 'moa' ? 'MOA' : 'mrad') + ') moves ' +
+                fmt(mm, 1) + ' mm (' + fmt(mm / 10, 2) + ' cm) at ' + fmtDist(D_m) + '</div>';
+        }
+        out.innerHTML = html || '—';
+    }
+    ['angle-dist', 'angle-angle', 'angle-angle-unit', 'angle-size', 'angle-click', 'angle-click-unit']
+        .forEach(id => $(id).addEventListener('input', recalcAngle));
+
+    // ── Group → dispersion projection ────────────────────────────────
+    function recalcDisp() {
+        const out = $('disp-result');
+        const grp = gv('disp-group'), d1 = gv('disp-d1'), d2 = gv('disp-d2');
+        if (!(grp > 0) || !(d1 > 0) || !(d2 > 0)) { out.textContent = '—'; return; }
+        const grp_mm = isImp() ? grp * 25.4 : grp * 10;
+        const d1_m = isImp() ? d1 * 0.9144 : d1;
+        const d2_m = isImp() ? d2 * 0.9144 : d2;
+        const mrad = grp_mm / mradMm(d1_m);
+        const moa = grp_mm / moaMm(d1_m);
+        const proj_mm = grp_mm * d2_m / d1_m;
+        out.innerHTML =
+            '<div class="result-line"><strong>Angular dispersion:</strong> ' + fmt(mrad, 2) +
+                ' mrad (' + fmt(moa, 2) + ' MOA)</div>' +
+            '<div class="result-line"><strong>Projected group at ' + fmtDist(d2_m) + ':</strong> ' +
+                fmt(proj_mm / 10, 1) + ' cm (' + fmt(proj_mm / 25.4, 2) + ' in)</div>' +
+            '<div class="result-sub">Geometric best case — real groups grow faster with distance ' +
+                '(drop and wind).</div>';
+    }
+    ['disp-group', 'disp-d1', 'disp-d2'].forEach(id => $(id).addEventListener('input', recalcDisp));
 })();
 </script>
 </body>

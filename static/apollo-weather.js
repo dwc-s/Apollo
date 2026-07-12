@@ -1,7 +1,7 @@
 /* Session weather capture.
  *
- * Reuses the geolocation → Open-Meteo pattern from the Bow-hand elevation tool
- * (extended with wind speed / gust / direction) and POSTs the reading to
+ * Fetches the archer's local conditions via geolocation → Open-Meteo
+ * (temperature, wind speed / gust / direction) and POSTs the reading to
  * /api/session_conditions, which stores it on the active session so the
  * /analyze "Performance vs conditions" report can bucket shots by wind and
  * temperature. Opt-in: nothing is sent until the archer taps the button.

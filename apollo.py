@@ -4574,10 +4574,10 @@ def _set_security_headers(response):
     #     heatmap is a server-rendered matplotlib SVG — so Google Fonts,
     #     jsdelivr (lightGallery / Plotly / Chart.js) are no longer referenced
     #     and everything else works fully same-origin (and offline).
-    #   api.open-meteo.com (connect-src) — the Bow-hand elevation tool's
-    #     opt-in "Use my location" button fetches current weather (temperature,
-    #     surface pressure, humidity) to compute air density. Only contacted on
-    #     an explicit click; everything else on the page stays same-origin.
+    #   api.open-meteo.com (connect-src) — the session weather widget
+    #     (static/apollo-weather.js) fetches current conditions for the
+    #     archer's location. Only contacted on an explicit action; everything
+    #     else on the page stays same-origin.
     #
     # worker-src 'self' keeps the same-origin PWA service worker (static/sw.js)
     # working under an explicit directive rather than the default-src fallback.
@@ -17216,10 +17216,12 @@ def _predict_real_world_benchmarks(round_key, gender, max_score):
 def tools():
     """Standalone archery calculators. Pure client-side math — no DB.
 
-    Six tools on one page (wind drift, sight-mark interpolator, spine
-    selector, FOC, arrow speed, kinetic energy & momentum). The template
-    does all the math in JS so the user gets live updates and we don't
-    burn a server round-trip per keystroke."""
+    Ten tools on one page (wind drift, sight-mark interpolator, spine
+    selector, FOC, arrow speed, kinetic energy & momentum, arrow-trajectory
+    parabola, bow-hand error deviation, MOA/mrad + sight clicks, and
+    group→dispersion projection). The template does all the math in JS so
+    the user gets live updates and we don't burn a server round-trip per
+    keystroke."""
     return render_template('tools.html')
 
 

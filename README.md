@@ -342,7 +342,7 @@ with its source function in [documentation/FORMULAS.md](documentation/FORMULAS.m
 
 ## Tools (`/tools`)
 
-Seven client-side archery calculators on one page, each in its own
+Ten client-side archery calculators on one page, each in its own
 collapsible card (collapsed by default). All math runs in the browser —
 no DB hits, no server round-trips per keystroke.
 
@@ -354,13 +354,10 @@ no DB hits, no server round-trips per keystroke.
 | **FOC** | Standard ATA `((balance − L/2)/L)·100` with low / target / hunting / EFOC band chips. |
 | **Arrow speed (fps)** | Two methods: **bow specs** (energy-storage model `v = √(2·η·k·F_peak·stroke / m)`, works for any bow type from peak weight, draw length, brace height, arrow mass) and **IBO/ATA rating** (compound-only delta-from-rating). |
 | **Kinetic energy & momentum** | `KE = mv²/450,240` (ft·lb), `momentum = mv/225,218` (slug·ft/s — 7000 gr/lb × 32.174 ft/s²). |
-| **Bow-hand elevation** | Launch angle to hit a target, and the raise/lower **change** between two distances (for building a sight tape), solved with a full RK4 drag trajectory plus angle bisection — not the rifleman's rule. Every field toggles metric/imperial. Air density is computed from temperature + elevation (dry-air ISA), or from live temperature/pressure/humidity via an opt-in **Use my location** lookup ([Open-Meteo](https://open-meteo.com), only on click); drag comes from a fletching preset rather than a raw coefficient. |
-
-(A *Slope compensator* card shipped earlier but was removed in v0.69 —
-the rifleman's-rule approximation fits a bullet better than an arrow's
-loopier trajectory, and was judged more likely to mislead than help. The
-**Bow-hand elevation** tool, added in v0.87, revisits the idea correctly:
-it integrates the actual drag trajectory instead of approximating it.)
+| **Arrow trajectory (parabola)** | Idealized, drag-free projectile arc: the elevation angle to hit a level target, peak height above the line of sight, time of flight, and drop-if-aimed-level, with a live SVG plot of the arc. Clearly labeled as a geometric ideal — real arrows drop more, especially at distance. |
+| **Bow-hand error → deviation** | How a small error at the bow is amplified downrange: `miss = distance × error / lever-arm`. Reports the amplification factor ("1 mm at the bow → N mm at the target") and the equivalent angular error. Generalizes to any launch-point error (nock, release, sight). |
+| **MOA / mrad + sight clicks** | Two-way angle ↔ linear-size conversion at any distance (`1 mrad @ D(m) = D mm`; `1 MOA ≈ 0.291·D mm`), plus a per-click sight-movement helper. |
+| **Group → dispersion projection** | Turns a group size at one distance into an angular spread (MOA/mrad) and projects the expected group at another distance by pure angular scaling — a geometric lower bound (real groups grow faster with drop/wind). |
 
 The energy-storage FPS model uses bow-type-tuned constants for the
 force-draw-curve area fraction `k` and mechanical efficiency `η`:

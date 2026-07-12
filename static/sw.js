@@ -28,7 +28,7 @@
  *
  * Bump VERSION to invalidate every cache on the next activate.
  */
-const VERSION = 'apollo-v5';
+const VERSION = 'apollo-v6';
 // One versioned cache. Using a single cache (rather than separate shell +
 // runtime caches) means a stale-while-revalidate write always overwrites the
 // exact key it was read from — a fresh copy can't be shadowed by an older
