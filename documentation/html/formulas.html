@@ -509,7 +509,12 @@ happens, so a second "Calibrated" histogram grows in real time beside the raw on
 <tr>
 <td>Accuracy/precision traces</td>
 <td><code>_report_accuracy_precision_traces</code></td>
-<td>mean miss &amp; R95 per session / per quiver / all-time rolling; optional per-bow/arrow/tag overlay; each trace carries a faint same-colour linear trend line.</td>
+<td>mean miss &amp; R95 per session / all-time rolling; optional per-bow/arrow/tag overlay; each trace carries a faint same-colour linear trend line.</td>
+</tr>
+<tr>
+<td>Precision consistency (trend)</td>
+<td><code>_report_precision_consistency</code></td>
+<td>per-<strong>day</strong> R95 (<code>_ap_series(..., by='day')</code> pools every shot on a calendar day) smoothed by a trailing <code>_PREC_CONSISTENCY_WINDOW</code>-day (=5) moving average; shaded band = ±1 within-window sample stdev (ddof=1), clamped ≥ 0; faint raw dots + a straight least-squares trend over the raw points. Responsive counterpart to the <em>cumulative</em> all-time R95 trace.</td>
 </tr>
 <tr>
 <td>Biggest vs smallest spread per quiver</td>

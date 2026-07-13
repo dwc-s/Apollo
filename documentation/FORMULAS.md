@@ -361,7 +361,8 @@ Every `/analyze` report below feeds shot clouds (raw mm or normalized) into
 | Hits by zone | `_report_hits_by_boundaries` | `count` per zone + miss; `pct = count/total·100`. |
 | Arrows over time | `_report_arrows_vs_time` | arrows per calendar day, zero-filled gaps. |
 | Accuracy over time | `_report_accuracy_over_time` | `_archery_stats` per day/week/month bucket → MPI, R95. |
-| Accuracy/precision traces | `_report_accuracy_precision_traces` | mean miss & R95 per session / per quiver / all-time rolling; optional per-bow/arrow/tag overlay; each trace carries a faint same-colour linear trend line. |
+| Accuracy/precision traces | `_report_accuracy_precision_traces` | mean miss & R95 per session / all-time rolling; optional per-bow/arrow/tag overlay; each trace carries a faint same-colour linear trend line. |
+| Precision consistency (trend) | `_report_precision_consistency` | per-**day** R95 (`_ap_series(..., by='day')` pools every shot on a calendar day) smoothed by a trailing `_PREC_CONSISTENCY_WINDOW`-day (=5) moving average; shaded band = ±1 within-window sample stdev (ddof=1), clamped ≥ 0; faint raw dots + a straight least-squares trend over the raw points. Responsive counterpart to the *cumulative* all-time R95 trace. |
 | Biggest vs smallest spread per quiver | `_report_quiver_spread` | per quiver, max & min pairwise arrow distance (half-width normalized) with a trend line through each. |
 | Horizontal & vertical spread violins | `_report_spread_violins` | per time bucket (session, or month once there are many), pool each arrow's offset from its quiver's centroid in cm; two-row violin — horizontal spread with time on x, vertical spread with the axes transposed. |
 | Within-session drift | `_report_within_session_drift` | pool shots by quiver index across sessions → mean miss, R95. |

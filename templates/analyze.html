@@ -62,34 +62,26 @@
             border-radius: 0 0 25px 25px;
             margin-top: 0;
         }
-        /* Collapsible glossary — same pill styling as the report picker. It's
-           a static reference, so it stays closed until the user opens it. */
-        details.glossary-collapse {
+        /* Glossary rail. On wide screens it's pinned to a fixed right-hand
+           rail (mirroring the fixed left side-nav) so the definitions sit
+           alongside the reports instead of pushing them down; the body
+           reserves room for it on the right the way padding-left does for
+           the nav (see body.has-glossary below). On narrower screens it
+           drops back into the normal flow as a full-width panel. */
+        .glossary-sidebar {
             max-width: 1232px;
             margin: 0 auto 24px auto;
         }
-        details.glossary-collapse > summary {
-            cursor: pointer;
+        .glossary-sidebar > h2 {
+            cursor: default;
             background-color: #b3c6e3;
-            border-radius: 25px;
+            border-radius: 25px 25px 0 0;
             padding: 14px 28px;
             font-family: "Quantico", sans-serif;
             color: #1a3a5c;
             font-weight: 700;
-            list-style: none;
-            user-select: none;
-        }
-        details.glossary-collapse > summary::-webkit-details-marker { display: none; }
-        details.glossary-collapse > summary::before {
-            content: '\25B8';
-            display: inline-block;
-            margin-right: 8px;
-            transition: transform 0.15s;
-        }
-        details.glossary-collapse[open] > summary::before { transform: rotate(90deg); }
-        details.glossary-collapse[open] > summary {
-            border-radius: 25px 25px 0 0;
-            margin-bottom: 0;
+            font-size: 1rem;
+            margin: 0;
         }
         .glossary-panel {
             background: #eef2f9;
@@ -127,6 +119,38 @@
         }
         @media (max-width: 640px) {
             .glossary-item { grid-template-columns: 1fr; gap: 2px; }
+        }
+        /* Wide screens: pin the glossary to a fixed right-hand rail and
+           reserve room for it on the body (as padding-left does for the
+           nav). The rail scrolls independently; its items stack term-over-
+           definition since 300px is too narrow for the two-column grid. */
+        @media (min-width: 1200px) {
+            body.has-glossary { padding-right: 340px; }
+            .glossary-sidebar {
+                position: fixed;
+                top: 20px;
+                right: 20px;
+                bottom: 20px;
+                width: 300px;
+                max-width: none;
+                margin: 0;
+                display: flex;
+                flex-direction: column;
+                border-radius: 18px;
+                overflow: hidden;
+                box-shadow: -2px 0 8px rgba(99, 106, 128, 0.18);
+                z-index: 400;
+            }
+            .glossary-sidebar > h2 { border-radius: 0; flex: 0 0 auto; }
+            .glossary-panel {
+                border-radius: 0;
+                overflow-y: auto;
+                flex: 1 1 auto;
+            }
+            .glossary-sidebar .glossary-item {
+                grid-template-columns: 1fr;
+                gap: 2px;
+            }
         }
         .analyze-error {
             background: #f8d7da;
@@ -711,6 +735,20 @@
             bottom: auto;
             top: calc(100% + 6px);
         }
+        /* …and the *rightmost* header tooltips would overflow the wrapper's
+           right edge (same overflow-x:auto clip, horizontally). A left-
+           anchored 360px tip on a right-side column runs off the table —
+           especially here, where the table shares its row with the chart
+           aside and only spans part of the card. Anchor the last two
+           columns to the cell's right edge so they open leftward and stay
+           in view. The :nth-child(n+3) guard keeps this off the first two
+           columns, so a narrow 2-column table isn't flipped into a *left*
+           overflow; left columns keep opening rightward (plenty of room). */
+        .report-table th:nth-child(n+3):nth-last-child(-n+2) [data-tip]:hover::after,
+        .report-table th:nth-child(n+3):nth-last-child(-n+2) [data-tip]:focus-visible::after {
+            left: auto;
+            right: 0;
+        }
 
         .download-row {
             display: flex;
@@ -737,7 +775,7 @@
     <script defer src="{{ url_for('static', filename='apollo-nav.js') }}"></script>
     <script defer src="{{ url_for('static', filename='apollo-replay.js') }}"></script>
 </head>
-<body>
+<body class="has-glossary">
 <nav class="side-nav">
     <a href="/" class="side-nav-brand">Apollo</a>
     <a href="/sesh" class="side-nav-link"><span class="nav-badge">→</span>Start session</a>
@@ -994,8 +1032,8 @@
 </form>
 </details>
 
-<details class="glossary-collapse">
-<summary>Glossary — what the numbers mean</summary>
+<aside class="glossary-sidebar" aria-label="Glossary">
+<h2>Glossary — what the numbers mean</h2>
 <div class="glossary-panel">
     <div class="glossary-group">
         <h4>Accuracy &amp; bias</h4>
@@ -1059,7 +1097,7 @@
         </div>
     </div>
 </div>
-</details>
+</aside>
 
 {# The report-card markup + render_panel macro now live in
    templates/_report_card.html, rendered per-report by the /analyze/report/<key>

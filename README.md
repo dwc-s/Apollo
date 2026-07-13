@@ -250,13 +250,24 @@ an empirical R95 percentile and the table flags them.
   Per-bucket table also shows MR, σ_x, σ_y. Auto-buckets to day, week,
   or month based on the span. Distances are normalized by target
   half-width so mixed sizes pool fairly.
-- **Accuracy & precision traces** — up to six lines on one date axis:
-  MPI and R95 each at three granularities (per session, per completed
-  quiver, and an all-time running value), individually toggleable. Each
+- **Accuracy & precision traces** — up to four lines on one date axis:
+  MPI and R95 each at two granularities (per session and an all-time
+  running value), individually toggleable. Each
   trace labels itself at its right edge and carries a faint same-colour
   linear trend line so its direction reads at a glance. Optionally split
   into a **head-to-head**: pick specific bows / arrows / tags and each
   becomes its own coloured set of traces on the shared timeline.
+- **Precision consistency (trend)** — your R95 over time, **one point per
+  day of shooting** (all that day's shots pooled), smoothed by a trailing
+  **5-day moving average** and wrapped in a shaded **±1σ band**.
+  Unlike the *cumulative* all-time R95 in the traces report (which stops
+  reacting once your history is long), the moving average cancels
+  day-to-day noise while staying responsive to recent change, so
+  the direction your group tightness is heading reads at a glance. The band
+  is the standard deviation of R95 across each trailing window: a
+  *narrowing* band means your precision itself is getting more consistent,
+  even if its level hasn't moved. Faint dots show the raw per-day R95
+  behind the smoothing; normalized by target half-width, misses excluded.
 - **Biggest vs smallest spread per quiver** — per completed quiver, the
   widest and tightest pairwise arrow distance (normalized by face width),
   on a shared chronological axis. The band between them is your

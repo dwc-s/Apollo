@@ -13752,6 +13752,11 @@ def _report_within_session_drift(user_id):
     }
 
 
+# Trailing window (in days) for the precision-consistency report's moving
+# average and ±1σ band. Five balances smoothing against staying responsive to
+# recent change.
+_PREC_CONSISTENCY_WINDOW = 5
+
 # The six toggleable traces for the accuracy/precision report. Each tuple is
 # (category_key, granularity, metric, legend_label); the registry derives its
 # category pills from this list, and the report reads it to decide which
@@ -13759,16 +13764,12 @@ def _report_within_session_drift(user_id):
 _TRACE_DEFS = [
     ('session_acc',  'session', 'acc',  'Accuracy — per session (mean miss)'),
     ('session_prec', 'session', 'prec', 'Precision — per session (R95)'),
-    ('quiver_acc',   'quiver',  'acc',  'Accuracy — per quiver (mean miss)'),
-    ('quiver_prec',  'quiver',  'prec', 'Precision — per quiver (R95)'),
     ('alltime_acc',  'alltime', 'acc',  'Accuracy — all-time rolling (mean miss)'),
     ('alltime_prec', 'alltime', 'prec', 'Precision — all-time rolling (R95)'),
 ]
 _TRACE_CATEGORIES = [
     {'key': 'session_acc',  'label': 'Session · accuracy'},
     {'key': 'session_prec', 'label': 'Session · precision'},
-    {'key': 'quiver_acc',   'label': 'Quiver · accuracy'},
-    {'key': 'quiver_prec',  'label': 'Quiver · precision'},
     {'key': 'alltime_acc',  'label': 'All-time · accuracy'},
     {'key': 'alltime_prec', 'label': 'All-time · precision'},
 ]
@@ -13777,14 +13778,12 @@ _TRACE_CATEGORIES = [
 def _report_accuracy_precision_traces(user_id, date_from=None, date_to=None,
                                       categories=None, bow_filter=None,
                                       arrow_filter=None, tag_filter=None):
-    """Combined accuracy + precision traces over time, three granularities.
+    """Combined accuracy + precision traces over time, two granularities.
 
-    Plots up to six lines on one date-axis, each independently toggleable
+    Plots up to four lines on one date-axis, each independently toggleable
     via ``categories`` (see ``_TRACE_DEFS``):
       * Accuracy per session  (mean miss of every shot in the session)
       * Precision per session (R95 about the session centroid)
-      * Accuracy per quiver   (mean miss of every shot in each completed quiver)
-      * Precision per quiver  (R95 about the quiver centroid)
       * Accuracy all-time     (running mean miss through every shot to date)
       * Precision all-time    (running R95 through every shot to date)
 
@@ -13928,12 +13927,11 @@ def _report_accuracy_precision_traces(user_id, date_from=None, date_to=None,
         return subj['key'] in shot['tags']  # tag
 
     def _compute_series(sessions_sorted):
-        """Per-session / per-quiver / all-time mean-miss & R95 series + table
-        rows for one subject's sessions (already date-sorted). Mirrors the
-        original single-group aggregation."""
+        """Per-session / all-time mean-miss & R95 series + table rows for one
+        subject's sessions (already date-sorted). Mirrors the original
+        single-group aggregation."""
         out = {
             'session': ([], [], []),   # dates, mean_miss, r95
-            'quiver':  ([], [], []),
             'alltime': ([], [], []),
             'table': [],
         }
@@ -13953,8 +13951,9 @@ def _report_accuracy_precision_traces(user_id, date_from=None, date_to=None,
             out['session'][2].append(s_sess['r95'])
 
             # Walk quivers using the recorded quiver_size on the first shot
-            # of each group — same slicer as _iter_quivers. Trailing partial
-            # quiver is intentionally skipped.
+            # of each group — same slicer as _iter_quivers — only to count the
+            # completed quivers per session for the table's "Quivers" column.
+            # Trailing partial quiver is intentionally skipped.
             buf_x, buf_y = [], []
             buf_size = 0
             n_quivers_in_session = 0
@@ -13968,12 +13967,8 @@ def _report_accuracy_precision_traces(user_id, date_from=None, date_to=None,
                 buf_x.append(shot['nx'])
                 buf_y.append(shot['ny'])
                 if len(buf_x) >= buf_size:
-                    s_q = _archery_stats(buf_x, buf_y,
-                                         with_extreme_spread=False)
-                    if s_q is not None:
-                        out['quiver'][0].append(sess_dt)
-                        out['quiver'][1].append(s_q['mean_miss'])
-                        out['quiver'][2].append(s_q['r95'])
+                    if _archery_stats(buf_x, buf_y,
+                                      with_extreme_spread=False) is not None:
                         n_quivers_in_session += 1
                     buf_x, buf_y, buf_size = [], [], 0
 
@@ -14035,8 +14030,8 @@ def _report_accuracy_precision_traces(user_id, date_from=None, date_to=None,
     # color = subject. Every trace is a solid line, labeled in place at its
     # right end (no legend), carries subtle date dots, and gets a faint
     # same-color linear trend line so its direction reads at a glance.
-    ACC_SHADES = {'session': '#123a63', 'quiver': '#2f74c0', 'alltime': '#8fb9e6'}
-    PREC_SHADES = {'session': '#1e6b3c', 'quiver': '#37a866', 'alltime': '#93cfa9'}
+    ACC_SHADES = {'session': '#123a63', 'alltime': '#8fb9e6'}
+    PREC_SHADES = {'session': '#1e6b3c', 'alltime': '#93cfa9'}
     SUBJECT_COLORS = ['#1a3a5c', '#c0392b', '#27ae60', '#8e44ad',
                       '#d68910', '#16a085', '#2c3e50', '#e74c3c']
 
@@ -14152,6 +14147,141 @@ def _report_accuracy_precision_traces(user_id, date_from=None, date_to=None,
         'svg_b64': svg_b64,
         'columns': columns,
         'rows': table_rows,
+    }
+
+
+def _report_precision_consistency(user_id):
+    """Precision (R95) over time, smoothed by a trailing moving average with a
+    consistency band — "how is my precision trending, and how steady is it?"
+
+    Each point is one day of shooting (every shot that day, across all its
+    sessions, pooled into a single group). The raw per-day R95 is noisy, and
+    the *all-time rolling* R95 in the traces report is a cumulative pool that
+    stops reacting once you have a long history (every early shot anchors it
+    forever). This report instead draws a **trailing
+    ``_PREC_CONSISTENCY_WINDOW``-day moving average** of R95, which cancels
+    day-to-day noise while staying responsive to recent change, wrapped in a
+    shaded ±1σ band. The band is the standard deviation of R95 across each
+    trailing window — a *narrowing* band means your precision itself is
+    getting more consistent, even if its level hasn't moved.
+
+    R95 is normalized by target half-width and shown as a percentage of it
+    (lower = tighter), matching the accuracy/precision goal charts. Days with
+    fewer than 6 scored hits are skipped (too few to fit a group).
+    """
+    win = _PREC_CONSISTENCY_WINDOW
+    # by='day' pools every shot on a calendar day into one point, so the window
+    # is a true trailing N-day span (not N sessions — you can shoot twice a day).
+    series = _ap_series(user_id, 'r95', by='day')  # [{date, value(%hw), n}] asc
+    if len(series) < 3:
+        return {
+            'key': 'precision_consistency',
+            'title': 'Precision consistency (trend)',
+            'empty': True,
+            'empty_reason': ('Need at least 3 days with 6+ scored hits to '
+                             'plot a precision trend — keep logging sessions.'),
+            'svg_b64': None, 'columns': [], 'rows': [],
+        }
+
+    import numpy as np
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    import matplotlib.dates as mdates
+
+    dates = [p['date'] for p in series]
+    raw = [p['value'] for p in series]
+
+    # Trailing-window moving average + within-window spread (the band). Early
+    # points use however many days exist so far (expanding until full),
+    # then a fixed trailing window of `win` days.
+    ma, sd, band_lo, band_hi = [], [], [], []
+    for i in range(len(raw)):
+        window = raw[max(0, i - (win - 1)):i + 1]
+        m = float(np.mean(window))
+        s = float(np.std(window, ddof=1)) if len(window) >= 2 else 0.0
+        ma.append(m)
+        sd.append(s)
+        band_lo.append(max(0.0, m - s))  # R95 can't be negative
+        band_hi.append(m + s)
+
+    GREEN = '#2f8f4e'
+    fig, ax = plt.subplots(figsize=(10, 5.4))
+    # Raw per-day R95 as faint context, so the smoothing reads against the
+    # noise it's cancelling.
+    ax.plot(dates, raw, linestyle='none', marker='o', markersize=3.2,
+            color='#9aa0a6', alpha=0.55, zorder=2, label='Per-day R95')
+    # Consistency band: ±1σ of R95 within each trailing window.
+    ax.fill_between(dates, band_lo, band_hi, color=GREEN, alpha=0.16,
+                    linewidth=0, zorder=1,
+                    label=f'±1σ over trailing {win} days')
+    # The smoothed precision trend itself.
+    ax.plot(dates, ma, color=GREEN, linewidth=2.2, marker='o', markersize=3,
+            markeredgewidth=0, zorder=3,
+            label=f'{win}-day moving average')
+    # Faint straight trend fit through the raw points (house style) so the
+    # overall direction reads at a glance even where the band is busy.
+    xnum = mdates.date2num(dates)
+    if len(set(xnum)) >= 2:
+        slope, intercept = np.polyfit(xnum, raw, 1)
+        ax.plot([dates[0], dates[-1]],
+                [slope * xnum[0] + intercept, slope * xnum[-1] + intercept],
+                color=GREEN, linewidth=1.0, linestyle='--', alpha=0.45, zorder=2)
+
+    ax.set_xlabel('Date')
+    ax.set_ylabel('R95 — % of target half-width\n(lower = tighter group)')
+    ax.set_title(f'Precision consistency — {win}-day moving average of R95')
+    ax.grid(True, axis='y', linestyle='--', alpha=0.4)
+    ax.set_ylim(bottom=0)
+    ax.legend(loc='best', fontsize=8, framealpha=0.85)
+    fig.autofmt_xdate()
+    svg_b64 = _render_matplotlib_svg(fig)
+
+    intro = Markup(
+        '<p class="report-intro">'
+        '<strong>What this answers:</strong> which way is your precision '
+        '(group tightness) trending, and how steady is it? Each point is one '
+        'day of shooting (all that day&rsquo;s shots pooled). Grey dots are '
+        'each day&rsquo;s R95; the solid line is a trailing '
+        f'{win}-day moving average that cancels day-to-day noise '
+        'while still reacting to recent change &mdash; unlike the cumulative '
+        'all-time line in the traces report, which stops moving once your '
+        'history is long. The shaded band is &plusmn;1&sigma; of R95 across '
+        f'each trailing {win} days: a <em>narrowing</em> band means your '
+        'precision itself is becoming more consistent, even if its level '
+        'hasn&rsquo;t changed. R95 is normalized by target half-width so mixed '
+        'targets are comparable; misses are excluded and days need 6+ hits.'
+        '</p>'
+    )
+
+    columns = [
+        'Date',
+        _tip('Shots', 'Scored hits on this day (across all its sessions) that '
+                      'fed the R95 fit. Misses excluded; days with fewer than '
+                      '6 are skipped.'),
+        _tip('Day R95', "This day's precision — the 95% radius about its own "
+                        'centroid, as a % of target half-width.'),
+        _tip(f'R95 {win}-day moving avg',
+             "Mean of this day's R95 and the previous "
+             f'{win - 1} days (fewer early on). The smoothed trend line.'),
+        _tip('Band ±1σ',
+             f'Standard deviation of R95 across the trailing {win} days — '
+             'the half-height of the shaded band. Smaller = your precision is '
+             'more consistent.'),
+    ]
+    rows = [
+        [p['date'].strftime('%Y-%m-%d'), p.get('n', ''),
+         f'{raw[i]:.1f}', f'{ma[i]:.1f}', f'{sd[i]:.1f}']
+        for i, p in enumerate(series)
+    ]
+
+    return {
+        'key': 'precision_consistency',
+        'title': 'Precision consistency (trend)',
+        'intro_html': intro,
+        'svg_b64': svg_b64,
+        'columns': columns,
+        'rows': rows,
     }
 
 
@@ -16358,8 +16488,8 @@ REPORTS = {
     'accuracy_precision_traces': {
         'label': 'Accuracy & precision traces',
         'description': 'Accuracy and precision on a single timeline at '
-                       'three granularities: per session, per quiver, and '
-                       'as an all-time rolling pool. Tick which traces to '
+                       'two granularities: per session and as an all-time '
+                       'rolling pool. Tick which traces to '
                        'plot. Optionally pick one or more bows, arrows, or '
                        'tags to overlay them head-to-head — each subject '
                        'gets its own colored set of traces on the shared '
@@ -16378,6 +16508,19 @@ REPORTS = {
         # subjects. Leave all empty for a single combined "All shots" trace.
         'equipment_picker': True,
         'tag_picker': True,
+    },
+    'precision_consistency': {
+        'label': 'Precision consistency (trend)',
+        'description': 'Your precision (R95) over time — one point per day of '
+                       'shooting — smoothed by a trailing 5-day moving average '
+                       'with a ±1σ band. Shows which '
+                       'way group tightness is trending and how steady it is — '
+                       'a narrowing band means your precision itself is getting '
+                       'more consistent. More responsive to recent change than '
+                       'the cumulative all-time line in the traces report. '
+                       'Normalized by target half-width; misses excluded, '
+                       'days need 6+ hits.',
+        'fn': _report_precision_consistency,
     },
     'equipment_head_to_head': {
         'label': 'Head-to-head comparisons',
@@ -16554,6 +16697,9 @@ DASHBOARD_WIDGETS = {
     'graph:accuracy_precision_traces': {
         'label': 'Accuracy & precision', 'kind': 'graph', 'w': 6, 'h': 5,
         'report': 'accuracy_precision_traces'},
+    'graph:precision_consistency': {
+        'label': 'Precision consistency', 'kind': 'graph', 'w': 6, 'h': 5,
+        'report': 'precision_consistency'},
     'graph:spread_violins': {
         'label': 'Spread violins', 'kind': 'graph', 'w': 6, 'h': 6,
         'report': 'spread_violins'},
@@ -18433,15 +18579,19 @@ def _volume_progress(user_id, goal):
     }
 
 
-def _ap_series(user_id, metric, min_hits=6):
-    """Per-session accuracy (mean miss) or precision (R95) over time, as a
-    percentage of the target's half-width (the normalized unit /analyze uses).
+def _ap_series(user_id, metric, min_hits=6, by='session'):
+    """Per-session (or per-day) accuracy (mean miss) or precision (R95) over
+    time, as a percentage of the target's half-width (the normalized unit
+    /analyze uses).
 
     ``metric`` is 'acc' (mean distance from the gold — the tracked accuracy),
-    'r95' (precision), or 'mpi' (raw centroid bias). Sessions with fewer than
-    ``min_hits`` hits are skipped (too few to fit a meaningful group). Returns
-    ``[{date, value}]`` ascending; value is the metric × 100 (so ~30 means 30%
-    of half-width).
+    'r95' (precision), or 'mpi' (raw centroid bias). ``by`` groups shots into
+    one point per session (default) or per calendar day ('day' — every shot
+    taken that day, across all its sessions, is pooled into one group dated to
+    that day). Groups with fewer than ``min_hits`` hits are skipped (too few to
+    fit a meaningful group). Returns ``[{date, value, n}]`` ascending; value is
+    the metric × 100 (so ~30 means 30% of half-width) and ``n`` is the group's
+    contributing hit count.
     """
     with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
         rows = cur.execute(
@@ -18456,6 +18606,7 @@ def _ap_series(user_id, metric, min_hits=6):
             (user_id,)
         ).fetchall()
     sess = {}
+    sess_dt_cache = {}
     for r in rows:
         try:
             half_mm = float(r['physical_size_mm']) / 2.0
@@ -18472,11 +18623,26 @@ def _ap_series(user_id, metric, min_hits=6):
         except ValueError:
             continue
         sid = r['session_id']
-        s = sess.get(sid)
+        # Convert each session's begin time to the user's local wall clock
+        # once (cached per session) — day-grouping keys on the local calendar
+        # date, and session-grouping wants the same tz-correct date it always did.
+        if sid in sess_dt_cache:
+            dt = sess_dt_cache[sid]
+        else:
+            d = _utc_to_user(r['session_begin_time'])
+            dt = d.replace(tzinfo=None) if d else None
+            sess_dt_cache[sid] = dt
+        if by == 'day':
+            if dt is None:
+                continue
+            key = dt.date()
+            point_date = datetime(dt.year, dt.month, dt.day)
+        else:
+            key = sid
+            point_date = dt
+        s = sess.get(key)
         if s is None:
-            dt = _utc_to_user(r['session_begin_time'])
-            s = sess[sid] = {'date': dt.replace(tzinfo=None) if dt else None,
-                             'xs': [], 'ys': []}
+            s = sess[key] = {'date': point_date, 'xs': [], 'ys': []}
         s['xs'].append(xn)
         s['ys'].append(yn)
     pts = []
@@ -18492,7 +18658,8 @@ def _ap_series(user_id, metric, min_hits=6):
             raw = stat['mpi']
         else:  # 'acc' / 'mean_miss' — accuracy = mean distance from the gold
             raw = stat['mean_miss']
-        pts.append({'date': s['date'], 'value': raw * 100.0})
+        pts.append({'date': s['date'], 'value': raw * 100.0,
+                    'n': len(s['xs'])})
     pts.sort(key=lambda p: p['date'])
     return pts
 
