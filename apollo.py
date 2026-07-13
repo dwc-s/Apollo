@@ -9453,7 +9453,8 @@ def edit_session(session_id):
             rows = cur.execute(
                 "SELECT id, session_id, timestamp, bow, arrow_type, quiver_size, "
                 "arrows_remaining, distance, session_notes, session_tags, "
-                "x_coord, y_coord, is_precise, target_id, effective_draw_weight "
+                "x_coord, y_coord, is_precise, target_id, effective_draw_weight, "
+                "bow_style_settings, bow_type "
                 "FROM apollo WHERE session_id = %s AND user_id = %s "
                 "ORDER BY timestamp, id",
                 (session_id, user_id)
@@ -9482,7 +9483,8 @@ def edit_session(session_id):
                 # snapshotted from the bows row like draw weight / AMO.
                 bow_row = cur.execute(
                     "SELECT bow_draw_weight, effective_draw_weight, "
-                    "amo, bow_type FROM bows WHERE bow_model = %s AND user_id = %s LIMIT 1",
+                    "amo, bow_type, style_settings FROM bows "
+                    "WHERE bow_model = %s AND user_id = %s LIMIT 1",
                     (new_bow, user_id)
                 ).fetchone()
                 if bow_row is not None:
@@ -9492,6 +9494,30 @@ def edit_session(session_id):
                     )
                 else:
                     bow_snap = (None, None, None, None)
+
+                # Bow gear/tuning for this session. Mirrors the /sesh insert
+                # (_insert_shot): the bow's saved static settings overlaid with
+                # any per-outing tweaks posted from the edit form, validated
+                # against the bowstyle schema. Applied to every row below.
+                new_bow_type = bow_snap[3]
+                if bow_row is not None:
+                    try:
+                        bow_static = (json.loads(bow_row['style_settings'])
+                                      if bow_row['style_settings'] else {})
+                    except (ValueError, TypeError):
+                        bow_static = {}
+                    if not isinstance(bow_static, dict):
+                        bow_static = {}
+                    merged_style = dict(bow_static)
+                    style_session = _collect_style_settings(request.form)
+                    if style_session:
+                        merged_style.update(
+                            _clean_style_settings(new_bow_type, style_session))
+                    shot_style_settings = json.dumps(merged_style) if merged_style else None
+                else:
+                    # Bow no longer exists in the user's bows — preserve the
+                    # session's existing gear snapshot rather than wiping it.
+                    shot_style_settings = first['bow_style_settings']
 
                 # Refresh arrow snapshot from the current arrows row, if any.
                 arrow_row = cur.execute(
@@ -9553,13 +9579,13 @@ def edit_session(session_id):
                     "UPDATE apollo SET bow = %s, arrow_type = %s, distance = %s, "
                     "session_notes = %s, session_tags = %s, target_id = %s, "
                     "bow_draw_weight = %s, effective_draw_weight = %s, "
-                    "bow_amo = %s, bow_type = %s, "
+                    "bow_amo = %s, bow_type = %s, bow_style_settings = %s, "
                     "arrow_length = %s, arrow_spine = %s, arrow_shaft_weight = %s, "
                     "arrow_shaft_diameter = %s, arrow_shaft_material = %s, "
                     "arrow_nock_weight = %s, arrow_tip = %s, arrow_tip_weight = %s "
                     "WHERE session_id = %s AND user_id = %s",
                     (new_bow, new_arrow, new_distance, new_notes, new_tags,
-                     new_target_id, *bow_snap, *arrow_snap,
+                     new_target_id, *bow_snap, shot_style_settings, *arrow_snap,
                      session_id, user_id)
                 )
 
@@ -9653,6 +9679,19 @@ def edit_session(session_id):
         'humidity_pct': wx_row['wx_humidity_pct'],
         'pressure_hpa': wx_row['wx_pressure_hpa'], 'source': wx_row['wx_source'],
     } if wx_row else None
+    # Bow gear/tuning prefill for the shared _bow_style_settings partial. Reuse
+    # the create-flow map (last-used values per bow), then override THIS
+    # session's bow with the settings the session actually recorded, so the
+    # edit form shows what's stored rather than the most recent outing's tweaks.
+    style_by_bow = _style_settings_by_bow(user_id)
+    sess_style_raw = first['bow_style_settings']
+    if sess_style_raw and current['bow'] in style_by_bow:
+        try:
+            sess_style = json.loads(sess_style_raw)
+        except (ValueError, TypeError):
+            sess_style = None
+        if isinstance(sess_style, dict):
+            style_by_bow[current['bow']]['values'] = sess_style
     return render_template(
         'edit_session.html',
         session_id=session_id,
@@ -9663,6 +9702,8 @@ def edit_session(session_id):
         targets_list=targets_list,
         tag_suggestions=_distinct_user_tags(user_id),
         wx=wx_current,
+        bowstyle_settings=BOWSTYLE_SETTINGS,
+        style_settings_by_bow=style_by_bow,
     )
 
 
@@ -16624,6 +16665,20 @@ _PREDICT_TREND_MIN_PER_DIST = 15
 # stays nearer its prior unless the data strongly says otherwise).
 _PREDICT_TREND_SHRINK_C = 4.0
 
+# Fuzzy Factor (predict calibration) tunables. FF is a single archer-level
+# ratio — real scored points ÷ what the fitted angular model predicts, pooled
+# across ALL the archer's scored history. It's the residual gap the pure-trig
+# geometry misses (nerves, wind, fatigue, fliers), and it's scale-free, so the
+# browser multiplies every simulated run total by it at ANY face/distance —
+# including ones the archer has never shot. The raw ratio is shrunk toward 1.0
+# by how many scored sessions back it (few → trust the model) and clamped so a
+# handful of outliers can't distort the forecast.
+_FUZZY_SHRINK_C = 3.0         # a departure from 1.0 earns n/(n+c) weight
+_FUZZY_MIN = 0.6              # clamp band for the final coefficient
+_FUZZY_MAX = 1.4
+_FUZZY_MIN_OBS = 2            # need ≥ this many scored sessions to learn the factor
+_FUZZY_MIN_GROUP_ARROWS = 3  # a (session, face, distance) group needs ≥ this to count
+
 
 def _predict_user_bows(user_id):
     """List of distinct bow_model names the user has registered."""
@@ -17178,6 +17233,135 @@ def _build_predict_segments(form, user_id):
     return [seg], label, max_score
 
 
+def _model_expected_ppa(fit, distance_m, zones, n_samples=4000):
+    """Expected points per arrow if the archer shot their globally fitted
+    angular dispersion at ``distance_m`` on ``zones``.
+
+    A server-side mirror of the browser Monte-Carlo (apollo-predict.js
+    ``segParams`` + ``scoreShot``): sample the fit's per-distance 2-D Gaussian
+    in milliradians, scale to mm at that range, and score with the same
+    line-cutter rule — so the "predicted" side the Fuzzy Factor divides into is
+    the SAME model the sim projects with. Returns points/arrow, or ``None`` for
+    a degenerate fit / empty zones.
+    """
+    import random as _random
+    d = float(distance_m or 0)
+    if d <= 0 or not zones:
+        return None
+    trend = fit.get('trend') if isinstance(fit.get('trend'), dict) else None
+    if trend and trend.get('ok'):
+        mm = trend['mean_mm']
+        mu_x = mm['ax'] + mm['bx'] * d
+        mu_y = mm['ay'] + mm['by'] * d
+        s2 = math.exp(trend['growth_k'] * (d - trend['d_ref'])) ** 2
+        cref = trend['cov_ref_mrad']
+        cov = [[cref[0][0] * s2, cref[0][1] * s2],
+               [cref[1][0] * s2, cref[1][1] * s2]]
+    else:
+        mu_x = fit['mean_mrad'][0] * d
+        mu_y = fit['mean_mrad'][1] * d
+        cov = fit['cov_mrad']
+    # Cholesky of the 2×2 (mrad) covariance; degenerate → diagonal sqrt.
+    a, b, c = cov[0][0], cov[0][1], cov[1][1]
+    l11 = math.sqrt(a) if a > 0 else 0.0
+    l21 = b / l11 if l11 > 0 else 0.0
+    inner = c - l21 * l21
+    l22 = math.sqrt(inner) if inner > 0 else 0.0
+    miss_rate = fit.get('miss_rate') or 0.0
+    shaft = fit.get('shaft_mm')
+    rng = _random.Random(_EXPECTED_SCORE_MC_SEED)
+    total = 0.0
+    for _ in range(n_samples):
+        if miss_rate > 0 and rng.random() < miss_rate:
+            continue                                  # a modelled miss scores 0
+        z1 = rng.gauss(0, 1)
+        z2 = rng.gauss(0, 1)
+        x_mm = mu_x + (l11 * z1) * d
+        y_mm = mu_y + (l21 * z1 + l22 * z2) * d
+        total += _score_one_shot(f'{x_mm:.4f}', f'{y_mm:.4f}', zones, shaft)
+    return total / n_samples
+
+
+def _fuzzy_global(user_id, fit):
+    """The archer's GLOBAL fuzzy factor: how their real scored results compare
+    to what their fitted angular model predicts, pooled across ALL their scored
+    history.
+
+    A single scale-free ratio (actual ÷ model-predicted points per arrow) — the
+    residual gap the pure-trig geometry misses (nerves, wind, fatigue, fliers).
+    Because the angular model already scales dispersion with distance, this
+    residual is distance-agnostic, so it applies to ANY face/distance the
+    forecast targets — including combinations the archer has never shot.
+
+    Real shots are grouped by (session, face, distance): each group shares one
+    face + one range, hence one model prediction. Returns
+    ``(ff_raw, actual_total, predicted_total, n_sessions)`` or
+    ``(None, 0.0, 0.0, 0)`` when there isn't enough scored history.
+    """
+    if not fit or not fit.get('ok'):
+        return (None, 0.0, 0.0, 0)
+    with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
+        rows = cur.execute(
+            "SELECT session_id, target_id, x_coord, y_coord, distance, "
+            "arrow_shaft_diameter FROM apollo "
+            "WHERE user_id = %s AND target_id IS NOT NULL",
+            (user_id,)
+        ).fetchall()
+
+    from collections import defaultdict
+    groups = defaultdict(list)
+    for r in rows:
+        try:
+            d = round(float(str(r['distance']).strip()), 2)
+        except (ValueError, TypeError, AttributeError):
+            continue
+        if d <= 0:
+            continue
+        groups[(r['session_id'], r['target_id'], d)].append(r)
+
+    zones_cache = {}
+    def _zones_for(tid):
+        if tid not in zones_cache:
+            zr = _fetch_target_zones(tid, user_id)
+            zones_cache[tid] = [{'radius_mm': float(z['radius_mm']),
+                                 'point_value': int(z['point_value'] or 0)}
+                                for z in zr if z['radius_mm'] is not None]
+        return zones_cache[tid]
+
+    pred_cache = {}
+    actual_total = 0.0
+    predicted_total = 0.0
+    sessions = set()
+    for (sid, tid, d), shots in groups.items():
+        if len(shots) < _FUZZY_MIN_GROUP_ARROWS:
+            continue
+        zones = _zones_for(tid)
+        if not zones:
+            continue
+        key = (tid, d)
+        if key not in pred_cache:
+            pred_cache[key] = _model_expected_ppa(fit, d, zones)
+        pred_ppa = pred_cache[key]
+        if pred_ppa is None or pred_ppa <= 0:
+            continue
+        pts = 0
+        for s in shots:
+            try:
+                shaft = (float(s['arrow_shaft_diameter'])
+                         if s['arrow_shaft_diameter'] not in (None, '') else None)
+            except (ValueError, TypeError):
+                shaft = None
+            pts += _score_one_shot(s['x_coord'], s['y_coord'], zones, shaft)
+        actual_total += pts
+        predicted_total += pred_ppa * len(shots)
+        sessions.add(sid)
+
+    if predicted_total <= 0 or not sessions:
+        return (None, 0.0, 0.0, 0)
+    return (actual_total / predicted_total, actual_total,
+            predicted_total, len(sessions))
+
+
 def _predict_real_world_benchmarks(round_key, gender, max_score):
     """Published WA / USA Archery reference scores to overlay on the predict
     histogram, so the simulated distribution can be read against real archers.
@@ -17216,10 +17400,10 @@ def _predict_real_world_benchmarks(round_key, gender, max_score):
 def tools():
     """Standalone archery calculators. Pure client-side math — no DB.
 
-    Ten tools on one page (wind drift, sight-mark interpolator, spine
-    selector, FOC, arrow speed, kinetic energy & momentum, arrow-trajectory
-    parabola, bow-hand error deviation, MOA/mrad + sight clicks, and
-    group→dispersion projection). The template does all the math in JS so
+    Nine tools on one page (wind drift, sight-mark interpolator, spine
+    selector, FOC, arrow speed, kinetic energy & momentum, bow-hand error
+    deviation, MOA/mrad + sight clicks, and group→dispersion projection).
+    The template does all the math in JS so
     the user gets live updates and we don't burn a server round-trip per
     keystroke."""
     return render_template('tools.html')
@@ -17313,6 +17497,7 @@ def predict():
         'custom_arrows_per_end': (form.get('custom_arrows_per_end') or '').strip(),
         'score_target':     (form.get('score_target') or '').strip(),
         'n_runs':           (form.get('n_runs') or '').strip(),
+        'use_fuzzy':        bool(form.get('use_fuzzy')),
     }
     # Remember these selections so the next visit pre-fills them. Saved even
     # when the run later errors out — the user still wants their choices back.
@@ -17363,6 +17548,32 @@ def predict():
             (current_user() or {}).get('gender'),
             endpoint_max)
 
+    # Fuzzy Factor: when requested, compute the archer's GLOBAL trig-vs-actual
+    # ratio from all their scored history, shrink it toward 1.0 by how many
+    # scored sessions back it, clamp it, and hand the browser the finished
+    # coefficient to multiply into every simulated run total. Being scale-free,
+    # it applies to this endpoint's face/distance whether or not it's been shot.
+    fuzzy = {'enabled': False}
+    if ctx['form']['use_fuzzy']:
+        ff_raw, act_total, pred_total, n_obs = _fuzzy_global(user_id, fit)
+        if ff_raw is not None and n_obs >= _FUZZY_MIN_OBS:
+            w = n_obs / (n_obs + _FUZZY_SHRINK_C)
+            ff = 1.0 + (ff_raw - 1.0) * w
+            ff = max(_FUZZY_MIN, min(_FUZZY_MAX, ff))
+            fuzzy = {
+                'enabled': True,
+                'ff': ff,
+                'ff_raw': ff_raw,
+                'n_obs': n_obs,
+            }
+        else:
+            fuzzy = {
+                'enabled': True,
+                'unavailable': True,
+                'reason': (f'Need at least {_FUZZY_MIN_OBS} scored sessions to '
+                           'learn your fuzzy factor — log a few scored ends first.'),
+            }
+
     ctx['payload'] = {
         'dist':          fit,
         'segments':      segments,
@@ -17371,6 +17582,7 @@ def predict():
         'endpoint_label': endpoint_label,
         'endpoint_max':  endpoint_max,
         'benchmarks':    benchmarks,
+        'fuzzy':         fuzzy,
     }
     ctx['endpoint_label'] = endpoint_label
     ctx['endpoint_max'] = endpoint_max

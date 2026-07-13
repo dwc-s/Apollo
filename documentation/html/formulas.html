@@ -455,6 +455,29 @@ line per scoring face, so the score's drop-off with range is visible at a glance
 holds). A face shot at ≥ 2 known distances becomes a trend line; at a single
 distance, one marker. Because both reports share the fixed-seed helper, a point
 here equals the matching panel in §4.1 exactly. <code>% of max = expected / max_ring · 100</code>.</p>
+<h3 id="45-fuzzy-factor-_fuzzy_global-_model_expected_ppa">4.5 Fuzzy Factor — <code>_fuzzy_global</code>, <code>_model_expected_ppa</code></h3>
+<p>An opt-in global calibration that scales the pure-trig forecast to the archer's
+real results. It answers "across everything you've actually scored, how do your
+real points compare to what your fitted model predicts?" as a single scale-free
+ratio:</p>
+<p><code>FF_raw = Σ actual points ÷ Σ model-predicted points</code>, summed over every
+<code>(session, face, distance)</code> group in the archer's scored history (each group
+needs <code>≥ _FUZZY_MIN_GROUP_ARROWS</code> = 3 arrows). The <strong>predicted</strong> side is
+<code>_model_expected_ppa</code>: a server-side Monte-Carlo that samples the <em>same</em> fitted
+angular Gaussian the client sim uses (§4.2) — per-distance mean + covariance,
+line-cutter scoring, empirical miss rate — so "predicted" means exactly what the
+forecast projects. The <strong>actual</strong> side scores the real shots against the same
+face zones.</p>
+<p>Because the angular model already scales dispersion with distance (§4.3), the
+residual <code>FF</code> is distance-agnostic — the leftover gap the geometry can't see
+(nerves, wind, fatigue, fliers). So one number applies to <strong>any</strong> face/distance
+the forecast targets, including combinations never shot.</p>
+<p>The raw ratio is <strong>shrunk toward 1.0</strong> by observation count and <strong>clamped</strong>:
+<code>FF = clamp(1 + (FF_raw − 1)·n/(n + _FUZZY_SHRINK_C), _FUZZY_MIN, _FUZZY_MAX)</code>
+with <code>_FUZZY_SHRINK_C = 3</code>, <code>[_FUZZY_MIN, _FUZZY_MAX] = [0.6, 1.4]</code>, and <code>n</code> = the
+number of scored sessions (needs <code>≥ _FUZZY_MIN_OBS</code> = 2). The browser multiplies
+every simulated run total by <code>FF</code> (clamped to <code>[0, endpoint max]</code>) as the run
+happens, so a second "Calibrated" histogram grows in real time beside the raw one.</p>
 <hr />
 <h2 id="5-reports-built-on-the-above">5. Reports built on the above</h2>
 <p>Every <code>/analyze</code> report below feeds shot clouds (raw mm or normalized) into
@@ -672,26 +695,13 @@ half-width. Buckets below five hits are flagged as thin.</p>
 <code>templates/tools.html</code> — no server or DB, live on every keystroke, and they
 follow the global metric/imperial toggle (values convert at the display
 boundary via <code>trigUnitGroups</code>; the math below is in SI). <code>g = 9.81 m/s²</code>.</p>
-<h3 id="81-arrow-trajectory-parabola-recalctraj-drawtrajplot">8.1 Arrow trajectory (parabola) — <code>recalcTraj</code> / <code>drawTrajPlot</code></h3>
-<p>Idealized, drag-free projectile: speed <code>v</code> (m/s) to a <strong>level</strong> target at range
-<code>D</code> (m).
-- <strong>Reachable</strong> iff <code>g·D/v² ≤ 1</code>; beyond that the target is past the 45° vacuum
-  range <code>v²/g</code>.
-- <strong>Elevation angle</strong> (low root): <code>θ = ½·asin(g·D/v²)</code>.
-- <strong>Arc over the line of sight</strong>: <code>y(x) = x·tanθ − g·x²/(2·v²·cos²θ)</code>, <code>x ∈ [0, D]</code>.
-- <strong>Peak above the line of sight</strong>: <code>H = v²·sin²θ / (2g)</code>.
-- <strong>Time of flight</strong>: <code>T = D / (v·cosθ)</code>.
-- <strong>Drop if aimed level</strong> (<code>θ = 0</code>): <code>g·D² / (2v²)</code>.
-The plot samples <code>y(x)</code> at 64 points and auto-scales the apex to the top of the
-box; the dashed baseline is the line of sight. It is a <em>floor</em> — a real arrow
-fights drag and drops more, growing with distance.</p>
-<h3 id="82-bow-hand-error-deviation-recalcformerr">8.2 Bow-hand error → deviation — <code>recalcFormErr</code></h3>
+<h3 id="81-bow-hand-error-deviation-recalcformerr">8.1 Bow-hand error → deviation — <code>recalcFormErr</code></h3>
 <p>A lateral launch-point error <code>e</code> over lever arm <code>L</code> (≈ draw length) rotates the
 shot by <code>α = atan(e/L)</code>; at range <code>D</code> the miss is <code>D·tan(α)</code> (<code>≈ D·e/L</code> for small
 <code>α</code>). The <strong>amplification</strong> is <code>A = D/L</code> ("1 mm at the bow → <code>A</code> mm at the
 target"). Angular error is reported in degrees and MOA (<code>×60</code>). Applies to any
 launch-point error — nocking point, release, sight — not just the bow hand.</p>
-<h3 id="83-moa-mrad-sight-clicks-recalcangle">8.3 MOA / mrad + sight clicks — <code>recalcAngle</code></h3>
+<h3 id="82-moa-mrad-sight-clicks-recalcangle">8.2 MOA / mrad + sight clicks — <code>recalcAngle</code></h3>
 <p>Linear size <code>s</code> an angle subtends at range <code>D</code> (metres):
 - <strong>mrad</strong>: <code>s = D</code> mm per mrad (1 mrad = 70 mm at 70 m) — <code>mradMm(D) = D</code>.
 - <strong>MOA</strong>: <code>s = D·1000·tan(π/(180·60)) ≈ 0.2909·D</code> mm — <code>moaMm(D)</code> (≈ 29.1 mm at
@@ -699,7 +709,7 @@ launch-point error — nocking point, release, sight — not just the bow hand.<
 Both directions (<code>angle → size</code>, and <code>size → angle</code> via <code>mrad = s_mm/D</code>,
 <code>MOA = s_mm / moaMm(D)</code>), plus a sight click of <code>c</code> units → <code>c · (mm per unit)</code>
 at <code>D</code>.</p>
-<h3 id="84-group-dispersion-projection-recalcdisp">8.4 Group → dispersion projection — <code>recalcDisp</code></h3>
+<h3 id="83-group-dispersion-projection-recalcdisp">8.3 Group → dispersion projection — <code>recalcDisp</code></h3>
 <p>A group of size <code>g</code> at range <code>D₁</code> is angular dispersion <code>g/D₁</code>
 (<code>mrad = g_mm/D₁</code>, <code>MOA = g_mm / moaMm(D₁)</code>); the projected group at <code>D₂</code> is
 <code>g · D₂/D₁</code> (similar triangles). A geometric best case — real groups grow faster

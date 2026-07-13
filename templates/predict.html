@@ -131,6 +131,19 @@
             margin: 6px 0 12px 0;
         }
         .endpoint-sub[hidden] { display: none; }
+        #ff-wrap[hidden] { display: none; }
+        .fuzzy-note {
+            font-family: 'Quantico', sans-serif;
+            font-size: 0.85rem;
+            color: #1a3a5c;
+            background: rgba(255, 255, 255, 0.45);
+            border-left: 3px solid #4d6da6;
+            border-radius: 4px;
+            padding: 8px 12px;
+            margin: 10px 0 4px 0;
+        }
+        .fuzzy-note.unavailable { border-left-color: #9aa7bd; color: #5a6c8a; }
+        .fuzzy-note[hidden] { display: none; }
         .predict-submit-row {
             display: flex;
             justify-content: flex-end;
@@ -423,7 +436,7 @@
             {% if form.practice_mode == 'tournament_only' %}checked{% endif %}> Tournament only</label>
     </div>
 
-    <h3 style="margin-top:24px;">2 · Endpoint</h3>
+    <h3 style="margin-top:24px;">2 · <span class="has-tooltip" data-tooltip="The round, or face + distance, you're forecasting a score for.">Endpoint</span></h3>
     <p style="font-family:Quantico,sans-serif;color:#2c4a6b;font-size:0.85rem;margin:0 0 10px 0;">
         What round are we simulating?
     </p>
@@ -498,6 +511,14 @@
         </div>
     </div>
 
+    <div id="ff-wrap" style="margin-top:14px;">
+        <label style="display:flex;align-items:flex-start;gap:8px;font-family:Quantico,sans-serif;color:#2c4a6b;font-size:0.9rem;cursor:pointer;text-transform:none;letter-spacing:0;font-weight:400;">
+            <input type="checkbox" name="use_fuzzy" value="1" style="margin-top:3px;flex:none;"
+                {% if form.use_fuzzy %}checked{% endif %}>
+            <span><strong>Apply fuzzy factor</strong> — scale the forecast by how your real scores compare to the pure-trig projection across <em>all</em> your scored history. Captures confounders (nerves, wind, fatigue, fliers) the angular model can't, and applies to any face or distance. Needs a couple of scored sessions.</span>
+        </label>
+    </div>
+
     <h3 style="margin-top:24px;">3 · Simulation</h3>
     <div class="predict-row">
         <label>Runs
@@ -554,10 +575,10 @@
         <div class="stat"><span class="stat-label">Runs done</span><span class="stat-value" data-stat="n">0</span></div>
         <div class="stat"><span class="stat-label">Mean</span><span class="stat-value" data-stat="mean">—</span></div>
         <div class="stat"><span class="stat-label">Median</span><span class="stat-value" data-stat="median">—</span></div>
-        <div class="stat"><span class="stat-label">Std dev</span><span class="stat-value" data-stat="std">—</span></div>
-        <div class="stat"><span class="stat-label">P10</span><span class="stat-value" data-stat="p10">—</span></div>
-        <div class="stat"><span class="stat-label">P50</span><span class="stat-value" data-stat="p50">—</span></div>
-        <div class="stat"><span class="stat-label">P90</span><span class="stat-value" data-stat="p90">—</span></div>
+        <div class="stat"><span class="stat-label has-tooltip" data-tooltip="Standard deviation — the typical spread of the simulated round scores around the mean.">Std dev</span><span class="stat-value" data-stat="std">—</span></div>
+        <div class="stat"><span class="stat-label has-tooltip" data-tooltip="10th-percentile score — you'd match or beat it in about 90% of simulated rounds (a realistic bad-day floor).">P10</span><span class="stat-value" data-stat="p10">—</span></div>
+        <div class="stat"><span class="stat-label has-tooltip" data-tooltip="Median — half the simulated rounds score above this, half below.">P50</span><span class="stat-value" data-stat="p50">—</span></div>
+        <div class="stat"><span class="stat-label has-tooltip" data-tooltip="90th-percentile score — you'd reach it in only about 10% of simulated rounds (a good-day ceiling).">P90</span><span class="stat-value" data-stat="p90">—</span></div>
         <div class="stat"><span class="stat-label">Min</span><span class="stat-value" data-stat="min">—</span></div>
         <div class="stat"><span class="stat-label">Max</span><span class="stat-value" data-stat="max">—</span></div>
         {% if payload.score_target is not none %}
@@ -565,12 +586,14 @@
         {% endif %}
     </div>
 
+    <div class="fuzzy-note" id="fuzzy-note" hidden></div>
+
     {% set trend = payload.dist.trend %}
     <div class="trend-panel">
         <h4>Distance trend</h4>
         {% if trend and trend.ok %}
         <p class="trend-lead">
-            Fit across {{ trend.n_distances }} distances. Angular spread grows as
+            Fit across {{ trend.n_distances }} distances. <span class="has-tooltip" data-tooltip="How wide your group is as an angle, independent of distance — the linear spread divided by range. It lets the model scale your groups to any distance.">Angular spread</span> grows as
             <strong>e^({{ '%.5f' % trend.growth_k }}·d)</strong> per metre
             (typical archer ≈ {{ '%.5f' % trend.growth_prior }}); the prediction
             uses this instead of assuming flat angular dispersion.
@@ -584,7 +607,7 @@
         {% if payload.dist.per_distance | length > 1 %}
         <table>
             <thead>
-                <tr><th>Distance</th><th>Hits</th><th>σ (mrad)</th>
+                <tr><th>Distance</th><th>Hits</th><th><span class="has-tooltip" data-tooltip="Angular spread (sigma) at that distance, in milliradians — group size ÷ range. 1 mrad ≈ 1 mm at 1 m, or 10 cm at 100 m.">σ (mrad)</span></th>
                     <th>vs. overall</th><th>Bias p</th><th>Spread p</th></tr>
             </thead>
             <tbody>
@@ -658,8 +681,12 @@ trend d_ref (m)  : {{ '%.2f' % trend.d_ref }}{% endif %}</pre>
     }
     function sync() {
         const round = document.getElementById('ep-round');
-        show('ep-round-sub', round && round.checked);
-        show('ep-custom-sub', !(round && round.checked));
+        const isRound = !!(round && round.checked);
+        show('ep-round-sub', isRound);
+        show('ep-custom-sub', !isRound);
+        // The fuzzy factor is offered for every endpoint (#ff-wrap stays
+        // visible); it reports "unavailable" at run time if there's no
+        // matchable history to calibrate against.
     }
     document.querySelectorAll('input[name="endpoint_mode"]').forEach(r => {
         r.addEventListener('change', sync);

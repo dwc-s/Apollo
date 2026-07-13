@@ -99,7 +99,7 @@
 <div class="rec-wrap">
 
     <div class="rec-section">
-        <h3>Handicap ({{ category.bowstyle }} · {{ category.gender }} · {{ category.age_group }})</h3>
+        <h3><span class="has-tooltip" data-tooltip="A single number rating your scores across rounds — lower is better, like a golf handicap. It drops as you shoot higher scores; the AGB figure needs at least 3 rounds.">Handicap</span> ({{ category.bowstyle }} · {{ category.gender }} · {{ category.age_group }})</h3>
         <div class="rec-cards">
             <div class="rec-card"><div class="k">Latest</div><div class="v">{{ summary.latest if summary.latest is not none else '—' }}</div><div class="s">most recent round</div></div>
             <div class="rec-card"><div class="k">Best (recent)</div><div class="v">{{ summary.best_recent if summary.best_recent is not none else '—' }}</div><div class="s">lowest in 12 months</div></div>
@@ -109,7 +109,7 @@
 
     {% if ladder %}
     <div class="rec-section">
-        <h3>Classification (outdoor)</h3>
+        <h3><span class="has-tooltip" data-tooltip="Your Archery GB skill tier, earned from your scores (Archer → Bowman → Master Bowman → Grand Master Bowman). Each class needs scores at or above a set handicap threshold.">Classification</span> (outdoor)</h3>
         <div class="ladder">
             <span class="now">{{ ladder.current.name if ladder.current else 'No class yet' }}</span>
             {% if ladder.next %}

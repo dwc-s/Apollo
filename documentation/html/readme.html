@@ -648,10 +648,6 @@ no DB hits, no server round-trips per keystroke.</p>
 <td><code>KE = mv²/450,240</code> (ft·lb), <code>momentum = mv/225,218</code> (slug·ft/s — 7000 gr/lb × 32.174 ft/s²).</td>
 </tr>
 <tr>
-<td><strong>Arrow trajectory (parabola)</strong></td>
-<td>Idealized, drag-free projectile arc: the elevation angle to hit a level target, peak height above the line of sight, time of flight, and drop-if-aimed-level, with a live SVG plot of the arc. Clearly labeled as a geometric ideal — real arrows drop more, especially at distance.</td>
-</tr>
-<tr>
 <td><strong>Bow-hand error → deviation</strong></td>
 <td>How a small error at the bow is amplified downrange: <code>miss = distance × error / lever-arm</code>. Reports the amplification factor ("1 mm at the bow → N mm at the target") and the equivalent angular error. Generalizes to any launch-point error (nock, release, sight).</td>
 </tr>
@@ -686,6 +682,15 @@ how bias and dispersion grow with range — and <strong>shrinks</strong> that gr
 (James-Stein style) toward the AGB handicap distance coefficient rather
 than trusting a flat fit. Gravity drop and wind aren't modelled; the
 results surface σ in mrad so you can sanity-check.</p>
+<p>An optional <strong>Fuzzy Factor</strong> calibrates the forecast to reality. The pure-trig
+model knows your group geometry but not the confounders that cost real points —
+nerves, wind, fatigue, fliers. So Apollo pools all your scored history, compares
+what you actually scored against what the model predicts (a server-side
+Monte-Carlo of the same fit), and distils it to one scale-free coefficient:
+"you shoot about <em>X</em>% of the pure-trig projection." Shrunk toward 1.0 when you
+have few scores and clamped, it multiplies into the forecast at any face or
+distance — and the calibrated distribution is drawn as a second histogram over
+the raw one so you can see the correction.</p>
 <hr />
 <h2 id="handicaps-classifications">Handicaps &amp; classifications</h2>
 <p>Apollo computes an <strong>Archery GB 2023 handicap</strong> for every completed AGB

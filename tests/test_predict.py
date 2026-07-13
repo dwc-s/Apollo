@@ -126,6 +126,28 @@ def test_scorecard_rows_are_detected_by_match_tag():
     assert f(None) is False
 
 
+def test_model_expected_ppa_sane_and_monotonic():
+    """`_model_expected_ppa` — the server-side mirror of the sim's per-arrow
+    scoring, which the global Fuzzy Factor divides into — returns a plausible
+    points/arrow, a tighter group scores higher than a looser one on the same
+    face, and a miss rate drags it down. Pure math, no DB."""
+    zones = [{'radius_mm': 20 * (i + 1), 'point_value': 10 - i} for i in range(10)]
+    tight = {'ok': True, 'mean_mrad': [0.0, 0.0],
+             'cov_mrad': [[1.0, 0.0], [0.0, 1.0]], 'trend': None,
+             'miss_rate': 0.0, 'shaft_mm': 6.0}
+    loose = dict(tight, cov_mrad=[[9.0, 0.0], [0.0, 9.0]])
+    ppa_tight = apollo._model_expected_ppa(tight, 18.0, zones, n_samples=8000)
+    ppa_loose = apollo._model_expected_ppa(loose, 18.0, zones, n_samples=8000)
+    assert 0 < ppa_loose < ppa_tight <= 10
+    # A 50% miss rate roughly halves the expectation.
+    missy = dict(tight, miss_rate=0.5)
+    ppa_missy = apollo._model_expected_ppa(missy, 18.0, zones, n_samples=8000)
+    assert ppa_missy < ppa_tight
+    # Degenerate inputs return None rather than raising.
+    assert apollo._model_expected_ppa(tight, 0, zones) is None
+    assert apollo._model_expected_ppa(tight, 18.0, []) is None
+
+
 if __name__ == '__main__':
     for name, fn in sorted(globals().items()):
         if name.startswith('test_') and callable(fn):

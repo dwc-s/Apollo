@@ -354,7 +354,6 @@ no DB hits, no server round-trips per keystroke.
 | **FOC** | Standard ATA `((balance − L/2)/L)·100` with low / target / hunting / EFOC band chips. |
 | **Arrow speed (fps)** | Two methods: **bow specs** (energy-storage model `v = √(2·η·k·F_peak·stroke / m)`, works for any bow type from peak weight, draw length, brace height, arrow mass) and **IBO/ATA rating** (compound-only delta-from-rating). |
 | **Kinetic energy & momentum** | `KE = mv²/450,240` (ft·lb), `momentum = mv/225,218` (slug·ft/s — 7000 gr/lb × 32.174 ft/s²). |
-| **Arrow trajectory (parabola)** | Idealized, drag-free projectile arc: the elevation angle to hit a level target, peak height above the line of sight, time of flight, and drop-if-aimed-level, with a live SVG plot of the arc. Clearly labeled as a geometric ideal — real arrows drop more, especially at distance. |
 | **Bow-hand error → deviation** | How a small error at the bow is amplified downrange: `miss = distance × error / lever-arm`. Reports the amplification factor ("1 mm at the bow → N mm at the target") and the equivalent angular error. Generalizes to any launch-point error (nock, release, sight). |
 | **MOA / mrad + sight clicks** | Two-way angle ↔ linear-size conversion at any distance (`1 mrad @ D(m) = D mm`; `1 MOA ≈ 0.291·D mm`), plus a per-click sight-movement helper. |
 | **Group → dispersion projection** | Turns a group size at one distance into an angular spread (MOA/mrad) and projects the expected group at another distance by pure angular scaling — a geometric lower bound (real groups grow faster with drop/wind). |
@@ -384,6 +383,16 @@ how bias and dispersion grow with range — and **shrinks** that growth
 (James-Stein style) toward the AGB handicap distance coefficient rather
 than trusting a flat fit. Gravity drop and wind aren't modelled; the
 results surface σ in mrad so you can sanity-check.
+
+An optional **Fuzzy Factor** calibrates the forecast to reality. The pure-trig
+model knows your group geometry but not the confounders that cost real points —
+nerves, wind, fatigue, fliers. So Apollo pools all your scored history, compares
+what you actually scored against what the model predicts (a server-side
+Monte-Carlo of the same fit), and distils it to one scale-free coefficient:
+"you shoot about *X*% of the pure-trig projection." Shrunk toward 1.0 when you
+have few scores and clamped, it multiplies into the forecast at any face or
+distance — and the calibrated distribution is drawn as a second histogram over
+the raw one so you can see the correction.
 
 ---
 

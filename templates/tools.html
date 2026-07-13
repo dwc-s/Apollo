@@ -341,19 +341,6 @@
     <p class="tool-note">KE (ft·lb) = mass × velocity² ÷ 450,240. Momentum (slug·ft/s) = mass × velocity ÷ 225,400.</p>
 </details>
 
-<!-- ── Arrow trajectory (parabola) ────────────────────────────────────── -->
-<details class="tool-panel" id="tool-traj">
-    <summary><h3>Arrow trajectory (parabola)</h3></summary>
-    <p class="tool-desc">The idealized, drag-free flight path — a true parabola. Enter your arrow speed and the target distance to get the elevation angle to hit dead-on, how high the arrow arcs above your line of sight, the time of flight, and how far it would drop if you aimed straight at the target. A real arrow drops <em>more</em> than this (air drag), so treat the numbers as a floor and the shape as intuition.</p>
-    <div class="tool-row">
-        <label><span>Arrow speed (<span class="trig-u-spd">m/s</span>)</span><input type="number" id="traj-speed" value="61" min="1" step="1"></label>
-        <label><span>Target distance (<span class="trig-u-dist">m</span>)</span><input type="number" id="traj-dist" value="18" min="1" step="1"></label>
-    </div>
-    <div class="tool-result" id="traj-result">—</div>
-    <svg id="traj-plot" viewBox="0 0 320 170" width="100%" style="max-width:520px;display:block;margin:10px auto 0;background:#eef2f9;border-radius:10px;" aria-label="trajectory plot"></svg>
-    <p class="tool-note">Idealized model: θ = ½·asin(g·D/v²) (low trajectory), arc y = x·tanθ − g·x²/(2v²cos²θ). The dashed line is your line of sight; the curve is the arrow's path. Speed can be estimated with the <em>Arrow speed</em> tool above.</p>
-</details>
-
 <!-- ── Bow-hand error → deviation ─────────────────────────────────────── -->
 <details class="tool-panel" id="tool-formerr">
     <summary><h3>Bow-hand error → deviation</h3></summary>
@@ -425,7 +412,7 @@
     // in the trig section below) because refreshUnits()'s initial call
     // runs the trig recalcs before that section — a const there would be
     // in its temporal dead zone, exactly the TDZ the old elevation tool
-    // hit. Function declarations (the recalc*/drawTrajPlot below) hoist,
+    // hit. Function declarations (the recalc* functions below) hoist,
     // so only these consts need lifting.
     const fmtDist  = (m) => isImp() ? fmt(m / 0.9144, 1) + ' yd' : fmt(m, 1) + ' m';
     const moaMm    = (Dm) => Dm * 1000 * Math.tan(Math.PI / (180 * 60)); // mm per MOA at D
@@ -515,11 +502,9 @@
     // group lists its inputs, the unit-label class, the unit strings, the
     // metric⇄imperial conversions, and the display decimals per system.
     const trigUnitGroups = [
-        { ids: ['traj-dist', 'formerr-dist', 'angle-dist', 'disp-d1', 'disp-d2'],
+        { ids: ['formerr-dist', 'angle-dist', 'disp-d1', 'disp-d2'],
           cls: 'trig-u-dist', met: 'm', imp: 'yd',
           toImp: v => v / 0.9144, toMet: v => v * 0.9144, dM: 1, dI: 1 },
-        { ids: ['traj-speed'], cls: 'trig-u-spd', met: 'm/s', imp: 'fps',
-          toImp: v => v / 0.3048, toMet: v => v * 0.3048, dM: 0, dI: 0 },
         { ids: ['formerr-err', 'formerr-lever'], cls: 'trig-u-mm', met: 'mm', imp: 'in',
           toImp: v => v / 25.4, toMet: v => v * 25.4, dM: 1, dI: 3 },
         { ids: ['angle-size', 'disp-group'], cls: 'trig-u-cm', met: 'cm', imp: 'in',
@@ -572,7 +557,6 @@
         odFields.forEach(({ label }) => { label.textContent = wanted; });
         setTrigLabels(imperial);
         recalcWind();
-        recalcTraj();
         recalcFormErr();
         recalcAngle();
         recalcDisp();
@@ -835,74 +819,6 @@
     ['ke-weight', 'ke-speed']
         .forEach(id => $(id).addEventListener('input', recalcKe));
     recalcKe();
-
-    // ── Arrow trajectory (parabola) ──────────────────────────────────
-    // Idealized drag-free projectile. Given speed v and level target
-    // distance D: the low launch angle is θ = ½·asin(g·D/v²); the arc is
-    // y = x·tanθ − g·x²/(2v²cos²θ). Everything runs in SI internally.
-    function recalcTraj() {
-        const out = $('traj-result'), plot = $('traj-plot');
-        const v = gv('traj-speed'), D = gv('traj-dist');
-        if (!(v > 0) || !(D > 0)) { out.textContent = '—'; if (plot) plot.innerHTML = ''; return; }
-        const g = 9.81;
-        const v_ms = isImp() ? v * 0.3048 : v;
-        const D_m  = isImp() ? D * 0.9144 : D;
-        const maxRange = v_ms * v_ms / g;                 // 45° vacuum range
-        const s = g * D_m / (v_ms * v_ms);
-        if (s > 1) {
-            out.innerHTML =
-                '<div class="result-line"><strong>Out of range (idealized).</strong></div>' +
-                '<div class="result-sub">Even a 45° lob reaches only ' + fmtDist(maxRange) +
-                ' at this speed. Increase speed or shorten the shot.</div>';
-            drawTrajPlot(plot, null, D_m, v_ms);
-            return;
-        }
-        const theta = 0.5 * Math.asin(s);                 // radians (low root)
-        const st = Math.sin(theta), ct = Math.cos(theta);
-        const H = v_ms * v_ms * st * st / (2 * g);        // peak above line of sight
-        const T = D_m / (v_ms * ct);                      // time of flight
-        const dropLevel = g * D_m * D_m / (2 * v_ms * v_ms); // drop if aimed level
-        const degs = theta * 180 / Math.PI;
-        out.innerHTML =
-            '<div class="result-line"><strong>Elevation angle:</strong> ' + fmt(degs, 2) +
-                '° (' + fmt(degs * 60, 0) + ' MOA)</div>' +
-            '<div class="result-line"><strong>Peak above line of sight:</strong> ' +
-                fmt(H * 100, 1) + ' cm (' + fmt(H / 0.0254, 1) + ' in)</div>' +
-            '<div class="result-sub">Time of flight: ' + fmt(T, 2) + ' s · ' +
-                'drop if aimed level: ' + fmt(dropLevel * 100, 1) + ' cm (' +
-                fmt(dropLevel / 0.0254, 1) + ' in) · idealized max range: ' + fmtDist(maxRange) +
-                '</div>';
-        drawTrajPlot(plot, theta, D_m, v_ms);
-    }
-    // Draw the arc + line of sight as an inline SVG path, auto-scaled so
-    // the apex touches the top padding. theta === null clears the curve.
-    function drawTrajPlot(svg, theta, D, v) {
-        if (!svg) return;
-        const W = 320, Hh = 170, padL = 10, padR = 10, padT = 14, padB = 20;
-        const xL = padL, xR = W - padR, yB = Hh - padB;
-        if (theta == null || !(D > 0)) { svg.innerHTML = ''; return; }
-        const g = 9.81, N = 64, ct = Math.cos(theta);
-        const pts = [];
-        let peak = 0, apex = [0, 0];
-        for (let i = 0; i <= N; i++) {
-            const x = D * i / N;
-            const y = x * Math.tan(theta) - g * x * x / (2 * v * v * ct * ct);
-            const yy = Math.max(0, y);
-            pts.push([x, yy]);
-            if (yy > peak) { peak = yy; apex = [x, yy]; }
-        }
-        const sx = (x) => xL + (x / D) * (xR - xL);
-        const sy = (y) => yB - (peak > 1e-6 ? (y / peak) * (yB - padT) : 0);
-        const path = pts.map((p, i) => (i ? 'L' : 'M') + fmt(sx(p[0]), 1) + ' ' + fmt(sy(p[1]), 1)).join(' ');
-        svg.innerHTML =
-            '<line x1="' + fmt(sx(0), 1) + '" y1="' + fmt(sy(0), 1) + '" x2="' + fmt(sx(D), 1) +
-                '" y2="' + fmt(sy(0), 1) + '" stroke="#95abcf" stroke-width="1.5" stroke-dasharray="4 3"/>' +
-            '<path d="' + path + '" fill="none" stroke="#1a3a5c" stroke-width="2"/>' +
-            '<circle cx="' + fmt(sx(apex[0]), 1) + '" cy="' + fmt(sy(apex[1]), 1) +
-                '" r="3.2" fill="#fcba03" stroke="#1a3a5c" stroke-width="1"/>' +
-            '<circle cx="' + fmt(sx(D), 1) + '" cy="' + fmt(sy(0), 1) + '" r="3.2" fill="#1a3a5c"/>';
-    }
-    ['traj-speed', 'traj-dist'].forEach(id => $(id).addEventListener('input', recalcTraj));
 
     // ── Bow-hand error → deviation ───────────────────────────────────
     // A launch-point error e over lever arm L rotates the shot by

@@ -24,6 +24,12 @@
             text-transform: uppercase;
             font-weight: 700;
         }
+        /* Weather grid cells: the grid gap handles spacing, so drop the
+           per-label bottom margin and shrink the caption a touch. */
+        .edit-panel .wx-field {
+            margin-bottom: 0;
+            font-size: 0.68rem;
+        }
         .edit-panel input[type=text],
         .edit-panel input[type=number],
         .edit-panel select,
@@ -142,7 +148,7 @@
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 
     <label>Bow
-        <select name="bow">
+        <select name="bow" id="bow">
             {% if current.bow and current.bow not in bow_models %}
             <option value="{{ current.bow }}" selected>{{ current.bow }} (no longer in bows)</option>
             {% endif %}
@@ -151,6 +157,8 @@
             {% endfor %}
         </select>
     </label>
+
+    {% include '_bow_style_settings.html' %}
 
     <label>Arrow
         <select name="arrow_type">
@@ -195,12 +203,24 @@
         {% if wx and wx.source %}<span style="text-transform:none;font-weight:400;color:#33507d;"> — logged {{ wx.source }}</span>{% endif %}
     </label>
     <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:12px;">
-        <input type="number" step="any" name="wx_temp_c" placeholder="Temp °C" value="{% if wx and wx.temp_c is not none %}{{ wx.temp_c }}{% endif %}">
-        <input type="number" step="any" name="wx_wind_kmh" placeholder="Wind km/h" value="{% if wx and wx.wind_kmh is not none %}{{ wx.wind_kmh }}{% endif %}">
-        <input type="number" step="any" name="wx_gust_kmh" placeholder="Gust km/h" value="{% if wx and wx.gust_kmh is not none %}{{ wx.gust_kmh }}{% endif %}">
-        <input type="number" step="any" name="wx_wind_dir_deg" placeholder="Wind dir °" value="{% if wx and wx.wind_dir_deg is not none %}{{ wx.wind_dir_deg }}{% endif %}">
-        <input type="number" step="any" name="wx_humidity_pct" placeholder="Humidity %" value="{% if wx and wx.humidity_pct is not none %}{{ wx.humidity_pct }}{% endif %}">
-        <input type="number" step="any" name="wx_pressure_hpa" placeholder="Pressure hPa" value="{% if wx and wx.pressure_hpa is not none %}{{ wx.pressure_hpa }}{% endif %}">
+        <label class="wx-field">Temp (°C)
+            <input type="number" step="any" name="wx_temp_c" placeholder="Temp °C" value="{% if wx and wx.temp_c is not none %}{{ wx.temp_c }}{% endif %}">
+        </label>
+        <label class="wx-field">Wind (km/h)
+            <input type="number" step="any" name="wx_wind_kmh" placeholder="Wind km/h" value="{% if wx and wx.wind_kmh is not none %}{{ wx.wind_kmh }}{% endif %}">
+        </label>
+        <label class="wx-field">Gust (km/h)
+            <input type="number" step="any" name="wx_gust_kmh" placeholder="Gust km/h" value="{% if wx and wx.gust_kmh is not none %}{{ wx.gust_kmh }}{% endif %}">
+        </label>
+        <label class="wx-field">Wind dir (°)
+            <input type="number" step="any" name="wx_wind_dir_deg" placeholder="Wind dir °" value="{% if wx and wx.wind_dir_deg is not none %}{{ wx.wind_dir_deg }}{% endif %}">
+        </label>
+        <label class="wx-field">Humidity (%)
+            <input type="number" step="any" name="wx_humidity_pct" placeholder="Humidity %" value="{% if wx and wx.humidity_pct is not none %}{{ wx.humidity_pct }}{% endif %}">
+        </label>
+        <label class="wx-field">Pressure (hPa)
+            <input type="number" step="any" name="wx_pressure_hpa" placeholder="Pressure hPa" value="{% if wx and wx.pressure_hpa is not none %}{{ wx.pressure_hpa }}{% endif %}">
+        </label>
     </div>
 
     <h3 style="margin-top:1.4rem;font-family:'Quantico',sans-serif;">Shots ({{ shots|length }})</h3>

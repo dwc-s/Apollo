@@ -202,13 +202,32 @@
     plugins: [percentileLines],
     data: {
       labels: binLabels,
-      datasets: [{
-        label: 'Runs',
-        data: bins.slice(),
-        backgroundColor: '#4d6da6',
-        borderColor: '#1a3a5c',
-        borderWidth: 1,
-      }],
+      datasets: [
+        {
+          label: 'Model',
+          data: bins.slice(),
+          backgroundColor: '#4d6da6',
+          borderColor: '#1a3a5c',
+          borderWidth: 1,
+          // grouped:false makes both series share the same x positions
+          // (overlaid histograms, not dodged side-by-side bars).
+          grouped: false,
+        },
+        {
+          // Fuzzy-calibrated distribution, overlaid as a SECOND histogram once
+          // the Fuzzy Factor is applied. Empty + hidden (and legend off) until
+          // then, so an uncalibrated run looks exactly as before. The
+          // semi-transparent amber fill lets the two histograms read through
+          // each other where they overlap.
+          label: 'Calibrated',
+          data: [],
+          backgroundColor: 'rgba(185, 119, 14, 0.55)',
+          borderColor: '#b9770e',
+          borderWidth: 1,
+          grouped: false,
+          hidden: true,
+        },
+      ],
     },
     options: {
       responsive: true,
@@ -234,7 +253,11 @@
     },
   });
 
-  const scores = [];
+  const scores = [];        // raw per-run totals
+  // Fuzzy-calibrated copies, filled once at finalize when the FF applies. Kept
+  // separate so the raw and calibrated distributions can be charted together.
+  let calScores = null;
+  let calBins = null;
   const progressEl = document.getElementById('run-progress');
   const statEls = {};
   document.querySelectorAll('#stats-grid [data-stat]').forEach(el => {
@@ -247,7 +270,9 @@
   }
 
   function updateStats() {
-    const n = scores.length;
+    // Report the calibrated distribution once it exists, else the raw one.
+    const data = calScores || scores;
+    const n = data.length;
     statEls.n.textContent = String(n);
     if (n === 0) return;
     let sum = 0;
@@ -255,7 +280,7 @@
     let max = -Infinity;
     let hitsTarget = 0;
     for (let i = 0; i < n; i++) {
-      const s = scores[i];
+      const s = data[i];
       sum += s;
       if (s < min) min = s;
       if (s > max) max = s;
@@ -265,9 +290,9 @@
     }
     const mean = sum / n;
     let varSum = 0;
-    for (let i = 0; i < n; i++) varSum += (scores[i] - mean) ** 2;
+    for (let i = 0; i < n; i++) varSum += (data[i] - mean) ** 2;
     const std = n > 1 ? Math.sqrt(varSum / (n - 1)) : 0;
-    const sorted = scores.slice().sort((a, b) => a - b);
+    const sorted = data.slice().sort((a, b) => a - b);
     const pct = (p) => {
       const k = (sorted.length - 1) * p;
       const lo = Math.floor(k);
@@ -293,6 +318,10 @@
 
   function updateChart() {
     chart.data.datasets[0].data = bins.slice();
+    if (calBins) {
+      chart.data.datasets[1].data = calBins.slice();
+      chart.data.datasets[1].hidden = false;
+    }
     chart.update('none');
   }
 
@@ -322,6 +351,60 @@
   }
 
   // -------------------------------------------------------------------
+  // Fuzzy Factor calibration (set up once; the calibrated histogram then
+  // builds in real time, in lockstep with the raw one).
+  // -------------------------------------------------------------------
+  // The server computes ONE archer-level coefficient from all their scored
+  // history (real scored points ÷ what the fitted model predicts), already
+  // shrunk toward 1.0 and clamped. Being scale-free it applies at any
+  // face/distance, so every simulated run total is multiplied by it (then
+  // clamped to [0, endpoint max]) AS the run happens. A zero/absent `fuzzy`
+  // payload = no calibration.
+  const fuzzy = payload.fuzzy || { enabled: false };
+  const fuzzyNote = document.getElementById('fuzzy-note');
+  function showFuzzyNote(text, unavailable) {
+    if (!fuzzyNote) return;
+    fuzzyNote.textContent = text;
+    fuzzyNote.classList.toggle('unavailable', !!unavailable);
+    fuzzyNote.hidden = false;
+  }
+  // Set once when the FF is active; drives the per-run calibration in step().
+  let ffValue = null;
+  function setupFuzzy() {
+    if (!fuzzy || !fuzzy.enabled) return;
+    if (fuzzy.unavailable) {
+      showFuzzyNote(fuzzy.reason || 'Fuzzy factor unavailable.', true);
+      return;
+    }
+    const ff = Number(fuzzy.ff);
+    const n = Number(fuzzy.n_obs) || 0;
+    if (!Number.isFinite(ff) || ff <= 0) return;
+    ffValue = ff;
+    // Start the calibrated distribution empty; it fills alongside the raw one
+    // in step(). Reveal the overlay + legend up front so both histograms
+    // animate together.
+    calScores = [];
+    calBins = new Array(bins.length).fill(0);
+    chart.data.datasets[1].label = `Calibrated (Fuzzy factor ${ff.toFixed(2)})`;
+    chart.data.datasets[1].hidden = false;
+    chart.data.datasets[0].backgroundColor = 'rgba(77, 109, 166, 0.6)';
+    chart.options.plugins.legend.display = true;
+    const pct = Math.round(ff * 100);
+    showFuzzyNote(
+      `Fuzzy factor ${ff.toFixed(2)} · learned from ${n} scored ` +
+      `session${n === 1 ? '' : 's'} — you shoot about ${pct}% of the ` +
+      `pure-trig projection, so the whole forecast is scaled to match.`,
+      false);
+  }
+  // Calibrated run total from a raw one: multiply by FF, clamp to [0, max].
+  function calibrate(total) {
+    let cs = Math.round(total * ffValue);
+    if (cs < 0) cs = 0;
+    if (endpointMax > 0 && cs > endpointMax) cs = endpointMax;
+    return cs;
+  }
+
+  // -------------------------------------------------------------------
   // Drive the simulation in requestAnimationFrame batches.
   // -------------------------------------------------------------------
   // Larger batches when n_runs is high; we still aim for ~10 frames of
@@ -336,12 +419,19 @@
       const s = runOnce();
       scores.push(s);
       bins[binFor(s)]++;
+      // When the FF is active, calibrate this run immediately so the
+      // calibrated histogram fills in real time alongside the raw one.
+      if (ffValue !== null) {
+        const cs = calibrate(s);
+        calScores.push(cs);
+        calBins[binFor(cs)]++;
+      }
       doneRuns++;
       // Safety: cap each frame at ~16 ms even if batchSize was too generous.
       if (performance.now() - start > 16) break;
     }
     // Stats first so the marker plugin sees the latest percentiles when the
-    // chart redraws.
+    // chart redraws. updateStats reads the calibrated scores when active.
     updateStats();
     updateChart();
     if (progressEl) {
@@ -354,5 +444,6 @@
     }
   }
 
+  setupFuzzy();
   requestAnimationFrame(step);
 })();

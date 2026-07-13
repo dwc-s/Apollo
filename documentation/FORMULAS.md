@@ -322,6 +322,33 @@ holds). A face shot at ≥ 2 known distances becomes a trend line; at a single
 distance, one marker. Because both reports share the fixed-seed helper, a point
 here equals the matching panel in §4.1 exactly. `% of max = expected / max_ring · 100`.
 
+### 4.5 Fuzzy Factor — `_fuzzy_global`, `_model_expected_ppa`
+An opt-in global calibration that scales the pure-trig forecast to the archer's
+real results. It answers "across everything you've actually scored, how do your
+real points compare to what your fitted model predicts?" as a single scale-free
+ratio:
+
+`FF_raw = Σ actual points ÷ Σ model-predicted points`, summed over every
+`(session, face, distance)` group in the archer's scored history (each group
+needs `≥ _FUZZY_MIN_GROUP_ARROWS` = 3 arrows). The **predicted** side is
+`_model_expected_ppa`: a server-side Monte-Carlo that samples the *same* fitted
+angular Gaussian the client sim uses (§4.2) — per-distance mean + covariance,
+line-cutter scoring, empirical miss rate — so "predicted" means exactly what the
+forecast projects. The **actual** side scores the real shots against the same
+face zones.
+
+Because the angular model already scales dispersion with distance (§4.3), the
+residual `FF` is distance-agnostic — the leftover gap the geometry can't see
+(nerves, wind, fatigue, fliers). So one number applies to **any** face/distance
+the forecast targets, including combinations never shot.
+
+The raw ratio is **shrunk toward 1.0** by observation count and **clamped**:
+`FF = clamp(1 + (FF_raw − 1)·n/(n + _FUZZY_SHRINK_C), _FUZZY_MIN, _FUZZY_MAX)`
+with `_FUZZY_SHRINK_C = 3`, `[_FUZZY_MIN, _FUZZY_MAX] = [0.6, 1.4]`, and `n` = the
+number of scored sessions (needs `≥ _FUZZY_MIN_OBS` = 2). The browser multiplies
+every simulated run total by `FF` (clamped to `[0, endpoint max]`) as the run
+happens, so a second "Calibrated" histogram grows in real time beside the raw one.
+
 ---
 
 ## 5. Reports built on the above
@@ -486,28 +513,14 @@ The geometry helpers on the Tools page are pure client-side calculators in
 follow the global metric/imperial toggle (values convert at the display
 boundary via `trigUnitGroups`; the math below is in SI). `g = 9.81 m/s²`.
 
-### 8.1 Arrow trajectory (parabola) — `recalcTraj` / `drawTrajPlot`
-Idealized, drag-free projectile: speed `v` (m/s) to a **level** target at range
-`D` (m).
-- **Reachable** iff `g·D/v² ≤ 1`; beyond that the target is past the 45° vacuum
-  range `v²/g`.
-- **Elevation angle** (low root): `θ = ½·asin(g·D/v²)`.
-- **Arc over the line of sight**: `y(x) = x·tanθ − g·x²/(2·v²·cos²θ)`, `x ∈ [0, D]`.
-- **Peak above the line of sight**: `H = v²·sin²θ / (2g)`.
-- **Time of flight**: `T = D / (v·cosθ)`.
-- **Drop if aimed level** (`θ = 0`): `g·D² / (2v²)`.
-The plot samples `y(x)` at 64 points and auto-scales the apex to the top of the
-box; the dashed baseline is the line of sight. It is a *floor* — a real arrow
-fights drag and drops more, growing with distance.
-
-### 8.2 Bow-hand error → deviation — `recalcFormErr`
+### 8.1 Bow-hand error → deviation — `recalcFormErr`
 A lateral launch-point error `e` over lever arm `L` (≈ draw length) rotates the
 shot by `α = atan(e/L)`; at range `D` the miss is `D·tan(α)` (`≈ D·e/L` for small
 `α`). The **amplification** is `A = D/L` ("1 mm at the bow → `A` mm at the
 target"). Angular error is reported in degrees and MOA (`×60`). Applies to any
 launch-point error — nocking point, release, sight — not just the bow hand.
 
-### 8.3 MOA / mrad + sight clicks — `recalcAngle`
+### 8.2 MOA / mrad + sight clicks — `recalcAngle`
 Linear size `s` an angle subtends at range `D` (metres):
 - **mrad**: `s = D` mm per mrad (1 mrad = 70 mm at 70 m) — `mradMm(D) = D`.
 - **MOA**: `s = D·1000·tan(π/(180·60)) ≈ 0.2909·D` mm — `moaMm(D)` (≈ 29.1 mm at
@@ -516,7 +529,7 @@ Both directions (`angle → size`, and `size → angle` via `mrad = s_mm/D`,
 `MOA = s_mm / moaMm(D)`), plus a sight click of `c` units → `c · (mm per unit)`
 at `D`.
 
-### 8.4 Group → dispersion projection — `recalcDisp`
+### 8.3 Group → dispersion projection — `recalcDisp`
 A group of size `g` at range `D₁` is angular dispersion `g/D₁`
 (`mrad = g_mm/D₁`, `MOA = g_mm / moaMm(D₁)`); the projected group at `D₂` is
 `g · D₂/D₁` (similar triangles). A geometric best case — real groups grow faster
