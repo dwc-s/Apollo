@@ -528,6 +528,16 @@
               {{ stats['missed_shots'] }} missed ({{ stats['percent_missed'] }}%)
             </span>
             <div class="session-actions" style="display:flex;gap:8px;align-items:center;">
+              {% if stats['pretty_session_length'] == 'Session incomplete' %}
+              <form method="POST"
+                    action="{{ url_for('complete_session', session_id=session_id) }}"
+                    class="complete-session-form"
+                    onsubmit="return confirm('Complete this session? Its end time is set to the last shot.');">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <button type="submit" class="edit-session-btn" title="Set an end time for this incomplete session"
+                        style="font-family:'Quantico',sans-serif;font-size:0.8rem;letter-spacing:0.05em;text-transform:uppercase;padding:4px 12px;border-radius:4px;border:1px solid #3a5c1a;background:transparent;color:#cfe0f7;cursor:pointer;">Complete</button>
+              </form>
+              {% endif %}
               <a href="{{ url_for('edit_session', session_id=session_id) }}"
                  class="edit-session-btn"
                  title="Edit this session"

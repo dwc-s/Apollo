@@ -5116,6 +5116,9 @@ def inject_template_globals():
         archer_genders=ARCHER_GENDERS,
         archer_age_groups=ARCHER_AGE_GROUPS,
         archer_bowstyles=ARCHER_BOWSTYLES,
+        # Lazy callable — only the account page's tag manager invokes it, so
+        # no DB work on any other template.
+        deletable_tags=_deletable_user_tags,
     )
 
 def _splash_user_summary(user_id):
@@ -5793,6 +5796,52 @@ def account():
         g.pop('_current_user', None)
         return render_template('account.html', error=None,
                                success=f"Your timezone set to {new_tz}.")
+
+    # Delete a tag everywhere it appears across the user's shots. Per-user data
+    # cleanup, non-credential — no password re-prompt (like the timezone
+    # change). Structural/reserved tags are refused server-side even though the
+    # UI already hides them, so a forged POST can't corrupt round/handicap data.
+    if action == 'delete_tag':
+        tag = (request.form.get('tag') or '').strip()
+        if not tag or _is_reserved_tag(tag):
+            return render_template('account.html',
+                error="That tag can't be deleted.", success=None), 400
+        key = tag.lower()
+        touched = set()
+        try:
+            with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
+                rows = cur.execute(
+                    "SELECT id, session_id, session_tags FROM apollo "
+                    "WHERE user_id = %s AND session_tags IS NOT NULL "
+                    "AND session_tags <> '' AND LOWER(session_tags) LIKE %s",
+                    (user['rowid'], f"%{key}%")
+                ).fetchall()
+                for r in rows:
+                    parts = [p.strip() for p in (r['session_tags'] or '').split(',')]
+                    kept = [p for p in parts if p and p.lower() != key]
+                    # LIKE is a substring prefilter; only rewrite when a *whole*
+                    # tag token actually matched.
+                    if len(kept) == len(parts):
+                        continue
+                    cur.execute(
+                        "UPDATE apollo SET session_tags = %s "
+                        "WHERE id = %s AND user_id = %s",
+                        (_normalize_tags(', '.join(kept)), r['id'], user['rowid'])
+                    )
+                    touched.add(r['session_id'])
+                con.commit()
+        except SQLAlchemyError as e:
+            print(f"❌ delete_tag error: {e}")
+            return render_template('account.html',
+                error="Could not delete the tag — please try again.",
+                success=None), 500
+        n = len(touched)
+        if n:
+            return render_template('account.html', error=None,
+                success=f'Removed the tag "{tag}" from {n} '
+                        f'session{"s" if n != 1 else ""}.')
+        return render_template('account.html', error=None,
+            success=f'No sessions were tagged "{tag}".')
 
     # Archer profile (gender / age group / default bowstyle) drives the
     # classification category. Display-only preference — no password re-prompt.
@@ -9619,6 +9668,64 @@ def edit_session(session_id):
                          wx_vals['wx_humidity_pct'], wx_vals['wx_pressure_hpa'],
                          session_id, user_id))
 
+                # Session times (optional). A blank field leaves the stored
+                # value untouched, so a routine edit never disturbs times;
+                # filling in the end time is what *completes* an incomplete
+                # session. Unparseable begin/end are flagged and skipped.
+                begin_raw = (request.form.get('session_begin_time') or '').strip()
+                end_raw = (request.form.get('session_end_time') or '').strip()
+                manual_raw = (request.form.get(
+                    'manual_session_length_minutes') or '').strip()
+                st_row = cur.execute(
+                    "SELECT session_begin_time, session_end_time, "
+                    "manual_session_length_minutes FROM session_times "
+                    "WHERE session_id = %s AND user_id = %s",
+                    (session_id, user_id)).fetchone()
+                new_begin = st_row['session_begin_time'] if st_row else None
+                new_end = st_row['session_end_time'] if st_row else None
+                new_manual = st_row['manual_session_length_minutes'] if st_row else None
+                time_bad = False
+                if begin_raw:
+                    pb = _parse_session_dt_user(begin_raw)
+                    if pb is None:
+                        time_bad = True
+                    else:
+                        new_begin = pb
+                if end_raw:
+                    pe = _parse_session_dt_user(end_raw)
+                    if pe is None:
+                        time_bad = True
+                    else:
+                        new_end = pe
+                if manual_raw:
+                    try:
+                        new_manual = float(manual_raw)
+                    except ValueError:
+                        time_bad = True
+                # Never leave begin NULL if we can derive it from the shots.
+                if new_begin is None:
+                    earliest = cur.execute(
+                        "SELECT MIN(timestamp) FROM apollo "
+                        "WHERE session_id = %s AND user_id = %s",
+                        (session_id, user_id)).fetchone()
+                    new_begin = earliest[0] if earliest and earliest[0] else None
+                if st_row is not None:
+                    cur.execute(
+                        "UPDATE session_times SET session_begin_time = %s, "
+                        "session_end_time = %s, "
+                        "manual_session_length_minutes = %s "
+                        "WHERE session_id = %s AND user_id = %s",
+                        (new_begin, new_end, new_manual, session_id, user_id))
+                elif new_begin is not None or new_end is not None:
+                    cur.execute(
+                        "INSERT INTO session_times (user_id, session_id, "
+                        "session_begin_time, session_end_time, "
+                        "manual_session_length_minutes) VALUES (%s, %s, %s, %s, %s)",
+                        (user_id, session_id, new_begin, new_end, new_manual))
+                if time_bad:
+                    flash("Session times must be YYYY-MM-DD HH:MM:SS — "
+                          "left unchanged.")
+
                 con.commit()
                 flash("Session updated.")
                 return redirect(url_for('previous_sessions'))
@@ -9642,10 +9749,26 @@ def edit_session(session_id):
             targets_list = [{'rowid': r['rowid'], 'name': _display_target_name(r['name'])} for r in target_rows]
             wx_row = cur.execute(
                 "SELECT wx_temp_c, wx_wind_kmh, wx_gust_kmh, wx_wind_dir_deg, "
-                "wx_humidity_pct, wx_pressure_hpa, wx_source FROM session_times "
+                "wx_humidity_pct, wx_pressure_hpa, wx_source, "
+                "session_begin_time, session_end_time, "
+                "manual_session_length_minutes FROM session_times "
                 "WHERE session_id = %s AND user_id = %s",
                 (session_id, user_id)
             ).fetchone()
+            # Every session (begin time + target + distance + shot count) so we
+            # can offer time-adjacent, same-target/distance merge candidates.
+            # Server re-validates on POST; this only drives the picker.
+            cand_rows = cur.execute(
+                "SELECT a.session_id AS sid, MIN(st.session_begin_time) AS begin_t, "
+                "       COUNT(*) AS n, MIN(a.target_id) AS target_id, "
+                "       MIN(a.distance) AS distance "
+                "FROM apollo a "
+                "JOIN session_times st ON st.session_id = a.session_id "
+                "                      AND st.user_id = a.user_id "
+                "WHERE a.user_id = %s "
+                "GROUP BY a.session_id",
+                (user_id,)
+            ).fetchall()
     except SQLAlchemyError as e:
         print(f"❌ Edit-session error: {e}")
         flash("Could not load session for editing — please try again.")
@@ -9679,6 +9802,48 @@ def edit_session(session_id):
         'humidity_pct': wx_row['wx_humidity_pct'],
         'pressure_hpa': wx_row['wx_pressure_hpa'], 'source': wx_row['wx_source'],
     } if wx_row else None
+    # Session times for the edit form. An empty end field reads as
+    # "incomplete"; filling it in is what completes the session.
+    times = {
+        'begin': (_format_session_dt_user(wx_row['session_begin_time'])
+                  if wx_row and wx_row['session_begin_time'] else ''),
+        'end': (_format_session_dt_user(wx_row['session_end_time'])
+                if wx_row and wx_row['session_end_time'] else ''),
+        'manual_minutes': (wx_row['manual_session_length_minutes']
+                           if wx_row and wx_row['manual_session_length_minutes']
+                           is not None else ''),
+        'incomplete': bool(wx_row and wx_row['session_end_time'] is None),
+    }
+    # Eligible merge targets: the user's *other* sessions sharing this one's
+    # target and distance and falling on the same local calendar day.
+    this_target = first['target_id']
+    this_distance = (first['distance'] or '').strip()
+    this_begin = None
+    for c in (cand_rows or []):
+        if int(c['sid']) == session_id:
+            this_begin = c['begin_t']
+            break
+    this_day = None
+    if this_begin is not None:
+        _d = _utc_to_user(this_begin)
+        this_day = _d.date() if _d else None
+    merge_candidates = []
+    if this_day is not None:
+        for c in (cand_rows or []):
+            sid = int(c['sid'])
+            if sid == session_id or c['target_id'] != this_target:
+                continue
+            if (c['distance'] or '').strip() != this_distance:
+                continue
+            cd = _utc_to_user(c['begin_t'])
+            if cd is None or cd.date() != this_day:
+                continue
+            merge_candidates.append({
+                'session_id': sid,
+                'when': _format_session_dt_user(c['begin_t']) or str(c['begin_t']),
+                'n': int(c['n']),
+            })
+        merge_candidates.sort(key=lambda x: x['session_id'])
     # Bow gear/tuning prefill for the shared _bow_style_settings partial. Reuse
     # the create-flow map (last-used values per bow), then override THIS
     # session's bow with the settings the session actually recorded, so the
@@ -9702,9 +9867,150 @@ def edit_session(session_id):
         targets_list=targets_list,
         tag_suggestions=_distinct_user_tags(user_id),
         wx=wx_current,
+        times=times,
+        merge_candidates=merge_candidates,
         bowstyle_settings=BOWSTYLE_SETTINGS,
         style_settings_by_bow=style_by_bow,
     )
+
+
+@app.route('/complete_session/<int:session_id>', methods=['POST'])
+@login_required
+def complete_session(session_id):
+    """Stamp an end time on an incomplete session (NULL session_end_time),
+    using its last shot's timestamp. One-click counterpart to editing the
+    times by hand. No-op if the session is already complete."""
+    user_id = current_user_id()
+    try:
+        with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
+            owner = cur.execute(
+                "SELECT 1 FROM apollo WHERE session_id = %s AND user_id = %s LIMIT 1",
+                (session_id, user_id)).fetchone()
+            if owner is None:
+                abort(404)
+            last = cur.execute(
+                "SELECT MAX(timestamp) FROM apollo "
+                "WHERE session_id = %s AND user_id = %s",
+                (session_id, user_id)).fetchone()
+            end_ts = last[0] if last and last[0] else _app_now()
+            st = cur.execute(
+                "SELECT session_end_time FROM session_times "
+                "WHERE session_id = %s AND user_id = %s",
+                (session_id, user_id)).fetchone()
+            if st is None:
+                # No session_times row (e.g. imported shots) — create one,
+                # begin from the earliest shot, end from the latest.
+                begin = cur.execute(
+                    "SELECT MIN(timestamp) FROM apollo "
+                    "WHERE session_id = %s AND user_id = %s",
+                    (session_id, user_id)).fetchone()
+                begin_ts = begin[0] if begin and begin[0] else end_ts
+                cur.execute(
+                    "INSERT INTO session_times (user_id, session_id, "
+                    "session_begin_time, session_end_time, "
+                    "manual_session_length_minutes) VALUES (%s, %s, %s, %s, %s)",
+                    (user_id, session_id, begin_ts, end_ts, None))
+                con.commit()
+                flash("Session completed.")
+            elif st['session_end_time'] is None:
+                cur.execute(
+                    "UPDATE session_times SET session_end_time = %s "
+                    "WHERE session_id = %s AND user_id = %s "
+                    "AND session_end_time IS NULL",
+                    (end_ts, session_id, user_id))
+                con.commit()
+                flash("Session completed.")
+            else:
+                flash("That session was already complete.")
+    except SQLAlchemyError as e:
+        print(f"❌ complete_session error: {e}")
+        flash("Could not complete the session — please try again.")
+    return redirect(url_for('previous_sessions'))
+
+
+@app.route('/merge_session/<int:source_id>', methods=['POST'])
+@login_required
+def merge_session(source_id):
+    """Merge one session's shots into a time-adjacent sibling that shares its
+    target and distance. Moves the apollo rows to the target session_id,
+    combines the session_times span, and drops the now-empty source row.
+    Eligibility is re-validated server-side — the posted target is never
+    trusted (the UNIQUE (user_id, session_id) index also forbids a dangling
+    source row, so it must be deleted)."""
+    user_id = current_user_id()
+    target_raw = (request.form.get('target_session_id') or '').strip()
+    try:
+        target_id = int(target_raw)
+    except ValueError:
+        flash("Pick a session to merge into.")
+        return redirect(url_for('edit_session', session_id=source_id))
+    if target_id == source_id:
+        flash("Can't merge a session into itself.")
+        return redirect(url_for('edit_session', session_id=source_id))
+    try:
+        with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
+            def _summ(sid):
+                return cur.execute(
+                    "SELECT MIN(a.target_id) AS target_id, "
+                    "       MIN(a.distance) AS distance, "
+                    "       MIN(st.session_begin_time) AS begin_t, "
+                    "       MAX(st.session_end_time) AS end_t, "
+                    "       COUNT(*) AS n "
+                    "FROM apollo a "
+                    "LEFT JOIN session_times st ON st.session_id = a.session_id "
+                    "                           AND st.user_id = a.user_id "
+                    "WHERE a.session_id = %s AND a.user_id = %s",
+                    (sid, user_id)).fetchone()
+            src = _summ(source_id)
+            dst = _summ(target_id)
+            if not src or not src['n'] or not dst or not dst['n']:
+                abort(404)
+            # Re-check eligibility: same target, same distance, same local day.
+            if src['target_id'] != dst['target_id'] or \
+               (src['distance'] or '').strip() != (dst['distance'] or '').strip():
+                flash("Those sessions don't share a target and distance.")
+                return redirect(url_for('edit_session', session_id=source_id))
+            sd = _utc_to_user(src['begin_t'])
+            dd = _utc_to_user(dst['begin_t'])
+            if sd is None or dd is None or sd.date() != dd.date():
+                flash("Those sessions aren't on the same day.")
+                return redirect(url_for('edit_session', session_id=source_id))
+            # Move the shots onto the target session.
+            cur.execute(
+                "UPDATE apollo SET session_id = %s "
+                "WHERE session_id = %s AND user_id = %s",
+                (target_id, source_id, user_id))
+            # Combine the span onto the target; the result stays open if either
+            # side was still open. A prior manual length no longer applies.
+            begins = [b for b in (src['begin_t'], dst['begin_t']) if b is not None]
+            new_begin = min(begins) if begins else None
+            if src['end_t'] is None or dst['end_t'] is None:
+                new_end = None
+            else:
+                new_end = max(src['end_t'], dst['end_t'])
+            cur.execute(
+                "UPDATE session_times SET session_begin_time = %s, "
+                "session_end_time = %s, manual_session_length_minutes = NULL "
+                "WHERE session_id = %s AND user_id = %s",
+                (new_begin, new_end, target_id, user_id))
+            cur.execute(
+                "DELETE FROM session_times WHERE session_id = %s AND user_id = %s",
+                (source_id, user_id))
+            con.commit()
+    except SQLAlchemyError as e:
+        print(f"❌ merge_session error: {e}")
+        flash("Could not merge the sessions — please try again.")
+        return redirect(url_for('edit_session', session_id=source_id))
+    # If the merged-away session was the active one, clear the in-progress keys.
+    if session.get('session_id') == source_id:
+        for k in ('session_id', 'quivers_completed', 'arrows_remaining',
+                  'record_mode', 'target_id', 'current_quiver_size',
+                  'tournament_round_key', 'tournament_segment_idx',
+                  'tournament_practice', 'tournament_bowstyle',
+                  'tournament_pin_prev', 'match_id', 'match_archers', 'match_idx'):
+            session.pop(k, None)
+    flash(f"Merged session #{source_id} into #{target_id}.")
+    return redirect(url_for('previous_sessions'))
 
 
 def _end_session_noun():
@@ -12961,6 +13267,25 @@ def _is_auto_tag(tag):
     return t == 'practice' or t.startswith('tournament:')
 
 
+def _is_reserved_tag(tag):
+    """True for tags Apollo generates and parses *structurally* — deleting one
+    would corrupt round / handicap / match / classification attribution, so the
+    tag manager must never offer them and the delete route must refuse them.
+
+    Broader than ``_is_auto_tag`` (which only knows the two the head-to-head
+    picker hides): this also covers the ``match:`` / ``participant:`` /
+    ``bowstyle:`` / ``pinprev:`` tokens and ``practice_scorecard`` that the
+    parsers near the top of this file (``_round_key_from_tags`` etc.) and
+    ``_counts_toward_handicap`` depend on."""
+    if not tag:
+        return False
+    t = tag.strip().lower()
+    if t in ('practice', 'practice_scorecard'):
+        return True
+    return t.startswith(('tournament:', 'match:', 'participant:', 'seat:',
+                         'bowstyle:', 'pinprev:'))
+
+
 def _tag_inventory(user_id):
     """Per-tag shot counts for the head-to-head tag picker.
 
@@ -13001,6 +13326,17 @@ def _tag_inventory(user_id):
     ]
     inventory.sort(key=lambda x: (-x['shots'], x['name'].lower()))
     return inventory
+
+
+def _deletable_user_tags():
+    """The current user's tags eligible for the account-page tag manager: the
+    full inventory minus the structural/reserved tokens deletion must never
+    touch. Exposed to templates as ``deletable_tags`` via
+    ``inject_template_globals`` (a lazy callable — only account.html calls it)."""
+    uid = current_user_id()
+    if uid is None:
+        return []
+    return [t for t in _tag_inventory(uid) if not _is_reserved_tag(t['name'])]
 
 
 def _tag_shot_samples(user_id):
@@ -13993,6 +14329,28 @@ def _report_accuracy_precision_traces(user_id, date_from=None, date_to=None,
             ])
         return out
 
+    # Skill-progression detrend baseline (overlay/split mode only). Fit the
+    # archer's overall accuracy & precision trend across ALL shots pooled per
+    # session, so each subject's per-session trace can be superimposed re-based
+    # to current form — removing the "I simply improved over the span" bias that
+    # otherwise flatters whatever kit was used later. None when not comparing
+    # subjects, or with fewer than two dated sessions to fit a line.
+    detrend = None
+    if split:
+        import numpy as _np
+        import matplotlib.dates as _mdates
+        g_series = _compute_series(
+            sorted(master.items(), key=lambda kv: kv[1][0]['dt']))['session']
+        g_dates = g_series[0]
+        if len(g_dates) >= 2:
+            g_x = _mdates.date2num(g_dates)
+            if len(set(g_x)) >= 2:
+                detrend = {
+                    'x_ref': float(g_x[-1]),
+                    'acc': float(_np.polyfit(g_x, g_series[1], 1)[0]),
+                    'r95': float(_np.polyfit(g_x, g_series[2], 1)[0]),
+                }
+
     # Compute each subject's series, dropping subjects that yield no data.
     subjects_with_data = []
     table_rows = []
@@ -14012,8 +14370,23 @@ def _report_accuracy_precision_traces(user_id, date_from=None, date_to=None,
             continue
         subj['series'] = series
         subjects_with_data.append(subj)
-        for row in series['table']:
-            table_rows.append([subj['name']] + row if split else row)
+        # Table rows mirror series['session'] one-for-one (same loop in
+        # _compute_series), so index i lines up for the skill-adjusted cells.
+        s_dates, s_accs, s_r95s = series['session']
+        for i, row in enumerate(series['table']):
+            if not split:
+                table_rows.append(row)
+                continue
+            if detrend is not None:
+                xi = _mdates.date2num(s_dates[i])
+                d_acc = max(0.0, s_accs[i]
+                            - detrend['acc'] * (xi - detrend['x_ref']))
+                d_r95 = max(0.0, s_r95s[i]
+                            - detrend['r95'] * (xi - detrend['x_ref']))
+                extra = [round(d_acc, 3), round(d_r95, 3)]
+            else:
+                extra = ['', '']
+            table_rows.append([subj['name']] + row + extra)
 
     if not subjects_with_data:
         return None
@@ -14065,6 +14438,18 @@ def _report_accuracy_precision_traces(user_id, date_from=None, date_to=None,
                         color=color, linewidth=1.0, alpha=0.45, zorder=2)
             plotted.append({'dates': dates, 'y': yvals,
                             'color': color, 'label': label})
+            # Skill-adjusted companion (split mode, per-session traces only):
+            # the same trace with the archer's overall progression removed and
+            # re-based to the latest date, so subjects used in different periods
+            # compare on equal footing. Dashed, same color, beneath the raw line.
+            if detrend is not None and gran == 'session':
+                slope = detrend['acc'] if metric == 'acc' else detrend['r95']
+                y_adj = [max(0.0, yv - slope * (xx - detrend['x_ref']))
+                         for yv, xx in zip(yvals, xnum)]
+                ax.plot(dates, y_adj, color=color, linewidth=1.3,
+                        linestyle='--', alpha=0.7, zorder=2)
+                plotted.append({'dates': dates, 'y': y_adj, 'color': color,
+                                'label': f"{label} — skill-adj."})
 
     ax.set_xlabel('Date')
     ax.set_ylabel('Normalized units (1.0 = target edge)\nlower is better')
@@ -14097,6 +14482,14 @@ def _report_accuracy_precision_traces(user_id, date_from=None, date_to=None,
             'every trace is a solid line labeled in place at its right edge, '
             'with subtle dots marking each date and a faint same-color trend '
             'line showing its direction.')
+        if detrend is not None:
+            overlay += (
+                ' A dashed same-color companion is each subject&rsquo;s '
+                'per-session trace <em>skill-adjusted</em>: your overall '
+                'long-term improvement is removed and the trace re-based to '
+                'your current form, so kit used mostly early and kit used '
+                'mostly late are judged on equal footing instead of the later '
+                'one simply riding your general progress.')
     else:
         overlay = (
             ' Blue traces are accuracy (mean distance from the gold); green '
@@ -14138,7 +14531,19 @@ def _report_accuracy_precision_traces(user_id, date_from=None, date_to=None,
              'Rolling precision across every shot through this '
              'session, inclusive.'),
     ]
-    columns = (['Subject'] + base_columns) if split else base_columns
+    if split:
+        columns = ['Subject'] + base_columns + [
+            _tip('Session mean miss (skill-adj)',
+                 'Session accuracy re-based to your current form: the mean '
+                 'miss with your overall long-term trend removed, so kit used '
+                 'in different periods compares fairly. Blank until you have '
+                 'shots on two or more dates.'),
+            _tip('Session R95 (skill-adj)',
+                 'Session precision (R95) re-based to your current form — see '
+                 'the skill-adjusted accuracy note.'),
+        ]
+    else:
+        columns = base_columns
 
     return {
         'key': 'accuracy_precision_traces',
@@ -15576,11 +15981,13 @@ def _report_handicap_trend(user_id):
 # ---------------------------------------------------------------------------
 # Performance vs conditions
 # ---------------------------------------------------------------------------
-# Sessions can capture weather (wind / temperature) at the range via Open-Meteo
-# (see /api/session_conditions). This report pools every shot whose session has
-# weather, buckets it by wind band and temperature band, and reports the same
-# bias (MPI) / precision (R95) split the rest of /analyze uses — so an
-# archer can see, honestly, whether wind actually widens their group.
+# Sessions can capture weather (wind, temperature, gust, humidity, pressure)
+# at the range via Open-Meteo (see /api/session_conditions). This report pools
+# every shot whose session has weather, buckets it into bands for each recorded
+# element, and reports the same accuracy (mean miss) / precision (R95) split the
+# rest of /analyze uses — so an archer can see, honestly, whether the conditions
+# actually move their group. Each element gets its own chart panel; wind
+# direction is omitted (circular, and no shooting reference is stored).
 
 # (label, lo_inclusive, hi_exclusive) in km/h — roughly Beaufort 0-2 / 3-4 / 5 / 6+.
 _WIND_BANDS = [
@@ -15595,6 +16002,27 @@ _TEMP_BANDS = [
     ('Mild (8–18)', 8.0, 18.0),
     ('Warm (18–26)', 18.0, 26.0),
     ('Hot (≥26)', 26.0, 1e9),
+]
+# (label, lo_inclusive, hi_exclusive) in km/h. Gusts run higher than the
+# sustained wind, so these bands sit a step above _WIND_BANDS.
+_GUST_BANDS = [
+    ('Calm (<12)', 0.0, 12.0),
+    ('Breezy (12–28)', 12.0, 28.0),
+    ('Gusty (28–45)', 28.0, 45.0),
+    ('Strong (≥45)', 45.0, 1e9),
+]
+# (label, lo_inclusive, hi_exclusive) in % relative humidity.
+_HUMIDITY_BANDS = [
+    ('Dry (<40)', -1e9, 40.0),
+    ('Comfortable (40–60)', 40.0, 60.0),
+    ('Humid (60–80)', 60.0, 80.0),
+    ('Damp (≥80)', 80.0, 1e9),
+]
+# (label, lo_inclusive, hi_exclusive) in hPa (station/surface pressure).
+_PRESSURE_BANDS = [
+    ('Low (<1005)', -1e9, 1005.0),
+    ('Normal (1005–1020)', 1005.0, 1020.0),
+    ('High (≥1020)', 1020.0, 1e9),
 ]
 
 
@@ -15617,15 +16045,20 @@ def _band_of(value, bands):
 
 
 def _report_conditions(user_id, date_from=None, date_to=None):
-    """Accuracy (mean miss) / precision (R95) bucketed by wind and temp band.
+    """Accuracy (mean miss) / precision (R95) bucketed by weather band.
 
     Pools every hit whose session captured weather, normalizes distances by
     target half-width (so mixed faces pool fairly, exactly like the other
-    reports), and fits ``_archery_stats`` per band. Misses are excluded from the
-    group fit; bands with fewer than 5 hits are flagged as thin.
+    reports), and fits ``_archery_stats`` per band. Every recorded weather
+    element gets its own chart panel — wind, temperature, gust, humidity and
+    pressure (wind direction is omitted: it's circular and no shooting
+    reference is stored). Misses are excluded from the group fit; bands with
+    fewer than 5 hits are flagged as thin, and a weather element no session
+    captured is skipped entirely.
     """
     q = ("SELECT a.x_coord, a.y_coord, a.target_id, t.physical_size_mm, "
-         "       st.wx_wind_kmh, st.wx_temp_c "
+         "       st.wx_wind_kmh, st.wx_temp_c, st.wx_gust_kmh, "
+         "       st.wx_humidity_pct, st.wx_pressure_hpa "
          "FROM apollo a "
          "JOIN session_times st ON st.session_id = a.session_id "
          "                      AND st.user_id = a.user_id "
@@ -15641,20 +16074,31 @@ def _report_conditions(user_id, date_from=None, date_to=None):
     with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
         rows = cur.execute(q, tuple(params)).fetchall()
 
+    empty_reason = ('No sessions have captured weather yet. On the session '
+                    'page tap "Capture weather" to log the conditions (or fill '
+                    'them in when editing a session); this report then compares '
+                    'your grouping across wind, temperature, gust, humidity and '
+                    'pressure bands.')
     if not rows:
         return {
             'key': 'conditions_performance',
             'title': 'Performance vs conditions',
             'empty': True,
-            'empty_reason': 'No sessions have captured weather yet. On the '
-                            'session page tap "Capture weather" to log wind and '
-                            'temperature (or fill them in when editing a '
-                            'session); this report then compares your grouping '
-                            'across wind and temperature bands.',
+            'empty_reason': empty_reason,
         }
 
-    wind_groups = {lab: {'xs': [], 'ys': []} for lab, _, _ in _WIND_BANDS}
-    temp_groups = {lab: {'xs': [], 'ys': []} for lab, _, _ in _TEMP_BANDS}
+    # (weather column, panel title, band table). Wind direction is deliberately
+    # excluded — it's circular (0–360°) and no shooting direction is stored to
+    # turn it into head/tail/cross-wind.
+    wx_vars = [
+        ('wx_wind_kmh', 'Wind (km/h)', _WIND_BANDS),
+        ('wx_temp_c', 'Temperature (°C)', _TEMP_BANDS),
+        ('wx_gust_kmh', 'Gust (km/h)', _GUST_BANDS),
+        ('wx_humidity_pct', 'Humidity (%)', _HUMIDITY_BANDS),
+        ('wx_pressure_hpa', 'Pressure (hPa)', _PRESSURE_BANDS),
+    ]
+    groups = {col: {lab: {'xs': [], 'ys': []} for lab, _, _ in bands}
+              for col, _title, bands in wx_vars}
     n_hits = 0
     for r in rows:
         try:
@@ -15672,19 +16116,16 @@ def _report_conditions(user_id, date_from=None, date_to=None):
         except ValueError:
             continue
         n_hits += 1
-        wl = _band_of(_wx_float(r['wx_wind_kmh']), _WIND_BANDS)
-        if wl:
-            wind_groups[wl]['xs'].append(xn)
-            wind_groups[wl]['ys'].append(yn)
-        tl = _band_of(_wx_float(r['wx_temp_c']), _TEMP_BANDS)
-        if tl:
-            temp_groups[tl]['xs'].append(xn)
-            temp_groups[tl]['ys'].append(yn)
+        for col, _title, bands in wx_vars:
+            lab = _band_of(_wx_float(r[col]), bands)
+            if lab:
+                groups[col][lab]['xs'].append(xn)
+                groups[col][lab]['ys'].append(yn)
 
-    def _band_stats(groups, bands):
+    def _band_stats(var_groups, bands):
         out = []
         for lab, _lo, _hi in bands:
-            g = groups[lab]
+            g = var_groups[lab]
             n = len(g['xs'])
             if n == 0:
                 out.append({'label': lab, 'n': 0, 'acc': None, 'r95': None,
@@ -15695,62 +16136,78 @@ def _report_conditions(user_id, date_from=None, date_to=None):
                         'r95': a['r95'], 'low': n < 5})
         return out
 
-    wind_stats = _band_stats(wind_groups, _WIND_BANDS)
-    temp_stats = _band_stats(temp_groups, _TEMP_BANDS)
-
     import matplotlib
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
     import numpy as np
 
-    nonempty = [w for w in wind_stats if w['n'] > 0]
-    svg_b64 = None
-    if nonempty:
-        fig, ax = plt.subplots(figsize=(8, 4.2))
-        labels = [w['label'] for w in nonempty]
-        accs = [w['acc'] * 100 for w in nonempty]
-        r95s = [w['r95'] * 100 for w in nonempty]
-        xpos = np.arange(len(labels))
-        bw = 0.38
-        ax.bar(xpos - bw / 2, accs, bw, label='Mean miss (accuracy)',
-               color='#c0504d')
-        ax.bar(xpos + bw / 2, r95s, bw, label='R95 (precision)', color='#3f7d3f')
-        for i, w in enumerate(nonempty):
-            ax.annotate(f"n={w['n']}", (i, max(accs[i], r95s[i])),
-                        textcoords='offset points', xytext=(0, 3),
-                        ha='center', fontsize=7, color='#5a6a82')
-        ax.set_xticks(xpos)
-        ax.set_xticklabels(labels, fontsize=8)
-        ax.set_ylabel('% of target half-width (lower = tighter)')
-        ax.set_title('Grouping by wind band')
-        ax.legend(fontsize=8)
-        ax.grid(True, axis='y', linestyle='--', alpha=0.35)
-        fig.tight_layout()
-        svg_b64 = _render_matplotlib_svg(fig)
-
     def _cell(v):
         return '—' if v is None else f'{v * 100:.1f}'
 
-    columns = ['Condition', 'Band', 'Shots', 'Mean miss (% hw)', 'R95 (% hw)']
-    rows_out = [[Markup('<em>— Wind —</em>'), '', '', '', '']]
-    for w in wind_stats:
-        lab = w['label'] + (' ⚠' if w['low'] else '')
-        rows_out.append(['Wind', lab, w['n'], _cell(w['acc']), _cell(w['r95'])])
-    rows_out.append([Markup('<em>— Temperature —</em>'), '', '', '', ''])
-    for t in temp_stats:
-        lab = t['label'] + (' ⚠' if t['low'] else '')
-        rows_out.append(['Temp', lab, t['n'], _cell(t['acc']), _cell(t['r95'])])
+    def _conditions_panel(title, stats):
+        """One weather element → a grouped-bar chart panel + its band table."""
+        nonempty = [s for s in stats if s['n'] > 0]
+        svg = None
+        if nonempty:
+            fig, ax = plt.subplots(figsize=(8, 4.2))
+            labels = [s['label'] for s in nonempty]
+            accs = [s['acc'] * 100 for s in nonempty]
+            r95s = [s['r95'] * 100 for s in nonempty]
+            xpos = np.arange(len(labels))
+            bw = 0.38
+            ax.bar(xpos - bw / 2, accs, bw, label='Mean miss (accuracy)',
+                   color='#c0504d')
+            ax.bar(xpos + bw / 2, r95s, bw, label='R95 (precision)',
+                   color='#3f7d3f')
+            for i, s in enumerate(nonempty):
+                ax.annotate(f"n={s['n']}", (i, max(accs[i], r95s[i])),
+                            textcoords='offset points', xytext=(0, 3),
+                            ha='center', fontsize=7, color='#5a6a82')
+            ax.set_xticks(xpos)
+            ax.set_xticklabels(labels, fontsize=8)
+            ax.set_ylabel('% of target half-width (lower = tighter)')
+            ax.set_title(f'Grouping by {title.split(" (")[0].lower()} band')
+            ax.legend(fontsize=8)
+            ax.grid(True, axis='y', linestyle='--', alpha=0.35)
+            fig.tight_layout()
+            svg = _render_matplotlib_svg(fig)
+        table = []
+        for s in stats:
+            lab = s['label'] + (' ⚠' if s['low'] else '')
+            table.append([lab, s['n'], _cell(s['acc']), _cell(s['r95'])])
+        return {
+            'title': title,
+            'svg_b64': svg,
+            'columns': ['Band', 'Shots', 'Mean miss (% hw)', 'R95 (% hw)'],
+            'rows': table,
+        }
+
+    # One panel per weather element that at least one session actually
+    # captured (an all-empty element is dropped rather than showing bare bands).
+    panels = []
+    for col, title, bands in wx_vars:
+        stats = _band_stats(groups[col], bands)
+        if any(s['n'] > 0 for s in stats):
+            panels.append(_conditions_panel(title, stats))
+
+    if not panels:
+        return {
+            'key': 'conditions_performance',
+            'title': 'Performance vs conditions',
+            'empty': True,
+            'empty_reason': empty_reason,
+        }
 
     intro = Markup(
         '<p class="report-intro">'
         '<strong>What this shows:</strong> your accuracy (mean miss — how close '
-        'arrows land to the gold on average) and precision (R95, how tightly it '
-        'clusters) split out by the '
-        'wind and temperature logged for each session, as a percentage of the '
-        'target half-width so mixed faces pool fairly. Lower is tighter. Bands '
-        'marked ⚠ have fewer than five shots — read them lightly. Wind that '
-        'genuinely widens your group shows up as rising bars from calm to '
-        f'strong. Based on {n_hits} weather-tagged hit'
+        'arrows land to the gold on average) and precision (R95, how tightly '
+        'they cluster) split out by the weather logged for each session — wind, '
+        'temperature, gust, humidity and pressure, each as its own panel — as a '
+        'percentage of the target half-width so mixed faces pool fairly. Lower '
+        'is tighter. Bands marked ⚠ have fewer than five shots — read them '
+        'lightly. A condition that genuinely widens your group shows up as '
+        f'rising bars across its bands. Based on {n_hits} weather-tagged hit'
         f'{"s" if n_hits != 1 else ""}.'
         '</p>'
     )
@@ -15759,9 +16216,7 @@ def _report_conditions(user_id, date_from=None, date_to=None):
         'key': 'conditions_performance',
         'title': 'Performance vs conditions',
         'intro_html': intro,
-        'svg_b64': svg_b64,
-        'columns': columns,
-        'rows': rows_out,
+        'panels': panels,
     }
 
 
@@ -16651,10 +17106,12 @@ REPORTS = {
     'conditions_performance': {
         'label': 'Performance vs conditions',
         'description': 'Accuracy (mean miss) and precision (R95) bucketed by '
-                       'the wind and temperature captured for each session, '
-                       'normalized by target size. Shows whether wind really '
-                       'widens your group. Only sessions with logged weather '
-                       'count; optionally restrict to a date range.',
+                       'each weather element captured for a session — wind, '
+                       'temperature, gust, humidity and pressure, one chart '
+                       'panel each — normalized by target size. Shows whether '
+                       'the conditions really move your group. Only sessions '
+                       'with logged weather count; optionally restrict to a '
+                       'date range.',
         'fn': _report_conditions,
         'accepts_date_range': True,
     },

@@ -223,6 +223,21 @@
         </label>
     </div>
 
+    <label style="margin-top:1.2rem;">Session times
+        {% if times.incomplete %}<span style="text-transform:none;font-weight:400;color:#a23;"> — this session is incomplete; set an end time to complete it</span>{% endif %}
+    </label>
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:12px;">
+        <label class="wx-field">Begin
+            <input type="text" name="session_begin_time" placeholder="YYYY-MM-DD HH:MM:SS" value="{{ times.begin }}">
+        </label>
+        <label class="wx-field">End
+            <input type="text" name="session_end_time" placeholder="blank = unfinished" value="{{ times.end }}">
+        </label>
+        <label class="wx-field">Manual length (min)
+            <input type="number" step="any" name="manual_session_length_minutes" placeholder="optional override" value="{{ times.manual_minutes }}">
+        </label>
+    </div>
+
     <h3 style="margin-top:1.4rem;font-family:'Quantico',sans-serif;">Shots ({{ shots|length }})</h3>
     <p style="font-size:0.78rem;margin:4px 0 8px;">
         Check <em>Delete</em> to remove a shot, or <em>Miss</em> to mark a recorded hit as a miss.
@@ -270,6 +285,30 @@
         <a class="cancel-btn" href="{{ url_for('previous_sessions') }}">Cancel</a>
     </div>
 </form>
+
+{% if merge_candidates %}
+<form class="edit-panel" method="POST"
+      action="{{ url_for('merge_session', source_id=session_id) }}"
+      style="margin-top:1.4rem;"
+      onsubmit="return confirm('Merge session {{ session_id }} into the selected session? Its shots move over and this session is removed.');">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <h3 style="font-family:'Quantico',sans-serif;">Merge into another session</h3>
+    <p style="font-size:0.78rem;margin:4px 0 8px;">
+        Fold this session's shots into another same-day session shot at the same
+        target and distance. This session is removed once merged.
+    </p>
+    {% for c in merge_candidates %}
+    <label style="display:block;text-transform:none;font-weight:400;margin:4px 0;">
+        <input type="radio" name="target_session_id" value="{{ c.session_id }}"
+               {% if loop.first %}required{% endif %}>
+        Session #{{ c.session_id }} — {{ c.when }} ({{ c.n }} shot{{ 's' if c.n != 1 else '' }})
+    </label>
+    {% endfor %}
+    <div class="edit-actions" style="margin-top:10px;">
+        <button type="submit">Merge sessions</button>
+    </div>
+</form>
+{% endif %}
 
 {# Shared distance unit conversion — must load (non-defer) before the inline
    script below, which calls its helpers synchronously. #}

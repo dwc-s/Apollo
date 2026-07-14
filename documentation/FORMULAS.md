@@ -361,7 +361,7 @@ Every `/analyze` report below feeds shot clouds (raw mm or normalized) into
 | Hits by zone | `_report_hits_by_boundaries` | `count` per zone + miss; `pct = count/total·100`. |
 | Arrows over time | `_report_arrows_vs_time` | arrows per calendar day, zero-filled gaps. |
 | Accuracy over time | `_report_accuracy_over_time` | `_archery_stats` per day/week/month bucket → MPI, R95. |
-| Accuracy/precision traces | `_report_accuracy_precision_traces` | mean miss & R95 per session / all-time rolling; optional per-bow/arrow/tag overlay; each trace carries a faint same-colour linear trend line. |
+| Accuracy/precision traces | `_report_accuracy_precision_traces` | mean miss & R95 per session / all-time rolling; optional per-bow/arrow/tag overlay; each trace carries a faint same-colour linear trend line. In overlay (head-to-head) mode each subject's per-session trace also gets a dashed same-colour **skill-adjusted** companion: `y_adj(d) = y_raw(d) − m·(d − d_ref)` where `m` is the slope of a least-squares fit of the *all-shots* per-session series (accuracy or R95 respectively) and `d_ref` is the latest such date — i.e. the archer's overall progression removed and the trace re-based to current form, so subjects used in different periods compare fairly (needs ≥2 dated sessions; clamped ≥ 0). |
 | Precision consistency (trend) | `_report_precision_consistency` | per-**day** R95 (`_ap_series(..., by='day')` pools every shot on a calendar day) smoothed by a trailing `_PREC_CONSISTENCY_WINDOW`-day (=5) moving average; shaded band = ±1 within-window sample stdev (ddof=1), clamped ≥ 0; faint raw dots + a straight least-squares trend over the raw points. Responsive counterpart to the *cumulative* all-time R95 trace. |
 | Biggest vs smallest spread per quiver | `_report_quiver_spread` | per quiver, max & min pairwise arrow distance (half-width normalized) with a trend line through each. |
 | Horizontal & vertical spread violins | `_report_spread_violins` | per time bucket (session, or month once there are many), pool each arrow's offset from its quiver's centroid in cm; two-row violin — horizontal spread with time on x, vertical spread with the axes transposed. |
@@ -499,11 +499,23 @@ period elapsed.
 
 ### 7.7 Performance vs conditions — `_report_conditions`
 Each hit whose session captured weather is normalized by target half-width (as
-in the other reports) and bucketed by **wind band** (calm `< 8`, light `8–19`,
-moderate `19–30`, strong `≥ 30` km/h — roughly Beaufort 0-2 / 3-4 / 5 / 6+) and
-by **temperature band** (`< 8`, `8–18`, `18–26`, `≥ 26 °C`). `_archery_stats`
-runs per bucket; MPI and R95 are reported as a percentage of the target
-half-width. Buckets below five hits are flagged as thin.
+in the other reports) and bucketed, per weather element, into fixed bands.
+`_archery_stats` runs per bucket; mean miss (accuracy) and R95 (precision) are
+reported as a percentage of the target half-width. Buckets below five hits are
+flagged as thin. **Each element is its own chart panel** (the report returns the
+`panels` shape); an element no session captured is skipped. The bands:
+
+- **Wind** (km/h): calm `< 8`, light `8–19`, moderate `19–30`, strong `≥ 30`
+  — roughly Beaufort 0-2 / 3-4 / 5 / 6+ (`_WIND_BANDS`).
+- **Temperature** (°C): `< 8`, `8–18`, `18–26`, `≥ 26` (`_TEMP_BANDS`).
+- **Gust** (km/h): `< 12`, `12–28`, `28–45`, `≥ 45` — a step above wind
+  (`_GUST_BANDS`).
+- **Humidity** (% RH): `< 40`, `40–60`, `60–80`, `≥ 80` (`_HUMIDITY_BANDS`).
+- **Pressure** (hPa): `< 1005`, `1005–1020`, `≥ 1020` (`_PRESSURE_BANDS`).
+
+**Wind direction is deliberately excluded** — it's circular (0–360°) and Apollo
+stores no shooting direction to turn it into head/tail/cross-wind. Band edges
+are tunable constants; keep them in sync with this list.
 
 ---
 

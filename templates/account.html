@@ -261,6 +261,37 @@
         </form>
     </div>
 
+    <div class="form-panel" id="manage-tags">
+        <h4>Manage tags</h4>
+        <p class="account-tz-note">
+            Delete a tag from every session it appears on. Structural tags Apollo
+            adds automatically (tournament, match, bowstyle…) aren't listed — they
+            keep your rounds and handicaps attributed correctly.
+        </p>
+        {% set tags = deletable_tags() %}
+        {% if tags %}
+        <ul style="list-style:none;padding:0;margin:8px 0 0;">
+            {% for t in tags %}
+            <li style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:6px 0;border-bottom:1px solid rgba(26,58,92,0.12);">
+                <span><strong>{{ t.name }}</strong>
+                    <span style="color:#33507d;font-size:0.85rem;">— {{ t.shots }} shot{{ 's' if t.shots != 1 else '' }}</span>
+                </span>
+                <form action="/account" method="POST" autocomplete="off" style="margin:0;"
+                      onsubmit="return confirm('Delete this tag from every session it appears on? This cannot be undone.');">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <input type="hidden" name="action" value="delete_tag">
+                    <input type="hidden" name="tag" value="{{ t.name }}">
+                    <button type="submit"
+                            style="font-family:'Quantico',sans-serif;font-size:0.78rem;text-transform:uppercase;padding:4px 12px;border-radius:4px;border:1px solid #a23;background:transparent;color:#a23;cursor:pointer;">Delete</button>
+                </form>
+            </li>
+            {% endfor %}
+        </ul>
+        {% else %}
+        <p style="color:#33507d;font-size:0.9rem;margin:8px 0 0;">You haven't added any tags yet.</p>
+        {% endif %}
+    </div>
+
     <form action="/delete_account" method="POST" autocomplete="off"
           onsubmit="return confirm('Permanently delete your account and ALL your data? This cannot be undone.');">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
