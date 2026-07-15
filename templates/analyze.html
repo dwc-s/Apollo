@@ -614,19 +614,19 @@
 
         /* Client-rendered 3D (Plotly) report chart — fills the card width. */
         .panel-3d { margin-bottom: 16px; }
-        .chart3d-host { width: 100%; height: 480px; }
+        .chart3d-host { width: 100%; height: 640px; }
 
         /* Animated shot player (apollo-anim.js): face + live HUD + controls. */
         .panel-anim { margin-bottom: 16px; }
         .anim-wrap {
             display: grid;
-            grid-template-columns: minmax(0, 340px) minmax(0, 1fr);
+            grid-template-columns: minmax(0, 460px) minmax(0, 1fr);
             gap: 18px; align-items: start;
         }
         @media (max-width: 720px) { .anim-wrap { grid-template-columns: 1fr; } }
         .anim-stage { grid-column: 1; }
         .anim-svg {
-            width: 100%; max-width: 340px; height: auto; display: block;
+            width: 100%; max-width: 460px; height: auto; display: block;
             border: 1px solid #95abcf; border-radius: 8px; background: #fff;
         }
         .anim-side { grid-column: 2; min-width: 0; }

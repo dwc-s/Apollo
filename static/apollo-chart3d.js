@@ -42,16 +42,18 @@
         };
     }
 
+    function toCm(a) { return (a || []).map(function (v) { return v / 10; }); }
+
     function mountain(host, d) {
         var trace = {
-            type: 'surface', z: d.z, x: d.x, y: d.y,
+            type: 'surface', z: d.z, x: toCm(d.x), y: toCm(d.y),
             colorscale: DENSITY, showscale: true,
             colorbar: { title: 'shots', thickness: 12, len: 0.6, tickfont: FONT },
             contours: { z: { show: true, usecolormap: true, project: { z: true } } },
         };
         Plotly.newPlot(host, [trace],
             layout(d.title || 'Shot-density mountain',
-                { x: 'left / right (mm)', y: 'up / down (mm)', z: 'density',
+                { x: 'left / right (cm)', y: 'up / down (cm)', z: 'density',
                   eye: { x: 1.4, y: -1.5, z: 0.9 } }),
             config());
     }
@@ -62,7 +64,8 @@
             (list || []).forEach(function (rg, i) {
                 traces.push({
                     type: 'scatter3d', mode: 'lines',
-                    x: rg.xs, y: rg.ys, z: rg.xs.map(function () { return rg.d; }),
+                    x: toCm(rg.xs), y: toCm(rg.ys),
+                    z: rg.xs.map(function () { return rg.d; }),
                     line: { color: color, width: width }, opacity: 0.9,
                     showlegend: i === 0, name: name, hoverinfo: 'skip',
                 });
@@ -71,7 +74,7 @@
         rings(d.rings, TEAL, 'Your group (R95)', 4);
         if (d.ref && d.ref.length) rings(d.ref, PURPLE, 'Reference archer', 2);
         var lay = layout(d.title || 'Dispersion cone vs distance',
-            { x: 'left / right (mm)', y: 'up / down (mm)', z: 'distance (m)',
+            { x: 'left / right (cm)', y: 'up / down (cm)', z: 'distance (m)',
               legend: true, eye: { x: 1.7, y: 1.7, z: 0.6 } });
         Plotly.newPlot(host, traces, lay, config());
     }

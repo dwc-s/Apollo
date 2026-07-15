@@ -17205,8 +17205,8 @@ def _report_shot_density_mountain(user_id):
             },
             'columns': ['Metric', 'Value'],
             'rows': [['Hits', str(n)],
-                     ['Face width (mm)', f'{2 * half:.0f}'],
-                     ['KDE bandwidth (mm)', f'{bw:.1f}']],
+                     ['Face width (cm)', f'{2 * half / 10:.1f}'],
+                     ['KDE bandwidth (cm)', f'{bw / 10:.1f}']],
         })
 
     if not panels:
@@ -17259,7 +17259,7 @@ def _report_dispersion_cone(user_id):
         rings.append({'d': d,
                       'xs': [round(float(cx + K95 * sx * c), 2) for c in cos_t],
                       'ys': [round(float(cy + K95 * sy * s), 2) for s in sin_t]})
-        rows_out.append([str(d), f'{K95 * sx:.0f}', f'{K95 * sy:.0f}'])
+        rows_out.append([str(d), f'{K95 * sx / 10:.1f}', f'{K95 * sy / 10:.1f}'])
 
     ref = []
     summary = _handicap_summary(_completed_rounds(user_id))
@@ -17284,7 +17284,7 @@ def _report_dispersion_cone(user_id):
             'title': 'Dispersion cone vs distance (3D)', 'intro_html': intro,
             'chart3d': {'kind': 'cone', 'rings': rings, 'ref': ref,
                         'title': 'Group R95 footprint vs distance'},
-            'columns': ['Distance (m)', 'R95 &#8596; (mm)', 'R95 &#8597; (mm)'],
+            'columns': ['Distance (m)', 'R95 &#8596; (cm)', 'R95 &#8597; (cm)'],
             'rows': rows_out}
 
 
