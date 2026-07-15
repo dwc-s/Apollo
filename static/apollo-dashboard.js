@@ -42,7 +42,12 @@
     return fetch('/dashboard/graph/' + encodeURIComponent(key), {
       credentials: 'same-origin', headers: { 'Accept': 'text/html' },
     }).then(function (r) { return r.ok ? r.text() : Promise.reject(r.status); })
-      .then(function (html) { if (body) body.innerHTML = html; })
+      .then(function (html) {
+        if (!body) return;
+        body.innerHTML = html;
+        // Mount any client-rendered tile content (e.g. the animated handicap).
+        if (window.ApolloHandicapAnim) window.ApolloHandicapAnim.initAll(body);
+      })
       .catch(function () {
         if (body) body.innerHTML =
           '<p class="dash-graph-empty">Could not load this graph.</p>';

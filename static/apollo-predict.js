@@ -87,6 +87,43 @@
   // Published WA / USA Archery reference scores for this round (may be empty).
   const benchmarks = Array.isArray(payload.benchmarks) ? payload.benchmarks : [];
 
+  // ── Optional arrow-drop face: a live target face beside the histogram that
+  // shows a representative simulated group, refreshed each frame so arrows
+  // appear to rain onto it while the forecast fills. Reuses the shot-replay
+  // face primitives; no-op if the face host / payload / ApolloReplay is absent.
+  const faceHost = document.getElementById('predict-face');
+  let faceLayer = null, faceScale = 0, faceSegIdx = 0;
+  let lastRunShots = [];
+  if (faceHost && payload.face && window.ApolloReplay) {
+    const R = window.ApolloReplay;
+    const mm = parseFloat(payload.face.target_width_mm) || 0;
+    faceScale = mm > 0 ? R.VIEW / mm : 0;
+    faceSegIdx = payload.face.seg_index != null ? payload.face.seg_index : 0;
+    if (faceScale > 0) {
+      const svg = R.svgEl('svg', {
+        viewBox: '0 0 ' + R.VIEW + ' ' + R.VIEW,
+        preserveAspectRatio: 'xMidYMid meet', 'class': 'predict-face-svg'
+      });
+      R.drawFace(svg, payload.face.face_render || null, '', faceScale);
+      faceLayer = R.svgEl('g', {});
+      svg.appendChild(faceLayer);
+      faceHost.textContent = '';
+      faceHost.appendChild(svg);
+    }
+  }
+  function renderFaceDrop() {
+    if (!faceLayer) return;
+    const R = window.ApolloReplay;
+    faceLayer.textContent = '';
+    for (let i = 0; i < lastRunShots.length; i++) {
+      const p = R.cartToView(lastRunShots[i][0], lastRunShots[i][1], faceScale);
+      faceLayer.appendChild(R.svgEl('circle', {
+        cx: p.cx.toFixed(1), cy: p.cy.toFixed(1), r: 3.2,
+        fill: 'rgba(252,186,3,0.9)', stroke: '#1a3a5c', 'stroke-width': 0.8
+      }));
+    }
+  }
+
   const shaftMm = Number(dist.shaft_mm);
   if (Number.isFinite(shaftMm) && shaftMm > 0) {
     SHAFT_RADIUS = shaftMm / 2.0;
@@ -328,6 +365,7 @@
   // One simulated tournament run. Sums score across all segments.
   function runOnce() {
     let total = 0;
+    if (faceLayer) lastRunShots = [];
     for (let si = 0; si < segments.length; si++) {
       const seg = segments[si];
       const distMmPerMrad = seg.distance_m; // (1 mrad at 1 m = 1 mm)
@@ -344,6 +382,7 @@
         const ey = chol.l21 * z1 + chol.l22 * z2;
         const xMm = p.muX + ex * distMmPerMrad;
         const yMm = p.muY + ey * distMmPerMrad;
+        if (faceLayer && si === faceSegIdx) lastRunShots.push([xMm, yMm]);
         total += scoreShot(xMm, yMm, seg.zones);
       }
     }
@@ -434,6 +473,7 @@
     // chart redraws. updateStats reads the calibrated scores when active.
     updateStats();
     updateChart();
+    renderFaceDrop();
     if (progressEl) {
       progressEl.textContent = doneRuns < nRuns
         ? `Running… ${doneRuns} / ${nRuns}`

@@ -91,6 +91,49 @@
     </div>
 {% endmacro %}
 
+{# 3D chart variant: a client-rendered Plotly chart (data-chart3d JSON) fills the
+   card width; any stats table folds into a collapse-by-default <details>.
+   Mounted by apollo-chart3d.js (analyze.html initCard). #}
+{% macro render_panel_3d(p, title) %}
+    <div class="panel-3d">
+        <div class="chart3d-host" data-chart3d='{{ p.chart3d | tojson }}'></div>
+        {% if p.columns %}
+        <details class="panel-table-collapse">
+            <summary>Show data table</summary>
+            <div class="report-table-wrapper">
+                <table class="report-table">
+                    <thead><tr>{% for c in p.columns %}<th>{{ c }}</th>{% endfor %}</tr></thead>
+                    <tbody>
+                        {% for row in p.rows %}<tr>{% for cell in row %}<td>{{ cell }}</td>{% endfor %}</tr>{% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </details>
+        {% endif %}
+    </div>
+{% endmacro %}
+
+{# Animated chart variant: a client-rendered SVG player (data-anim JSON),
+   mounted by apollo-anim.js. #}
+{% macro render_panel_anim(p, title) %}
+    <div class="panel-anim">
+        <div class="anim-host" data-anim='{{ p.anim | tojson }}'></div>
+        {% if p.columns %}
+        <details class="panel-table-collapse">
+            <summary>Show data table</summary>
+            <div class="report-table-wrapper">
+                <table class="report-table">
+                    <thead><tr>{% for c in p.columns %}<th>{{ c }}</th>{% endfor %}</tr></thead>
+                    <tbody>
+                        {% for row in p.rows %}<tr>{% for cell in row %}<td>{{ cell }}</td>{% endfor %}</tr>{% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </details>
+        {% endif %}
+    </div>
+{% endmacro %}
+
 {% for r in results %}
 <section class="report-card" data-report-key="{{ r.key }}">
     <h3>{{ r.title }}</h3>
@@ -102,7 +145,7 @@
             <h4 style="font-family:Quantico,sans-serif;color:#1a3a5c;margin:18px 0 8px 0;">
                 {{ p.title }}
             </h4>
-            {{ render_panel(p, p.title) }}
+            {% if p.chart3d %}{{ render_panel_3d(p, p.title) }}{% elif p.anim %}{{ render_panel_anim(p, p.title) }}{% else %}{{ render_panel(p, p.title) }}{% endif %}
         {% endfor %}
         {% set dr = date_ranges.get(r.key) or {} %}
         {% set cats = categories.get(r.key) or [] %}
@@ -136,7 +179,7 @@
             </a>
         </div>
     {% else %}
-        {% if r.stacked %}{{ render_panel_stacked(r, r.title) }}{% else %}{{ render_panel(r, r.title) }}{% endif %}
+        {% if r.chart3d %}{{ render_panel_3d(r, r.title) }}{% elif r.anim %}{{ render_panel_anim(r, r.title) }}{% elif r.stacked %}{{ render_panel_stacked(r, r.title) }}{% else %}{{ render_panel(r, r.title) }}{% endif %}
         {% set dr = date_ranges.get(r.key) or {} %}
         {% set cats = categories.get(r.key) or [] %}
         {% set tags = tag_selections.get(r.key) %}

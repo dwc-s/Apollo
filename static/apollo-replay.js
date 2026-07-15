@@ -228,7 +228,13 @@
         });
     }
 
-    window.ApolloReplay = { initAll, startReplay };
+    window.ApolloReplay = {
+        initAll, startReplay,
+        // Low-level face/marker primitives, exported so the animated player
+        // (apollo-anim.js) and the predict arrow-drop (apollo-predict.js) can
+        // reuse the exact face rendering instead of duplicating it.
+        VIEW, svgEl, cartToView, drawFace, drawSettledMarker, drawMissMarker,
+    };
 
     if (document.readyState !== 'loading') {
         initAll();

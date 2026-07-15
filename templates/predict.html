@@ -209,6 +209,14 @@
             box-sizing: border-box;
         }
         #predict-histogram { display: block; }
+        .predict-face-wrap { margin-top: 14px; text-align: center; }
+        .predict-face {
+            position: relative; width: 300px; max-width: 100%; margin: 0 auto;
+            border: 1px solid #c9d3e3; border-radius: 8px; background: #fff;
+            overflow: hidden;
+        }
+        .predict-face::before { content: ''; display: block; padding-top: 100%; }
+        .predict-face-svg { position: absolute; top: 0; left: 0; width: 100%; height: 100%; }
         .histogram-note {
             font-family: "Quantico", sans-serif;
             font-size: 0.78rem;
@@ -297,6 +305,7 @@
     <script defer src="{{ url_for('static', filename='apollo-nav.js') }}"></script>
     {% if payload %}
     <script defer src="/static/vendor/chartjs/chart.umd.min.js"></script>
+    <script defer src="{{ url_for('static', filename='apollo-replay.js') }}"></script>
     <script defer src="{{ url_for('static', filename='apollo-predict.js') }}"></script>
     {% endif %}
 </head>
@@ -557,6 +566,13 @@
     <div class="histogram-wrap">
         <canvas id="predict-histogram"></canvas>
     </div>
+    {% if payload.face %}
+    <div class="predict-face-wrap">
+        <div id="predict-face" class="predict-face"></div>
+        <div class="histogram-note">A representative simulated group{% if payload.face.distance_m %}
+            at {{ payload.face.distance_m }} m{% endif %} — arrows land live as the forecast fills.</div>
+    </div>
+    {% endif %}
     {% if payload.benchmarks %}
     <div class="histogram-note">
         Dashed lines are your simulated P10 / P50 / P90. Solid lines are

@@ -5330,6 +5330,26 @@ def dashboard_save():
     return jsonify({'ok': True, 'count': len(clean)})
 
 
+def _dashboard_handicap_data(user_id):
+    """JSON for the animated handicap tile: raw handicap-vs-date points plus the
+    AGB outdoor class thresholds (for the draw-on line and milestone pings)."""
+    points = _completed_rounds(user_id)
+    if not points:
+        return None
+    category = _archer_category()
+    thresholds = [{'code': c, 'name': n, 'hc': t, 'record': bool(rec)}
+                  for (c, n, rec, t) in
+                  classifications.agb_class_thresholds(category, indoor=False)]
+    summary = _handicap_summary(points)
+    return {
+        'points': [{'d': p['date'].strftime('%Y-%m-%d'), 'hc': p['handicap']}
+                   for p in points],
+        'thresholds': thresholds,
+        'latest': summary.get('latest'),
+        'agb': summary.get('agb'),
+    }
+
+
 @app.route('/dashboard/graph/<key>', methods=['GET'])
 @login_required
 def dashboard_graph(key):
@@ -5341,6 +5361,10 @@ def dashboard_graph(key):
     lazy-load graphs the way /analyze streams its report cards.
     """
     user_id = current_user_id()
+    # Animated handicap tile: client-rendered from JSON, not a matplotlib SVG.
+    if key == 'handicap_animated':
+        return render_template('_dashboard_handicap.html',
+                               data=_dashboard_handicap_data(user_id))
     if key not in DASHBOARD_GRAPH_KEYS or key not in REPORTS:
         return "Unknown graph", 404
     graph, error = None, None
@@ -17084,6 +17108,485 @@ def _report_spread_violins(user_id, date_from=None, date_to=None,
     }
 
 
+# ---------------------------------------------------------------------------
+# Interactive 3D + animated reports (client-rendered).
+# ---------------------------------------------------------------------------
+# Unlike every other report (server matplotlib → svg_b64), these return raw
+# arrays under a 'chart3d' or 'anim' key and NO svg_b64; the browser draws them
+# with Plotly (apollo-chart3d.js) or an SVG player (apollo-anim.js). _run_report
+# passes the extra key through untouched; _report_card.html routes on it.
+
+
+def _generic_ring_face():
+    """A WA-style 10-ring face in NORMALIZED units (edge = 1.0), so a
+    mixed-target history can be replayed on one face at mm_per_edge = 2.0.
+    Shape matches _tournament_face_render_payload (rings outer→inner)."""
+    cols = ['#f4f4ee', '#f4f4ee', '#2c2c2c', '#2c2c2c', '#4aa3df',
+            '#4aa3df', '#e5443b', '#e5443b', '#f7d64a', '#f7d64a']
+    rings = [{'point_value': 10 - i, 'radius_mm': round((10 - i) / 10.0, 3),
+              'color': cols[i]} for i in range(10)]
+    # No center_mark: the marker sizing in apollo-replay assumes mm, so it would
+    # be huge in normalized units — the gold centre ring is enough.
+    return {'face_bg': '#ffffff', 'rings': rings}
+
+
+def _report_shot_density_mountain(user_id):
+    """3D shot-density surface (Plotly) — the hexbin heatmap elevated into a
+    rotatable KDE 'mountain', one panel per target with enough on-face hits."""
+    import numpy as np
+    with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
+        target_rows = cur.execute(
+            "SELECT t.id AS rowid, t.name, t.image_filename, "
+            "       t.physical_size_mm, t.image_size_px "
+            "FROM targets t WHERE t.user_id = %s ORDER BY t.id ASC",
+            (user_id,)
+        ).fetchall()
+    if not target_rows:
+        return None
+
+    GRID = 44
+    panels = []
+    for trow in target_rows:
+        target_id = int(trow['rowid'])
+        target_cfg = target_to_config(trow)
+        try:
+            half = float(target_cfg['target_width_mm']) / 2.0
+        except (TypeError, ValueError):
+            continue
+        if half <= 0:
+            continue
+        with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
+            shots = cur.execute(
+                "SELECT x_coord, y_coord FROM apollo "
+                "WHERE user_id = %s AND target_id = %s",
+                (user_id, target_id)
+            ).fetchall()
+        xs, ys = [], []
+        for s in shots:
+            xraw = str(s['x_coord']).strip() if s['x_coord'] is not None else ''
+            yraw = str(s['y_coord']).strip() if s['y_coord'] is not None else ''
+            if xraw == MISS_SENTINEL and yraw == MISS_SENTINEL:
+                continue
+            try:
+                xv, yv = float(xraw), float(yraw)
+            except ValueError:
+                continue
+            if abs(xv) <= half and abs(yv) <= half:
+                xs.append(xv)
+                ys.append(yv)
+        if len(xs) < 25:
+            continue
+
+        xa = np.asarray(xs)
+        ya = np.asarray(ys)
+        n = len(xa)
+        sd = math.sqrt((float(np.std(xa)) ** 2 + float(np.std(ya)) ** 2) / 2.0)
+        bw = max(half * 0.04, sd * (n ** (-1.0 / 6.0)))
+        axis = np.linspace(-half, half, GRID)
+        gx, gy = np.meshgrid(axis, axis)
+        z = np.zeros_like(gx)
+        inv = 1.0 / (2.0 * bw * bw)
+        for xi, yi in zip(xa, ya):
+            z += np.exp(-((gx - xi) ** 2 + (gy - yi) ** 2) * inv)
+        # Scale to ~shots-per-cell so the height axis reads in shot counts.
+        cell = (2.0 * half / (GRID - 1)) ** 2
+        z = z * (cell / (2.0 * math.pi * bw * bw))
+
+        panels.append({
+            'key': f'shot_density_mountain__{target_id}',
+            'title': f"{target_cfg['name']} — density ({n} hits)",
+            'chart3d': {
+                'kind': 'mountain',
+                'title': f"{target_cfg['name']} — shot density",
+                'x': [round(float(v), 1) for v in axis],
+                'y': [round(float(v), 1) for v in axis],
+                'z': [[round(float(v), 4) for v in row] for row in z],
+                'half': round(half, 1),
+            },
+            'columns': ['Metric', 'Value'],
+            'rows': [['Hits', str(n)],
+                     ['Face width (mm)', f'{2 * half:.0f}'],
+                     ['KDE bandwidth (mm)', f'{bw:.1f}']],
+        })
+
+    if not panels:
+        return None
+    intro = Markup(
+        '<p class="report-intro"><strong>What this shows:</strong> the shot-'
+        'density heatmap as a rotatable 3D surface &mdash; height is how densely '
+        'your arrows cluster there. The peak is your true point of impact; a '
+        'broad or twin-peaked mountain reveals a loose or stringing group the '
+        'flat colours hide. Drag to rotate, scroll to zoom.</p>')
+    return {'key': 'shot_density_mountain',
+            'title': 'Shot-density mountain (3D)',
+            'intro_html': intro, 'panels': panels}
+
+
+def _report_dispersion_cone(user_id):
+    """3D angular-dispersion cone (Plotly): the R95 group footprint as a ring at
+    each distance, stacked so the group visibly widens with range."""
+    import numpy as np
+    fit = _fit_shot_distribution(user_id)
+    if not fit or not fit.get('ok'):
+        return {'key': 'dispersion_cone',
+                'title': 'Dispersion cone vs distance (3D)', 'empty': True,
+                'empty_reason': (fit.get('reason') if isinstance(fit, dict) else None)
+                or 'Not enough shot history to fit an angular dispersion model yet.'}
+
+    trend = fit.get('trend') if isinstance(fit.get('trend'), dict) else None
+    ang = np.linspace(0, 2 * math.pi, 48)
+    cos_t, sin_t = np.cos(ang), np.sin(ang)
+    K95 = 2.4477   # Rayleigh 95% radius, in sigma
+
+    def footprint_mm(d):
+        if trend and trend.get('ok'):
+            mm = trend['mean_mm']
+            mu_x = mm['ax'] + mm['bx'] * d
+            mu_y = mm['ay'] + mm['by'] * d
+            s2 = math.exp(trend['growth_k'] * (d - trend['d_ref'])) ** 2
+            cref = trend['cov_ref_mrad']
+            vx, vy = cref[0][0] * s2, cref[1][1] * s2
+        else:
+            mu_x = fit['mean_mrad'][0] * d
+            mu_y = fit['mean_mrad'][1] * d
+            vx, vy = fit['cov_mrad'][0][0], fit['cov_mrad'][1][1]
+        return mu_x, mu_y, math.sqrt(max(0.0, vx)) * d, math.sqrt(max(0.0, vy)) * d
+
+    distances = [10, 18, 30, 40, 50, 60, 70]
+    rings, rows_out = [], []
+    for d in distances:
+        cx, cy, sx, sy = footprint_mm(d)
+        rings.append({'d': d,
+                      'xs': [round(float(cx + K95 * sx * c), 2) for c in cos_t],
+                      'ys': [round(float(cy + K95 * sy * s), 2) for s in sin_t]})
+        rows_out.append([str(d), f'{K95 * sx:.0f}', f'{K95 * sy:.0f}'])
+
+    ref = []
+    summary = _handicap_summary(_completed_rounds(user_id))
+    ref_hc = summary.get('latest') if summary else None
+    if ref_hc is not None:
+        for d in distances:
+            r_mm = handicap.sigma_r(ref_hc, d) * 1000.0 * K95
+            ref.append({'d': d,
+                        'xs': [round(float(r_mm * c), 2) for c in cos_t],
+                        'ys': [round(float(r_mm * s), 2) for s in sin_t]})
+
+    intro = Markup(
+        '<p class="report-intro"><strong>What this shows:</strong> your 95% group '
+        'footprint (teal ring) at each distance, stacked into a cone &mdash; '
+        'angular dispersion means the ring grows roughly linearly with range, so '
+        'the cone widens. This is the geometry the performance forecast '
+        'integrates over. '
+        + (f'The purple cone is a reference archer at your current handicap '
+           f'({ref_hc}). ' if ref_hc is not None else '')
+        + 'Drag to rotate.</p>')
+    return {'key': 'dispersion_cone',
+            'title': 'Dispersion cone vs distance (3D)', 'intro_html': intro,
+            'chart3d': {'kind': 'cone', 'rings': rings, 'ref': ref,
+                        'title': 'Group R95 footprint vs distance'},
+            'columns': ['Distance (m)', 'R95 &#8596; (mm)', 'R95 &#8597; (mm)'],
+            'rows': rows_out}
+
+
+def _report_history_coresample(user_id):
+    """3D 'core sample': every hit at (x, y, time) so each session is a disc
+    stacked up a time axis. Coords normalized by face half-width."""
+    with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
+        rows = cur.execute(
+            "SELECT a.x_coord, a.y_coord, a.timestamp, a.session_id, "
+            "       t.physical_size_mm AS half_src "
+            "FROM apollo a "
+            "LEFT JOIN targets t ON t.id = a.target_id AND t.user_id = a.user_id "
+            "WHERE a.user_id = %s AND a.timestamp IS NOT NULL "
+            "ORDER BY a.timestamp ASC",
+            (user_id,)
+        ).fetchall()
+    pts = []
+    first_dt = None
+    for r in rows:
+        xraw = str(r['x_coord']).strip() if r['x_coord'] is not None else ''
+        yraw = str(r['y_coord']).strip() if r['y_coord'] is not None else ''
+        if xraw == MISS_SENTINEL and yraw == MISS_SENTINEL:
+            continue
+        try:
+            half = float(r['half_src']) / 2.0
+            if half <= 0:
+                continue
+            xv, yv = float(xraw) / half, float(yraw) / half
+        except (TypeError, ValueError):
+            continue
+        dt = _utc_to_user(r['timestamp'])
+        if dt is None:
+            continue
+        dt = dt.replace(tzinfo=None)
+        if first_dt is None:
+            first_dt = dt
+        pts.append({'x': round(xv, 4), 'y': round(yv, 4),
+                    't': round((dt - first_dt).total_seconds() / 86400.0, 3),
+                    's': int(r['session_id'] or 0)})
+    if len(pts) < 20:
+        return {'key': 'history_coresample', 'title': 'History core-sample (3D)',
+                'empty': True,
+                'empty_reason': 'Need at least 20 timestamped hits to plot the '
+                                'history column.'}
+    MAX = 4000
+    if len(pts) > MAX:
+        step = len(pts) / float(MAX)
+        pts = [pts[int(i * step)] for i in range(MAX)]
+    intro = Markup(
+        '<p class="report-intro"><strong>What this shows:</strong> every hit as a '
+        'point at (left/right, up/down, time). Each session is a horizontal disc; '
+        'read up the column to watch your group drift and tighten over your whole '
+        'history. Colour runs teal (early) to purple (recent). Drag to '
+        'rotate.</p>')
+    return {'key': 'history_coresample', 'title': 'History core-sample (3D)',
+            'intro_html': intro,
+            'chart3d': {'kind': 'coresample', 'pts': pts,
+                        'title': 'Every shot over time'},
+            'columns': ['Metric', 'Value'],
+            'rows': [['Hits plotted', str(len(pts))],
+                     ['History span (days)', f"{pts[-1]['t']:.0f}"]]}
+
+
+def _report_score_landscape(user_id):
+    """3D score landscape: expected points/arrow over (distance x handicap) for
+    your most-shot scoring face, with a marker for where you are now."""
+    with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
+        trows = cur.execute(
+            "SELECT target_id, COUNT(*) AS n FROM apollo "
+            "WHERE user_id = %s AND target_id IS NOT NULL "
+            "GROUP BY target_id ORDER BY n DESC", (user_id,)
+        ).fetchall()
+    zones, ref_d, tname = None, 50.0, ''
+    for tr in trows:
+        tid = int(tr['target_id'])
+        zrows = _fetch_target_zones(tid, user_id)
+        if not _zones_define_scoring(zrows):
+            continue
+        zones = [(int(z['point_value'] or 0), float(z['radius_mm']))
+                 for z in zrows if z['radius_mm'] is not None]
+        with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
+            drows = cur.execute(
+                "SELECT distance FROM apollo WHERE user_id = %s AND target_id = %s",
+                (user_id, tid)).fetchall()
+            trow = cur.execute(
+                "SELECT id AS rowid, name, image_filename, physical_size_mm, "
+                "image_size_px FROM targets WHERE id = %s AND user_id = %s",
+                (tid, user_id)).fetchone()
+        ds = [d for d in (_parse_shot_distance(_row_get(dr, 'distance'))
+                          for dr in drows) if d]
+        if ds:
+            ref_d = sum(ds) / len(ds)
+        if trow is not None:
+            tname = target_to_config(trow)['name']
+        break
+    if not zones:
+        return {'key': 'score_landscape', 'title': 'Score landscape (3D)',
+                'empty': True,
+                'empty_reason': 'No scoring face with recorded shots yet.'}
+
+    arrow_d = handicap.ARROW_D_OUTDOOR
+    dists = list(range(5, 91, 5))
+    hcs = list(range(0, 71, 2))
+    z = [[round(handicap.expected_arrow_score(h, d, zones, arrow_d), 3)
+          for d in dists] for h in hcs]
+    you = None
+    summary = _handicap_summary(_completed_rounds(user_id))
+    you_hc = summary.get('latest') if summary else None
+    if you_hc is not None:
+        rd = min(max(ref_d, dists[0]), dists[-1])
+        you = [round(rd, 1), int(you_hc),
+               round(handicap.expected_arrow_score(you_hc, rd, zones, arrow_d), 3)]
+    intro = Markup(
+        '<p class="report-intro"><strong>What this shows:</strong> expected points '
+        f'per arrow on your <em>{tname or "main"}</em> face across distance and '
+        'handicap (lower handicap = better) &mdash; the trade-off terrain behind '
+        'your expected-score reports. '
+        + ('The gold marker is you now. ' if you else '')
+        + 'Drag to rotate.</p>')
+    return {'key': 'score_landscape', 'title': 'Score landscape (3D)',
+            'intro_html': intro,
+            'chart3d': {'kind': 'landscape', 'x': dists, 'y': hcs, 'z': z,
+                        'you': you,
+                        'title': f'Expected pts/arrow — {tname or "your face"}'},
+            'columns': ['Metric', 'Value'],
+            'rows': [['Face', tname or '—'],
+                     ['Your handicap',
+                      str(you_hc) if you_hc is not None else '—'],
+                     ['Ref distance (m)', f'{ref_d:.0f}']]}
+
+
+def _report_group_evolution(user_id):
+    """Animated group-evolution: step through sessions and watch the group
+    centroid drift and the R95 ring breathe. Normalized to a generic face."""
+    from collections import OrderedDict
+    sessions = OrderedDict()
+    for sid, qidx, shots, _tgt in _iter_quivers(user_id):
+        xs, ys = _quiver_xy(shots)
+        if not xs:
+            continue
+        b = sessions.setdefault(sid, {'xs': [], 'ys': []})
+        b['xs'].extend(xs)
+        b['ys'].extend(ys)
+    if not sessions:
+        return {'key': 'group_evolution', 'title': 'Group evolution (animated)',
+                'empty': True,
+                'empty_reason': 'No completed quivers with hits to animate yet.'}
+    with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
+        strows = cur.execute(
+            "SELECT session_id, session_begin_time FROM session_times "
+            "WHERE user_id = %s", (user_id,)).fetchall()
+    begins = {}
+    for sr in strows:
+        dt = _utc_to_user(sr['session_begin_time'])
+        if dt is not None:
+            begins[sr['session_id']] = dt.replace(tzinfo=None)
+    ordered = sorted(sessions.keys(),
+                     key=lambda s: (begins.get(s) is None, begins.get(s)
+                                    or datetime.min, s))
+    frames, rows_out = [], []
+    for sid in ordered:
+        b = sessions[sid]
+        st = _archery_stats(b['xs'], b['ys'])
+        if st is None:
+            continue
+        markers = [{'x': round(x, 4), 'y': round(y, 4)}
+                   for x, y in zip(b['xs'], b['ys'])][:60]
+        cx, cy = st['centroid']
+        dt = begins.get(sid)
+        label = dt.strftime('%Y-%m-%d') if dt else ('Session ' + str(sid))
+        frames.append({
+            'label': label, 'markers': markers,
+            'centroid': [round(cx, 4), round(cy, 4)], 'r95': round(st['r95'], 4),
+            'hud': [['Accuracy · mean miss', f"{st['mean_miss'] * 100:.1f}% edge"],
+                    ['Precision · R95', f"{st['r95'] * 100:.1f}% edge"],
+                    ['Hits', str(st['n'])]]})
+        rows_out.append([label, str(st['n']), round(st['mean_miss'], 3),
+                         round(st['r95'], 3)])
+    if not frames:
+        return {'key': 'group_evolution', 'title': 'Group evolution (animated)',
+                'empty': True, 'empty_reason': 'Not enough data to animate yet.'}
+    intro = Markup(
+        '<p class="report-intro"><strong>What this shows:</strong> your whole '
+        'history, session by session. Press play to watch the group (white marks) '
+        'and its centre (teal cross) drift while the 95% ring (purple) breathes; '
+        'the trail is where your centre has wandered. Normalized by face size, so '
+        'mixed targets share one face. Scrub to any session.</p>')
+    return {'key': 'group_evolution', 'title': 'Group evolution (animated)',
+            'intro_html': intro,
+            'anim': {'kind': 'evolution', 'frames': frames, 'mm_per_edge': 2.0,
+                     'face_render': _generic_ring_face()},
+            'columns': ['Session', 'Hits', 'Mean miss (norm)', 'R95 (norm)'],
+            'rows': rows_out}
+
+
+def _report_session_playback(user_id):
+    """Animated within-session playback: replay the latest completed session
+    arrow by arrow — the group forms, the running score climbs."""
+    sess = {}
+    for sid, qidx, shots, tgt in _iter_quivers(user_id):
+        sess.setdefault(sid, []).append((qidx, shots, tgt))
+    if not sess:
+        return {'key': 'session_playback',
+                'title': 'Within-session playback (animated)', 'empty': True,
+                'empty_reason': 'No completed quivers to replay yet.'}
+    with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
+        strows = cur.execute(
+            "SELECT session_id, session_begin_time FROM session_times "
+            "WHERE user_id = %s", (user_id,)).fetchall()
+    begins = {}
+    for sr in strows:
+        dt = _utc_to_user(sr['session_begin_time'])
+        begins[sr['session_id']] = dt.replace(tzinfo=None) if dt else datetime.min
+    sid = max(sess.keys(), key=lambda s: (begins.get(s, datetime.min), s))
+    quivers = sorted(sess[sid], key=lambda q: q[0])
+    target_id = quivers[0][2]
+    with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
+        trow = cur.execute(
+            "SELECT id AS rowid, name, image_filename, physical_size_mm, "
+            "image_size_px FROM targets WHERE id = %s AND user_id = %s",
+            (target_id, user_id)).fetchone()
+    if trow is None:
+        return {'key': 'session_playback',
+                'title': 'Within-session playback (animated)', 'empty': True,
+                'empty_reason': 'The latest session’s target was deleted.'}
+    tcfg = target_to_config(trow)
+    try:
+        width_mm = float(tcfg['target_width_mm'] or 0)
+    except (TypeError, ValueError):
+        width_mm = 0
+    if width_mm <= 0:
+        return {'key': 'session_playback',
+                'title': 'Within-session playback (animated)', 'empty': True,
+                'empty_reason': 'The latest session’s face has no known size.'}
+    half = width_mm / 2.0
+    zrows = _fetch_target_zones(target_id, user_id)
+    zones = [{'radius_mm': float(z['radius_mm']), 'point_value': int(z['point_value'] or 0)}
+             for z in zrows if z['radius_mm'] is not None]
+    scoring = _zones_define_scoring(zrows)
+
+    frames, all_markers, cum_xy, cum_score, end_rows = [], [], [], 0, []
+    for ei, (qidx, shots, _t) in enumerate(quivers, start=1):
+        end_xy = []
+        for s in shots:
+            xraw = str(s['x_coord']).strip() if s['x_coord'] is not None else ''
+            yraw = str(s['y_coord']).strip() if s['y_coord'] is not None else ''
+            miss = (xraw == MISS_SENTINEL and yraw == MISS_SENTINEL)
+            all_markers.append({'x': xraw, 'y': yraw, 'miss': miss})
+            if not miss:
+                try:
+                    fx, fy = float(xraw), float(yraw)
+                    end_xy.append((fx, fy))
+                    cum_xy.append((fx, fy))
+                except ValueError:
+                    pass
+                if scoring:
+                    try:
+                        shaft = (float(s['arrow_shaft_diameter'])
+                                 if s['arrow_shaft_diameter'] not in (None, '') else None)
+                    except (ValueError, TypeError):
+                        shaft = None
+                    cum_score += _score_one_shot(xraw, yraw, zones, shaft)
+            est = (_archery_stats([p[0] for p in end_xy], [p[1] for p in end_xy])
+                   if len(end_xy) >= 2 else None)
+            cst = (_archery_stats([p[0] for p in cum_xy], [p[1] for p in cum_xy])
+                   if len(cum_xy) >= 2 else None)
+            hud = [['End', f'{ei} / {len(quivers)}']]
+            if scoring:
+                hud.append(['Score so far', str(cum_score)])
+            if est:
+                hud.append(['End mean miss', f'{est["mean_miss"] / half * 100:.1f}% edge'])
+                hud.append(['End R95', f'{est["r95"] / half * 100:.1f}% edge'])
+            frames.append({
+                'label': f'End {ei} · arrow {len(all_markers)}',
+                'markers': list(all_markers),
+                'centroid': ([round(cst['centroid'][0], 2), round(cst['centroid'][1], 2)]
+                             if cst else None),
+                'r95': round(cst['r95'], 2) if cst else None,
+                'hud': hud})
+        end_rows.append([str(ei), str(cum_score) if scoring else '—'])
+    if not frames:
+        return {'key': 'session_playback',
+                'title': 'Within-session playback (animated)', 'empty': True,
+                'empty_reason': 'The latest session had no replayable shots.'}
+    date_lbl = begins.get(sid)
+    date_lbl = date_lbl.strftime('%Y-%m-%d') if date_lbl and date_lbl != datetime.min else ''
+    intro = Markup(
+        '<p class="report-intro"><strong>What this shows:</strong> your most '
+        f'recent session{" (" + date_lbl + ")" if date_lbl else ""} replayed arrow '
+        'by arrow. Press play: arrows land one at a time, the running score '
+        'climbs, and the group tightens then loosens as accuracy and precision '
+        'update per end. Scrub to any arrow.</p>')
+    return {'key': 'session_playback',
+            'title': 'Within-session playback (animated)', 'intro_html': intro,
+            'anim': {'kind': 'session', 'frames': frames, 'mm_per_edge': width_mm,
+                     'face_render': tcfg.get('face_render'),
+                     'target_image_url': url_for('static', filename=tcfg['target_image']),
+                     'target_width_mm': width_mm},
+            'columns': ['End', 'Cumulative score'],
+            'rows': end_rows}
+
+
 REPORTS = {
     'arrows_vs_time': {
         'label': 'Arrows shot vs time',
@@ -17292,6 +17795,50 @@ REPORTS = {
         'fn': _report_conditions,
         'accepts_date_range': True,
     },
+    # ── Interactive 3D + animated (client-rendered) ──
+    'shot_density_mountain': {
+        'label': 'Shot-density mountain (3D)',
+        'description': 'The shot-density heatmap as a rotatable 3D KDE surface, '
+                       'one per target — the peak is your point of impact, the '
+                       'shape reveals loose or stringing groups. Drag to rotate.',
+        'fn': _report_shot_density_mountain,
+    },
+    'dispersion_cone': {
+        'label': 'Dispersion cone vs distance (3D)',
+        'description': 'Your 95% group footprint drawn as a ring at each '
+                       'distance, stacked into a cone that widens with range — '
+                       'the geometry behind the performance forecast. A reference '
+                       'archer at your handicap is overlaid.',
+        'fn': _report_dispersion_cone,
+    },
+    'history_coresample': {
+        'label': 'History core-sample (3D)',
+        'description': 'Every hit plotted at (left/right, up/down, time), so each '
+                       'session is a disc stacked up a time axis — drift and '
+                       'tightening become a rotatable column.',
+        'fn': _report_history_coresample,
+    },
+    'score_landscape': {
+        'label': 'Score landscape (3D)',
+        'description': 'Expected points per arrow across distance and handicap '
+                       'for your most-shot face, as a rotatable surface, with a '
+                       'marker for where you are now.',
+        'fn': _report_score_landscape,
+    },
+    'group_evolution': {
+        'label': 'Group evolution (animated)',
+        'description': 'Play through your whole history session by session and '
+                       'watch the group centre drift and the 95% ring breathe, '
+                       'with a centroid trail. Scrub to any session.',
+        'fn': _report_group_evolution,
+    },
+    'session_playback': {
+        'label': 'Within-session playback (animated)',
+        'description': 'Replay your most recent session arrow by arrow: the group '
+                       'forms, the running score climbs, and accuracy/precision '
+                       'update per end. Scrub to any arrow.',
+        'fn': _report_session_playback,
+    },
 }
 
 
@@ -17328,6 +17875,9 @@ DASHBOARD_WIDGETS = {
     'graph:handicap_trend': {
         'label': 'Handicap over time', 'kind': 'graph', 'w': 6, 'h': 5,
         'report': 'handicap_trend'},
+    'graph:handicap_animated': {
+        'label': 'Handicap (animated)', 'kind': 'graph', 'w': 6, 'h': 5,
+        'report': 'handicap_animated'},
     'graph:accuracy_precision_traces': {
         'label': 'Accuracy & precision', 'kind': 'graph', 'w': 6, 'h': 5,
         'report': 'accuracy_precision_traces'},
@@ -17917,6 +18467,32 @@ def _predict_zones_for_face(face_key):
     return zones_norm, float(face['physical_size_mm'])
 
 
+def _face_render_from_zones(zones):
+    """Synthesize a colored-ring face_render (outer→inner) from a predict
+    segment's ``zones`` ([{radius_mm, point_value}, ...]) by mapping point
+    values to standard WA face colors — segments carry ring geometry but not
+    colors. Shape matches _tournament_face_render_payload so apollo-replay can
+    draw it for the arrow-drop animation."""
+    def _col(v):
+        if v >= 9:
+            return '#f7d64a'   # gold
+        if v >= 7:
+            return '#e5443b'   # red
+        if v >= 5:
+            return '#4aa3df'   # blue
+        if v >= 3:
+            return '#2c2c2c'   # black
+        return '#f4f4ee'       # white
+    try:
+        srt = sorted(zones, key=lambda z: float(z['radius_mm']), reverse=True)
+    except (KeyError, TypeError, ValueError):
+        return None
+    rings = [{'point_value': int(z.get('point_value') or 0),
+              'radius_mm': float(z['radius_mm']),
+              'color': _col(int(z.get('point_value') or 0))} for z in srt]
+    return {'face_bg': '#ffffff', 'rings': rings}
+
+
 def _build_predict_segments(form, user_id):
     """Construct the list of simulation segments from POST form fields.
 
@@ -18383,6 +18959,20 @@ def predict():
                            'learn your fuzzy factor — log a few scored ends first.'),
             }
 
+    # Representative face for the arrow-drop animation: the endpoint segment
+    # with the largest face. Synthesize colored rings from its zones so the
+    # browser can draw a real target face beside the histogram.
+    face_payload = None
+    if segments:
+        fseg = max(segments, key=lambda s: s.get('target_physical_mm') or 0)
+        if (fseg.get('target_physical_mm') or 0) > 0 and fseg.get('zones'):
+            face_payload = {
+                'face_render': _face_render_from_zones(fseg['zones']),
+                'target_width_mm': fseg['target_physical_mm'],
+                'seg_index': segments.index(fseg),
+                'distance_m': fseg.get('distance_m'),
+            }
+
     ctx['payload'] = {
         'dist':          fit,
         'segments':      segments,
@@ -18392,6 +18982,7 @@ def predict():
         'endpoint_max':  endpoint_max,
         'benchmarks':    benchmarks,
         'fuzzy':         fuzzy,
+        'face':          face_payload,
     }
     ctx['endpoint_label'] = endpoint_label
     ctx['endpoint_max'] = endpoint_max

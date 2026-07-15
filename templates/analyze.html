@@ -612,6 +612,48 @@
         }
         .table-collapse-toggle:hover { background: #dfe8f5; }
 
+        /* Client-rendered 3D (Plotly) report chart — fills the card width. */
+        .panel-3d { margin-bottom: 16px; }
+        .chart3d-host { width: 100%; height: 480px; }
+
+        /* Animated shot player (apollo-anim.js): face + live HUD + controls. */
+        .panel-anim { margin-bottom: 16px; }
+        .anim-wrap {
+            display: grid;
+            grid-template-columns: minmax(0, 340px) minmax(0, 1fr);
+            gap: 18px; align-items: start;
+        }
+        @media (max-width: 720px) { .anim-wrap { grid-template-columns: 1fr; } }
+        .anim-stage { grid-column: 1; }
+        .anim-svg {
+            width: 100%; max-width: 340px; height: auto; display: block;
+            border: 1px solid #95abcf; border-radius: 8px; background: #fff;
+        }
+        .anim-side { grid-column: 2; min-width: 0; }
+        .anim-label {
+            font-family: 'Quantico', sans-serif; font-weight: 700;
+            color: #1a3a5c; margin-bottom: 8px;
+        }
+        .anim-row {
+            display: flex; justify-content: space-between; align-items: baseline;
+            padding: 6px 0; border-bottom: 0.5px solid #d6deeb;
+            font-family: 'Quantico', sans-serif; font-size: 0.9rem; color: #4a6080;
+        }
+        .anim-row b { font-size: 1.15rem; color: #1a3a5c; font-variant-numeric: tabular-nums; }
+        .anim-ctl {
+            grid-column: 1 / -1; display: flex; align-items: center; gap: 12px;
+            margin-top: 10px;
+        }
+        .anim-btn {
+            font-family: 'Quantico', sans-serif; font-size: 0.95rem;
+            width: 42px; height: 32px; border-radius: 6px;
+            border: 1px solid #95abcf; background: #eef3fa; color: #1a3a5c; cursor: pointer;
+        }
+        .anim-btn:hover { background: #dfe8f5; }
+        .anim-slider { flex: 1; accent-color: #21A4C8; }
+        @keyframes anim-pop { from { opacity: 0; transform: scale(2.2); } to { opacity: 1; transform: scale(1); } }
+        .anim-mark.anim-pop { transform-box: fill-box; transform-origin: center; animation: anim-pop 0.35s ease-out; }
+
         /* Stacked report layout (spec 'stacked': True): chart full-width on
            top, enlarged to the card; the data table is folded into a
            collapse-by-default <details> beneath. The chart is vector SVG, so
@@ -814,6 +856,14 @@
 
     <script defer src="{{ url_for('static', filename='apollo-nav.js') }}"></script>
     <script defer src="{{ url_for('static', filename='apollo-replay.js') }}"></script>
+    {% if selected %}
+    {# 3D (Plotly) + animated report widgets — loaded only when reports are
+       being rendered, so the picker page stays light. Plotly is self-hosted
+       under /static (script-src 'self'), so no CSP change is needed. #}
+    <script defer src="/static/vendor/plotly/plotly.min.js"></script>
+    <script defer src="{{ url_for('static', filename='apollo-chart3d.js') }}"></script>
+    <script defer src="{{ url_for('static', filename='apollo-anim.js') }}"></script>
+    {% endif %}
 </head>
 <body class="has-glossary">
 <nav class="side-nav">
@@ -1189,6 +1239,8 @@
     function initCard(card) {
         initLightGallery(card);
         if (window.ApolloReplay) window.ApolloReplay.initAll(card);
+        if (window.ApolloChart3d) window.ApolloChart3d.initAll(card);
+        if (window.ApolloAnim) window.ApolloAnim.initAll(card);
         if (typeof window.initCollapsibleTables === 'function') {
             window.initCollapsibleTables(card);
         }

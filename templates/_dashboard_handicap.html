@@ -1,0 +1,3 @@
+{# Animated handicap tile body — client-rendered from JSON by
+   apollo-dash-handicap.js (mounted from apollo-dashboard.js loadGraph). #}
+{% if data and data.points and data.points|length >= 2 %}<div class="dash-handicap-anim" data-handicap='{{ data | tojson }}'></div>{% else %}<p class="dash-graph-empty">Shoot at least two full AGB rounds to chart your handicap.</p>{% endif %}
