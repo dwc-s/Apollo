@@ -5384,6 +5384,11 @@ def dashboard_graph(key):
         error = 'matplotlib is not installed on the server.'
     except SQLAlchemyError:
         error = 'Database error while building this graph.'
+    except Exception as e:
+        import traceback
+        print(f"❌ Dashboard graph '{key}' crashed: {e}")
+        traceback.print_exc()
+        error = 'This graph hit an unexpected error.'
     return render_template('_dashboard_graph.html', graph=graph, error=error)
 
 
@@ -7373,7 +7378,13 @@ def sync_shots():
     try:
         with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
             for s in shots:
-                session_id = int(s.get('session_id'))
+                sid_raw = str(s.get('session_id', '')).strip()
+                if not sid_raw:
+                    # Mirrors the batch-validation filter above: a queue entry
+                    # with no session_id must be skipped, not int('')-crashed —
+                    # a 500 here would wedge the client's retry loop forever.
+                    continue
+                session_id = int(sid_raw)
                 try:
                     quiver_size = int(s.get('quiver_size'))
                 except (TypeError, ValueError):
@@ -8207,7 +8218,7 @@ def tournament_score_sheet_setup():
         round_key=round_key,
         round_def=round_def,
         sheet_segments=sheet_segments,
-        points_by_segment_json=json.dumps(points_by_segment),
+        points_by_segment=points_by_segment,
         total_arrows=_round_total_arrows(round_def),
         owner_name=owner_name,
         owner_email=owner_email,
@@ -8584,7 +8595,7 @@ def tournament_practice_scorecard_setup():
         face_name=face.get('name', face_key),
         distance_m=float(primary['distance_m']),
         choices=choices,
-        points_map_json=json.dumps(points_map),
+        points_map=points_map,
         default_arrows_per_end=int(primary['arrows_per_end']),
         default_ends=int(primary['ends']),
         owner_name=owner_name,
@@ -17532,14 +17543,20 @@ def _report_session_playback(user_id):
             xraw = str(s['x_coord']).strip() if s['x_coord'] is not None else ''
             yraw = str(s['y_coord']).strip() if s['y_coord'] is not None else ''
             miss = (xraw == MISS_SENTINEL and yraw == MISS_SENTINEL)
-            all_markers.append({'x': xraw, 'y': yraw, 'miss': miss})
-            if not miss:
+            if miss:
+                all_markers.append({'miss': True})
+            else:
+                # Parse before shipping: a corrupt/blank coordinate must be
+                # dropped here, not sent raw — the client coerces '' to 0 and
+                # would draw a phantom arrow dead-centre on the bullseye.
                 try:
                     fx, fy = float(xraw), float(yraw)
-                    end_xy.append((fx, fy))
-                    cum_xy.append((fx, fy))
                 except ValueError:
-                    pass
+                    continue
+                all_markers.append({'x': round(fx, 2), 'y': round(fy, 2),
+                                    'miss': False})
+                end_xy.append((fx, fy))
+                cum_xy.append((fx, fy))
                 if scoring:
                     try:
                         shaft = (float(s['arrow_shaft_diameter'])
@@ -19033,7 +19050,20 @@ def _run_report(user_id, key, *, date_ranges=None, categories=None,
         kwargs['bow_filter'] = bow_selections.get(key, [])
         kwargs['arrow_filter'] = arrow_selections.get(key, [])
     with _MPL_RENDER_LOCK:
-        out = spec['fn'](user_id, **kwargs)
+        try:
+            out = spec['fn'](user_id, **kwargs)
+        except Exception:
+            # A crashed report must not leak its half-built figure into
+            # pyplot's process-global manager (the Agg backend keeps every
+            # open figure alive forever, so each crash would grow the
+            # worker's memory). Safe to close-all here: the render lock is
+            # still held, so no other thread has a figure in flight.
+            try:
+                import matplotlib.pyplot as plt
+                plt.close('all')
+            except Exception:
+                pass
+            raise
     if out is None:
         return [{
             'key': key,
@@ -19233,6 +19263,17 @@ def analyze_report(key):
         results = [{'key': key, 'title': REPORTS[key]['label'], 'svg_b64': None,
                     'columns': [], 'rows': [], 'empty': True,
                     'empty_reason': 'Database error while building this report.'}]
+    except Exception as e:
+        # Never let one buggy report 500 the fragment — the card shows a
+        # diagnostic and the rest of the page keeps streaming. (_run_report
+        # has already closed any half-built matplotlib figure.)
+        import traceback
+        print(f"❌ Analyze report '{key}' crashed: {e}")
+        traceback.print_exc()
+        results = [{'key': key, 'title': REPORTS[key]['label'], 'svg_b64': None,
+                    'columns': [], 'rows': [], 'empty': True,
+                    'empty_reason': 'This report hit an unexpected error — '
+                                    'check the server logs.'}]
     return render_template('_report_card.html',
                            results=results,
                            date_ranges=date_ranges,

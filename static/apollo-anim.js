@@ -118,9 +118,14 @@
                     return p[0].toFixed(1) + ',' + p[1].toFixed(1);
                 }).join(' '));
             }
-            hud.innerHTML = (f.hud || []).map(function (kv) {
-                return '<div class="anim-row"><span>' + kv[0] + '</span><b>' + kv[1] + '</b></div>';
-            }).join('');
+            // DOM-built (not innerHTML) so hud values can never be parsed as
+            // markup, whatever a future report ships in them.
+            hud.textContent = '';
+            (f.hud || []).forEach(function (kv) {
+                var row = h('div', 'anim-row', hud);
+                h('span', '', row).textContent = String(kv[0]);
+                h('b', '', row).textContent = String(kv[1]);
+            });
             label.textContent = f.label || ('Frame ' + (i + 1));
             slider.value = String(i);
             lastI = i;

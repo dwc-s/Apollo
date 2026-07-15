@@ -2054,7 +2054,7 @@ applyUnits();
     // Server pre-computes the ring-label → point-value table per
     // segment. Keys are stringified segment indices; values are
     // { 'X': pv, '10': pv, … , 'M': 0 }.
-    const POINTS_BY_SEG = {{ points_by_segment_json|safe }};
+    const POINTS_BY_SEG = {{ points_by_segment | tojson }};
     // Per-bow saved gear ({model: {type, values}}) for prefilling each
     // participant's equipment menu.
     const STYLE_BY_BOW = {{ (style_settings_by_bow or {}) | tojson }};
@@ -2378,7 +2378,7 @@ applyUnits();
 
 <script>
 (function() {
-    const POINTS_MAP = {{ points_map_json|safe }};
+    const POINTS_MAP = {{ points_map | tojson }};
     const CHOICES    = {{ choices|tojson }};
     const DEFAULT_APE  = {{ default_arrows_per_end }};
     const DEFAULT_ENDS = {{ default_ends }};
