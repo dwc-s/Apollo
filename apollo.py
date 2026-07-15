@@ -14397,24 +14397,41 @@ def _report_accuracy_precision_traces(user_id, date_from=None, date_to=None,
 
     fig, ax = plt.subplots(figsize=(10, 5.4))
 
-    # Visual encoding, kept deliberately simple: color is the only channel
-    # that separates traces. Single combined subject → blue = accuracy,
-    # green = precision, one distinct shade per granularity. Split mode →
-    # color = subject. Every trace is a solid line, labeled in place at its
-    # right end (no legend), carries subtle date dots, and gets a faint
-    # same-color linear trend line so its direction reads at a glance.
-    ACC_SHADES = {'session': '#123a63', 'alltime': '#8fb9e6'}
-    PREC_SHADES = {'session': '#1e6b3c', 'alltime': '#93cfa9'}
-    SUBJECT_COLORS = ['#1a3a5c', '#c0392b', '#27ae60', '#8e44ad',
-                      '#d68910', '#16a085', '#2c3e50', '#e74c3c']
+    # Visual encoding: color places each trace in its metric family — the
+    # teal/blue ramp is accuracy, the purple ramp is precision — and every
+    # trace's linear trend line is golden in both families. Single combined
+    # subject → session and all-time are two shades of the family ramp. Split
+    # mode → each subject is one shade of the ramp (accuracy from teal,
+    # precision from purple), so up to four subjects stay distinct. A legend
+    # names the traces; the two palest ramp shades are held back for the
+    # third and fourth head-to-head subjects.
+    ACC_RAMP = ['#21A4C8', '#217376', '#6AA0AF', '#B9D8E4']
+    PREC_RAMP = ['#8E43FE', '#2B0D5F', '#976BBD', '#C9B9E4']
+    TREND_GOLD = '#FFC30E'   # per-session trend lines
+    TREND_DARK = '#000000'   # all-time-rolling trend lines
+    ACC_SHADES = {'session': ACC_RAMP[0], 'alltime': ACC_RAMP[1]}
+    PREC_SHADES = {'session': PREC_RAMP[0], 'alltime': PREC_RAMP[1]}
 
     import numpy as np
     import matplotlib.dates as mdates
+    import matplotlib.colors as mcolors
+    from matplotlib.legend_handler import HandlerTuple
 
-    plotted = []  # {dates, y, color, label} — drives trend lines + end labels
+    def _lighten(c, f=0.62):
+        """Blend a color toward white by fraction f — the pale half of the
+        all-time line's two-tone dash."""
+        r, g, b = mcolors.to_rgb(c)
+        return (r + (1 - r) * f, g + (1 - g) * f, b + (1 - b) * f)
+
+    # Legend entries are collected per metric family so the legend can group
+    # them under separate "Accuracy" / "Precision" headers rather than one
+    # flat list. Each is a (handle, label) pair in draw order.
+    acc_entries = []
+    prec_entries = []
+    drew_session_trend = False   # any gold per-session trend line drawn?
+    drew_alltime_trend = False   # any black all-time-rolling trend line drawn?
     for si, subj in enumerate(subjects_with_data):
         series = subj['series']
-        subj_color = SUBJECT_COLORS[si % len(SUBJECT_COLORS)]
         for key, gran, metric, base_label in _TRACE_DEFS:
             if key not in enabled:
                 continue
@@ -14422,69 +14439,125 @@ def _report_accuracy_precision_traces(user_id, date_from=None, date_to=None,
             if not dates:
                 continue
             yvals = accs if metric == 'acc' else r95s
-            color = subj_color if split else (
-                ACC_SHADES[gran] if metric == 'acc' else PREC_SHADES[gran])
-            label = f"{subj['name']} — {base_label}" if split else base_label
-            ax.plot(dates, yvals, color=color, linewidth=1.6,
-                    linestyle='-', marker='o', markersize=2.5,
-                    markeredgewidth=0, alpha=0.95, zorder=3)
-            # Faint same-color linear trend so each trace's direction reads
-            # without adding a differentiating channel.
+            if split:
+                # Family + subject: accuracy from the teal ramp, precision from
+                # the purple, each subject a distinct shade of its family.
+                color = (ACC_RAMP if metric == 'acc' else PREC_RAMP)[si % 4]
+            else:
+                color = (ACC_SHADES[gran] if metric == 'acc'
+                         else PREC_SHADES[gran])
+            # The metric family becomes the legend group's header, so strip it
+            # from the per-entry label (capitalize the remainder so it still
+            # reads as a sentence start under the header).
+            base_short = base_label.split(' — ', 1)[1]
+            base_short = base_short[:1].upper() + base_short[1:]
+            entry_label = (f"{subj['name']} — {base_short}"
+                           if split else base_short)
+            group = acc_entries if metric == 'acc' else prec_entries
+            # Per session and all-time rolling share a family shade, so set them
+            # apart by texture rather than color. Per session is a bold solid
+            # line with date dots (the measured signal). All-time rolling is a
+            # two-color dashed line — the family shade alternating with a pale
+            # tint of itself (a solid base with pale dashes laid over it) — a
+            # completely different texture that reads apart at a glance while
+            # staying in the family hue.
+            if gran == 'session':
+                handle, = ax.plot(dates, yvals, color=color, linewidth=1.9,
+                                  linestyle='-', marker='o', markersize=2.5,
+                                  markeredgewidth=0, alpha=0.95, zorder=3)
+            else:
+                base, = ax.plot(dates, yvals, color=color, linewidth=1.8,
+                                linestyle='-', alpha=0.95, zorder=3)
+                over, = ax.plot(dates, yvals, color=_lighten(color),
+                                linewidth=1.8, linestyle=(0, (6, 6)),
+                                dash_capstyle='butt', alpha=1.0, zorder=3)
+                handle = (base, over)
+            group.append((handle, entry_label))
+            # Linear trend so each trace's direction reads at a glance. Per
+            # session is gold; all-time rolling is black, so the two timescales'
+            # trends never blur together. Not legend entries themselves — trend
+            # proxies at the foot of the legend stand in for them.
             xnum = mdates.date2num(dates)
             if len(dates) >= 2 and len(set(xnum)) >= 2:
                 m, b = np.polyfit(xnum, yvals, 1)
+                if gran == 'session':
+                    trend_color = TREND_GOLD
+                    drew_session_trend = True
+                else:
+                    trend_color = TREND_DARK
+                    drew_alltime_trend = True
                 ax.plot([dates[0], dates[-1]],
                         [m * xnum[0] + b, m * xnum[-1] + b],
-                        color=color, linewidth=1.0, alpha=0.45, zorder=2)
-            plotted.append({'dates': dates, 'y': yvals,
-                            'color': color, 'label': label})
+                        color=trend_color, linewidth=1.2, alpha=0.85, zorder=2)
             # Skill-adjusted companion (split mode, per-session traces only):
             # the same trace with the archer's overall progression removed and
             # re-based to the latest date, so subjects used in different periods
-            # compare on equal footing. Dashed, same color, beneath the raw line.
+            # compare on equal footing. Dotted (distinct from the dashed
+            # all-time line), same color, beneath the raw line.
             if detrend is not None and gran == 'session':
                 slope = detrend['acc'] if metric == 'acc' else detrend['r95']
                 y_adj = [max(0.0, yv - slope * (xx - detrend['x_ref']))
                          for yv, xx in zip(yvals, xnum)]
-                ax.plot(dates, y_adj, color=color, linewidth=1.3,
-                        linestyle='--', alpha=0.7, zorder=2)
-                plotted.append({'dates': dates, 'y': y_adj, 'color': color,
-                                'label': f"{label} — skill-adj."})
+                adj_line, = ax.plot(dates, y_adj, color=color, linewidth=1.3,
+                                    linestyle=':', alpha=0.7, zorder=2)
+                group.append((adj_line, f"{entry_label} — skill-adj."))
 
     ax.set_xlabel('Date')
     ax.set_ylabel('Normalized units (1.0 = target edge)\nlower is better')
     ax.set_title('Accuracy & precision traces')
     ax.grid(True, axis='y', linestyle='--', alpha=0.4)
-    fig.autofmt_xdate()
 
-    # Label each trace in place at its right end (replaces the legend), in
-    # the trace's own color, nudged apart vertically so labels don't collide.
-    if plotted:
-        x_right = max(t['dates'][-1] for t in plotted)
-        ylo, yhi = ax.get_ylim()
-        gap = (yhi - ylo) * 0.048
-        prev_y = None
-        for t in sorted(plotted, key=lambda tr: tr['y'][-1]):
-            y = t['y'][-1]
-            if prev_y is not None and y < prev_y + gap:
-                y = prev_y + gap
-            prev_y = y
-            ax.annotate(t['label'], xy=(x_right, y),
-                        xytext=(6, 0), textcoords='offset points',
-                        va='center', ha='left', fontsize=7,
-                        color=t['color'], annotation_clip=False)
+    # A legend names each trace, grouped under "Accuracy" and "Precision"
+    # headers (blank-swatch spacer rows) with their entries indented beneath;
+    # gold and black proxies at the foot stand in for the per-session and
+    # all-time trend lines. Placed just outside the axes on the right so it
+    # never covers data — the figure is saved with bbox_inches='tight', so an
+    # outside legend is measured in, not clipped.
+    from matplotlib.lines import Line2D
+    def _header():
+        return Line2D([], [], linestyle='none', marker='none')
+    handles, labels = [], []
+    for title, entries in (('Accuracy', acc_entries),
+                           ('Precision', prec_entries)):
+        if not entries:
+            continue
+        handles.append(_header())
+        labels.append(title)
+        for h, lab in entries:
+            handles.append(h)
+            labels.append('   ' + lab)
+    if handles:
+        if drew_session_trend:
+            handles.append(Line2D([0], [0], color=TREND_GOLD, linewidth=1.6))
+            labels.append('Trend — per session')
+        if drew_alltime_trend:
+            handles.append(Line2D([0], [0], color=TREND_DARK, linewidth=1.6))
+            labels.append('Trend — all-time rolling')
+        leg = ax.legend(handles, labels, loc='center left',
+                        bbox_to_anchor=(1.01, 0.5), fontsize=7,
+                        framealpha=0.9, borderaxespad=0, handletextpad=0.6,
+                        labelspacing=0.5,
+                        handler_map={tuple: HandlerTuple(ndivide=None)})
+        # Bold the group headers so they stand out from their indented entries.
+        for txt in leg.get_texts():
+            if txt.get_text() in ('Accuracy', 'Precision'):
+                txt.set_fontweight('bold')
+    fig.autofmt_xdate()
 
     svg_b64 = _render_matplotlib_svg(fig)
 
     if split:
         overlay = (
-            ' Each selected subject (bow / arrow / tag) is a separate color; '
-            'every trace is a solid line labeled in place at its right edge, '
-            'with subtle dots marking each date and a faint same-color trend '
-            'line showing its direction.')
+            ' Accuracy traces are drawn from a teal ramp and precision from a '
+            'purple one, with each selected subject (bow / arrow / tag) a '
+            'distinct shade of its family; within each, per session is a bold '
+            'solid line and all-time rolling a two-color dashed one (that '
+            'shade alternating with a pale tint). A legend groups the traces '
+            'under Accuracy and Precision, and a straight trend line shows each '
+            'direction — gold for per session, black for all-time rolling.')
         if detrend is not None:
             overlay += (
-                ' A dashed same-color companion is each subject&rsquo;s '
+                ' A dotted same-color companion is each subject&rsquo;s '
                 'per-session trace <em>skill-adjusted</em>: your overall '
                 'long-term improvement is removed and the trace re-based to '
                 'your current form, so kit used mostly early and kit used '
@@ -14492,13 +14565,14 @@ def _report_accuracy_precision_traces(user_id, date_from=None, date_to=None,
                 'one simply riding your general progress.')
     else:
         overlay = (
-            ' Blue traces are accuracy (mean distance from the gold); green '
-            'traces are precision (R95) — each granularity is a distinct '
-            'shade. Lines are solid '
-            'and labeled in place at the right (no legend); small dots mark '
-            'the dates and a faint same-color trend line shows each '
-            "trace's direction. Pick bows, arrows, or tags to overlay them "
-            'head-to-head.')
+            ' Teal traces are accuracy (mean distance from the gold); purple '
+            'traces are precision (R95). Within each family, per session is a '
+            'bold solid line with date dots and all-time rolling a two-color '
+            'dashed line (the same shade alternating with a pale tint of it); '
+            'a legend groups them under Accuracy and Precision, and a straight '
+            "trend line shows each trace's direction — gold for per session, "
+            'black for all-time rolling. Pick bows, arrows, or tags to overlay '
+            'them head-to-head.')
     intro = Markup(
         '<p class="report-intro">'
         '<strong>What this answers:</strong> are you getting more '
@@ -16491,49 +16565,46 @@ def _report_quiver_spread(user_id, date_from=None, date_to=None,
 
     xs = list(range(1, len(quivers) + 1))
     fig, ax = plt.subplots(figsize=(9, 4.5))
-    # Visual encoding mirrors the accuracy/precision traces: color is the
-    # only channel separating the two lines (blue = biggest pair, amber =
-    # smallest). Each is a solid line with subtle date dots and a faint
-    # same-color linear trend line; labels sit in place at the right end
-    # instead of a legend. The shaded band between them stays as a quiet
-    # backdrop for the within-quiver gap.
-    ax.fill_between(xs, smallest, biggest, color='#b3c6e3', alpha=0.25,
+    # Visual encoding mirrors the accuracy/precision traces: color separates
+    # the two lines — teal = biggest pair, purple = smallest — each a solid
+    # line with subtle date dots and a golden linear trend line, identified by
+    # a legend. The shaded band between them is a quiet backdrop for the
+    # within-quiver gap (a pale blend of the two families' lightest tones).
+    TREND_GOLD = '#FFC30E'
+    ax.fill_between(xs, smallest, biggest, color='#C1C8E4', alpha=0.45,
                     zorder=1)
     traces = [
-        {'y': biggest,  'color': '#1a3a5c',
+        {'y': biggest,  'color': '#21A4C8',
          'label': 'Biggest spread (max pair)'},
-        {'y': smallest, 'color': '#c79b5a',
+        {'y': smallest, 'color': '#8E43FE',
          'label': 'Smallest spread (min pair)'},
     ]
     for t in traces:
         ax.plot(xs, t['y'], color=t['color'], linewidth=1.6,
                 linestyle='-', marker='o', markersize=2.5,
-                markeredgewidth=0, alpha=0.95, zorder=3)
-        # Faint same-color linear trend so each trace's direction reads
-        # at a glance, without adding a differentiating channel.
+                markeredgewidth=0, alpha=0.95, zorder=3, label=t['label'])
+        # Golden linear trend so each trace's direction reads at a glance;
+        # kept out of the legend (one shared 'Trend' proxy stands in).
         if len(xs) >= 2:
             m, b = np.polyfit(xs, t['y'], 1)
             ax.plot([xs[0], xs[-1]], [m * xs[0] + b, m * xs[-1] + b],
-                    color=t['color'], linewidth=1.0, alpha=0.45, zorder=2)
+                    color=TREND_GOLD, linewidth=1.2, alpha=0.85, zorder=2,
+                    label='_nolegend_')
     ax.set_xlabel('Session date (sequential quivers in date range)')
     ax.set_ylabel('Arrow-pair distance ÷ target face width\n(1.0 = opposite edges of target)')
     ax.set_title('Biggest vs smallest spread per quiver')
     ax.grid(True, axis='y', linestyle='--', alpha=0.4)
-    # Label each trace in place at its right end (replaces the legend), in
-    # the trace's own color, nudged apart vertically so they don't collide.
-    x_right = xs[-1]
-    ylo, yhi = ax.get_ylim()
-    gap = (yhi - ylo) * 0.048
-    prev_y = None
-    for t in sorted(traces, key=lambda tr: tr['y'][-1]):
-        y = t['y'][-1]
-        if prev_y is not None and y < prev_y + gap:
-            y = prev_y + gap
-        prev_y = y
-        ax.annotate(t['label'], xy=(x_right, y),
-                    xytext=(6, 0), textcoords='offset points',
-                    va='center', ha='left', fontsize=7,
-                    color=t['color'], annotation_clip=False)
+    # A legend names the two lines; a single gold proxy stands in for their
+    # trend lines. Placed just outside the axes on the right (the figure is
+    # saved with bbox_inches='tight', so it isn't clipped) — matching the
+    # accuracy/precision traces report.
+    from matplotlib.lines import Line2D
+    handles, labels = ax.get_legend_handles_labels()
+    handles.append(Line2D([0], [0], color=TREND_GOLD, linewidth=1.6))
+    labels.append('Trend (linear fit)')
+    ax.legend(handles, labels, loc='center left',
+              bbox_to_anchor=(1.01, 0.5), fontsize=7,
+              framealpha=0.9, borderaxespad=0)
     # X-axis: each quiver is one evenly-spaced point, but the tick
     # *labels* show the session date so the user can read off when
     # each quiver happened. On long histories we thin the ticks so
@@ -16562,11 +16633,10 @@ def _report_quiver_spread(user_id, date_from=None, date_to=None,
         '<p class="report-intro">'
         '<strong>What this answers:</strong> for each completed quiver, '
         'how spread out were the arrows across the <em>whole target</em>? '
-        'The blue trace is the worst pair (biggest gap between any two '
-        'arrows in the quiver); the amber trace is the tightest pair. '
-        'Both are solid lines labeled in place at the right edge (no '
-        'legend), with subtle dots marking each quiver and a faint '
-        'same-color trend line showing the direction. '
+        'The teal trace is the worst pair (biggest gap between any two '
+        'arrows in the quiver); the purple trace is the tightest pair. '
+        'Both are solid lines named in a legend, with subtle dots marking '
+        'each quiver and a golden trend line showing the direction. '
         'The shaded band between them is the within-quiver spread '
         'gap — a thinner band means a more consistent group. '
         'Distances are normalized by the target face width, so '
