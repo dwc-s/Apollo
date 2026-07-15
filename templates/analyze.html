@@ -612,6 +612,46 @@
         }
         .table-collapse-toggle:hover { background: #dfe8f5; }
 
+        /* Stacked report layout (spec 'stacked': True): chart full-width on
+           top, enlarged to the card; the data table is folded into a
+           collapse-by-default <details> beneath. The chart is vector SVG, so
+           filling the card width just scales it up crisply. */
+        .panel-stacked { display: block; margin-bottom: 16px; }
+        .panel-stacked .panel-chart-full {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 8px;
+        }
+        .panel-stacked a.chart-thumb {
+            display: block;
+            width: 100%;
+            max-width: 1000px;
+            border: 1px solid #95abcf;
+            border-radius: 8px;
+            overflow: hidden;
+            background: #fff;
+        }
+        .panel-stacked a.chart-thumb img { display: block; width: 100%; height: auto; }
+        details.panel-table-collapse { margin-top: 14px; }
+        details.panel-table-collapse > summary {
+            display: inline-block;
+            margin: 0 0 8px;
+            padding: 4px 12px;
+            font-family: 'Quantico', sans-serif;
+            font-size: 0.82rem;
+            color: #1a3a5c;
+            background: #eef3fa;
+            border: 1px solid #95abcf;
+            border-radius: 6px;
+            cursor: pointer;
+            list-style: none;
+        }
+        details.panel-table-collapse > summary::-webkit-details-marker { display: none; }
+        details.panel-table-collapse > summary::before { content: '▾ '; }
+        details.panel-table-collapse[open] > summary { background: #dfe8f5; }
+        details.panel-table-collapse[open] > summary::before { content: '▴ '; }
+
         /* Streaming placeholder shown while a report builds server-side. */
         .report-card.report-pending { opacity: 0.9; }
         .report-spinner {
@@ -1241,6 +1281,9 @@ function initCollapsibleTables(root) {
     const COLLAPSE_AT = 12;   // only fold tables longer than this
     (root || document).querySelectorAll('.report-table-wrapper').forEach(wrap => {
         if (wrap.dataset.collapseInit) return;
+        // Stacked reports fold the whole table behind a <details> already —
+        // don't also add the row-count toggle, or there'd be two collapses.
+        if (wrap.closest('.panel-table-collapse')) return;
         const table = wrap.querySelector('table.report-table');
         if (!table) return;
         const rows = table.querySelectorAll('tbody > tr');

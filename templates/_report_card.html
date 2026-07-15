@@ -50,6 +50,47 @@
     </div>
 {% endmacro %}
 
+{# Stacked variant (spec 'stacked': True): the chart renders full-width on top,
+   enlarged to the card, with the data table folded into a collapse-by-default
+   <details> below it. Used for the trend reports where the chart is the point
+   and the table is reference. lightGallery still zooms via the a.chart-thumb
+   anchor inside the [data-lg-gallery] wrapper. #}
+{% macro render_panel_stacked(p, title) %}
+    <div class="panel-stacked" data-lg-gallery="true">
+        {% if p.svg_b64 %}
+        <div class="panel-chart-full">
+            <a class="chart-thumb"
+               href="data:image/svg+xml;base64,{{ p.svg_b64 }}"
+               data-src="data:image/svg+xml;base64,{{ p.svg_b64 }}"
+               data-sub-html="<h4>{{ title }}</h4>">
+                <img src="data:image/svg+xml;base64,{{ p.svg_b64 }}"
+                     alt="{{ title }}">
+            </a>
+            <span class="thumb-zoom-hint">Click to zoom</span>
+        </div>
+        {% endif %}
+        <details class="panel-table-collapse">
+            <summary>Show data table</summary>
+            <div class="report-table-wrapper">
+                <table class="report-table">
+                    <thead>
+                        <tr>
+                            {% for c in p.columns %}<th>{{ c }}</th>{% endfor %}
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for row in p.rows %}
+                        <tr>
+                            {% for cell in row %}<td>{{ cell }}</td>{% endfor %}
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </details>
+    </div>
+{% endmacro %}
+
 {% for r in results %}
 <section class="report-card" data-report-key="{{ r.key }}">
     <h3>{{ r.title }}</h3>
@@ -95,7 +136,7 @@
             </a>
         </div>
     {% else %}
-        {{ render_panel(r, r.title) }}
+        {% if r.stacked %}{{ render_panel_stacked(r, r.title) }}{% else %}{{ render_panel(r, r.title) }}{% endif %}
         {% set dr = date_ranges.get(r.key) or {} %}
         {% set cats = categories.get(r.key) or [] %}
         {% set tags = tag_selections.get(r.key) %}

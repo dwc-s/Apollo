@@ -2543,6 +2543,9 @@ def get_stats(session_id, user_id):
     # Localize the date to the user's zone so a 23:30 PT session doesn't
     # show as "tomorrow" just because the stored timestamp is UTC.
     stats.update({"session_date": (_utc_to_user(dt1) or dt1).strftime('%Y-%m-%d')})
+    # Begin time-of-day (same localization) so the previous-sessions header can
+    # show when a session started, not just its date.
+    stats.update({"session_time": (_utc_to_user(dt1) or dt1).strftime('%H:%M')})
     try: # get number of arrows shot
         with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
             res = cur.execute(
@@ -12115,6 +12118,17 @@ def _apply_import_once(data, user_id):
 # missing package only breaks /analyze, not the whole app.
 
 
+# Shared analyze-chart palette. Promoted from _report_accuracy_precision_traces
+# (v1.3) so every report can key its colors off one source: teal = accuracy,
+# purple = precision, gold = per-session trend / emphasis, black = all-time
+# rolling trend. Each ramp's shades 0..3 hold up to four subjects apart within a
+# family; the two palest are reserved for third/fourth head-to-head subjects.
+_ANALYZE_ACC_RAMP = ['#21A4C8', '#217376', '#6AA0AF', '#B9D8E4']   # teal  = accuracy
+_ANALYZE_PREC_RAMP = ['#8E43FE', '#2B0D5F', '#976BBD', '#C9B9E4']  # purple = precision
+_ANALYZE_TREND_GOLD = '#FFC30E'   # per-session trend lines / emphasis
+_ANALYZE_TREND_DARK = '#000000'   # all-time-rolling trend lines
+
+
 def _render_matplotlib_svg(fig):
     """Serialize a Matplotlib figure to a base64-encoded SVG data URL.
 
@@ -12188,7 +12202,7 @@ def _report_arrows_vs_time(user_id):
     fig, ax = plt.subplots(figsize=(9, 4.5))
     xs = [datetime.combine(d, datetime.min.time()) for d, _ in day_series]
     ys = [n for _, n in day_series]
-    ax.bar(xs, ys, width=0.8, color='#4d6da6', edgecolor='#1a3a5c')
+    ax.bar(xs, ys, width=0.8, color=_ANALYZE_ACC_RAMP[0], edgecolor='#1a3a5c')
     ax.set_xlabel('Day')
     ax.set_ylabel('Arrows shot')
     ax.set_title('Arrows shot per day')
@@ -12479,7 +12493,7 @@ def _report_all_shots_per_target(user_id, date_from=None, date_to=None):
         stats = _archery_stats(xs, ys) if hits > 0 else None
         if stats is not None:
             ax.scatter(xs, ys, s=42,
-                       facecolors='#fcba03', edgecolors='#1a3a5c',
+                       facecolors=_ANALYZE_ACC_RAMP[0], edgecolors='#1a3a5c',
                        linewidths=0.6, alpha=0.55, zorder=3)
             mean_x, mean_y = stats['centroid']
             # Concentric precision rings: solid Mean Radius (typical
@@ -12487,11 +12501,11 @@ def _report_all_shots_per_target(user_id, date_from=None, date_to=None):
             # measured about the *centroid*, so they describe precision
             # independent of how far the centroid drifted from the bull.
             ax.add_patch(Circle((mean_x, mean_y), stats['mr'],
-                                fill=False, edgecolor='#a1d8ed',
+                                fill=False, edgecolor=_ANALYZE_PREC_RAMP[0],
                                 linewidth=1.6, linestyle='-', zorder=4,
                                 label='MR'))
             ax.add_patch(Circle((mean_x, mean_y), stats['r95'],
-                                fill=False, edgecolor='#95abcf',
+                                fill=False, edgecolor=_ANALYZE_PREC_RAMP[2],
                                 linewidth=1.4, linestyle='--', zorder=4,
                                 label='R95'))
             # Faint 1σ covariance ellipse — exposes stringing (vertical or
@@ -12528,8 +12542,8 @@ def _report_all_shots_per_target(user_id, date_from=None, date_to=None):
                     width=max(half * 0.004, 0.4),
                     head_width=max(half * 0.018, 2.5),
                     head_length=max(half * 0.025, 3.5),
-                    color='#c79b5a', alpha=0.85, zorder=5))
-            ax.plot(mean_x, mean_y, marker='x', color='#c79b5a',
+                    color=_ANALYZE_TREND_GOLD, alpha=0.85, zorder=5))
+            ax.plot(mean_x, mean_y, marker='x', color=_ANALYZE_TREND_GOLD,
                     markersize=14, markeredgewidth=2.4, zorder=6)
         else:
             mean_x = mean_y = 0
@@ -13528,8 +13542,8 @@ def _report_equipment_head_to_head(user_id, categories=None, tag_filter=None):
     else:
         wanted = set(categories)
 
-    COLOR_A = '#4d6da6'
-    COLOR_B = '#fcba03'
+    COLOR_A = _ANALYZE_ACC_RAMP[0]   # first subject — teal (accuracy family)
+    COLOR_B = _ANALYZE_PREC_RAMP[0]  # second subject — purple (precision family)
     EDGE = '#1a3a5c'
 
     for column, label_singular in all_kinds:
@@ -13976,50 +13990,73 @@ def _quiver_xy(shots):
 
 
 def _report_within_session_drift(user_id):
-    """Accuracy (mean miss) and R95 by quiver-index-in-session, pooled across
-    sessions.
+    """Average change in accuracy and precision from each session's first
+    quiver, across quiver position.
 
-    Reveals whether the user tightens up after a warm-up quiver or
-    starts to loosen late in the session (fatigue). Each quiver index
-    contributes shots from every session that reached at least that
-    many completed quivers — so later indices come from progressively
-    fewer sessions. A "n sessions" bar is rendered alongside the two
-    metrics so the user can see where confidence drops off.
+    Answers "do you warm up or fatigue within a session?" without the
+    survivorship trap of pooling shots by position. Each session is its own
+    control: quiver 1 is the baseline, and every later quiver is measured as a
+    *delta* from it — accuracy as mean miss from the gold, precision as mean
+    radius (MR) about that quiver's own centroid — then those deltas are
+    averaged across every session reaching each position. Because each session
+    contributes only differences from its own start, between-session level
+    differences cancel — including the pooled-centroid inflation that made the
+    old R95 line trend down purely as fewer sessions reached later indices. So
+    the trend now reflects within-session drift alone. Quiver 1 is 0 by
+    definition; negative = tighter/closer than the session's start.
+
+    MR (not R95) is the precision measure: a single 3–6-arrow quiver is far too
+    small for a stable R95 fit, whereas MR is an O(n) mean that averages cleanly
+    across sessions.
     """
-    by_idx = {}  # quiver_idx → {sessions: set, xs: [...], ys: [...]}
+    # Per session, the ordered per-quiver (mean_miss, mr, n_hits) — each stat is
+    # computed on that quiver alone (its own centroid); nothing is pooled across
+    # sessions. A quiver needs ≥2 hits to have a centroid + spread.
+    by_session = {}  # sid → {qidx: (mean_miss, mr, n_hits)}
     for sid, qidx, shots, _tgt in _iter_quivers(user_id):
         xs, ys = _quiver_xy(shots)
-        if not xs:
+        if len(xs) < 2:
             continue
-        bucket = by_idx.setdefault(qidx, {'sessions': set(),
-                                          'xs': [], 'ys': []})
-        bucket['sessions'].add(sid)
-        bucket['xs'].extend(xs)
-        bucket['ys'].extend(ys)
+        st = _archery_stats(xs, ys, with_extreme_spread=False)
+        if st is None:
+            continue
+        by_session.setdefault(sid, {})[qidx] = (st['mean_miss'], st['mr'],
+                                                len(xs))
 
-    if not by_idx:
+    # Re-base each session to its own first quiver, then collect the deltas by
+    # quiver index. Sessions whose first quiver is unusable can't be baselined.
+    deltas = {}  # qidx → {'acc': [...], 'prec': [...], 'sessions': set, 'shots': int}
+    for sid, quivers in by_session.items():
+        base = quivers.get(1)
+        if base is None:
+            continue
+        base_acc, base_prec, _ = base
+        for q, (macc, mprec, nhit) in quivers.items():
+            d = deltas.setdefault(q, {'acc': [], 'prec': [],
+                                      'sessions': set(), 'shots': 0})
+            d['acc'].append(macc - base_acc)
+            d['prec'].append(mprec - base_prec)
+            d['sessions'].add(sid)
+            d['shots'] += nhit
+
+    if not deltas:
         return None
 
-    indices = sorted(by_idx.keys())
     rows_out = []
-    line_x = []
-    line_acc = []
-    line_r95 = []
-    line_sessions = []
-    for q in indices:
-        b = by_idx[q]
-        s = _archery_stats(b['xs'], b['ys'])
-        if s is None:
+    line_x, line_acc, line_prec, line_sessions = [], [], [], []
+    for q in sorted(deltas):
+        d = deltas[q]
+        n_sessions = len(d['sessions'])
+        if n_sessions < 2:      # a single session's trajectory is pure noise
             continue
+        macc = sum(d['acc']) / len(d['acc'])
+        mprec = sum(d['prec']) / len(d['prec'])
         line_x.append(q)
-        line_acc.append(s['mean_miss'])
-        line_r95.append(s['r95'])
-        line_sessions.append(len(b['sessions']))
-        rows_out.append([
-            q, len(b['sessions']), s['n'],
-            round(s['mean_miss'], 3), round(s['r95'], 3),
-            round(s['mr'], 3),
-        ])
+        line_acc.append(macc)
+        line_prec.append(mprec)
+        line_sessions.append(n_sessions)
+        rows_out.append([q, n_sessions, d['shots'],
+                         round(macc, 3), round(mprec, 3)])
 
     if not line_x:
         return None
@@ -14034,18 +14071,20 @@ def _report_within_session_drift(user_id):
     ax_bar = ax.twinx()
     ax_bar.bar(line_x, line_sessions, color='#c9d3e3',
                edgecolor='#95abcf', zorder=1, alpha=0.55,
-               label='Sessions reaching this quiver')
-    ax_bar.set_ylabel('Sessions reaching this quiver', color='#5a6b8a')
+               label='Sessions contributing (paired)')
+    ax_bar.set_ylabel('Sessions contributing (paired)', color='#5a6b8a')
     ax_bar.tick_params(axis='y', labelcolor='#5a6b8a')
-    ax.plot(line_x, line_acc, color='#1a3a5c', marker='o',
+    ax.axhline(0, color='#8a97ac', linewidth=1.0, linestyle='--', zorder=2,
+               label='Session start (quiver 1)')
+    ax.plot(line_x, line_acc, color=_ANALYZE_ACC_RAMP[0], marker='o',
             linewidth=1.8, markersize=5, zorder=3,
-            label='Accuracy — mean miss')
-    ax.plot(line_x, line_r95, color='#c79b5a', marker='s',
+            label='Δ accuracy — mean miss')
+    ax.plot(line_x, line_prec, color=_ANALYZE_PREC_RAMP[0], marker='s',
             linewidth=1.8, markersize=5, zorder=3,
-            label='Precision — R95')
+            label='Δ precision — mean radius')
     ax.set_xlabel('Quiver index within session (1 = first quiver)')
-    ax.set_ylabel('Normalized units (1.0 = target edge)\nlower is better')
-    ax.set_title('Within-session drift')
+    ax.set_ylabel('Change vs first quiver (normalized)\nbelow 0 = better than start')
+    ax.set_title("Within-session drift (vs each session's first quiver)")
     ax.set_xticks(line_x)
     ax.grid(True, axis='y', linestyle='--', alpha=0.4)
     ax.set_zorder(ax_bar.get_zorder() + 1)
@@ -14053,17 +14092,23 @@ def _report_within_session_drift(user_id):
     # Combine legends from both axes.
     h1, l1 = ax.get_legend_handles_labels()
     h2, l2 = ax_bar.get_legend_handles_labels()
-    ax.legend(h1 + h2, l1 + l2, loc='upper left', fontsize=9)
+    ax.legend(h1 + h2, l1 + l2, loc='upper left', fontsize=8)
     svg_b64 = _render_matplotlib_svg(fig)
 
     intro = Markup(
         '<p class="report-intro">'
         '<strong>What this answers:</strong> do you warm up into a tighter '
-        'group as the session goes on, or do you fatigue and open up? '
-        'Each quiver position pools its shots across every session that '
-        'reached that many quivers — so the leftmost bucket sees every '
-        'session, the rightmost only your longest ones. The grey bars '
-        'show how many sessions contributed to each bucket.'
+        'group as the session goes on, or fatigue and open up? Each session is '
+        'its own control: quiver 1 is the baseline, and every later quiver is '
+        'measured as a <em>change</em> from it &mdash; accuracy as mean miss '
+        'from the gold, precision as mean radius (group size) about that '
+        'quiver&rsquo;s own centre &mdash; then averaged across every session '
+        'that reached each position. Measuring within-session changes cancels '
+        'between-session differences, so this isolates warm-up / fatigue '
+        'instead of mixing in which sessions happen to run long. Quiver 1 is 0 '
+        'by definition; <strong>below 0 means tighter or closer to the gold '
+        'than your start</strong>. Positions reached by fewer than two sessions '
+        'are dropped; the grey bars show how many sessions back each point.'
         '</p>'
     )
 
@@ -14073,16 +14118,15 @@ def _report_within_session_drift(user_id):
         'intro_html': intro,
         'svg_b64': svg_b64,
         'columns': [
-            'Quiver index', 'Sessions', 'Shots',
-            _tip('Mean miss (norm)',
-                 'Mean distance from the gold at this quiver position, '
-                 'pooled across sessions. Lower = better accuracy; a loose '
-                 'group is penalised even when centred.'),
-            _tip('R95 (norm)',
-                 'R95 about each quiver-position\'s pooled centroid. '
-                 'Lower = tighter group.'),
-            _tip('MR (norm)',
-                 'Mean Radius about the pooled centroid.'),
+            'Quiver index', 'Sessions (paired)', 'Shots',
+            _tip('Δ mean miss vs q1 (norm)',
+                 'Average change in mean miss from each session\'s first '
+                 'quiver at this position. Negative = closer to the gold than '
+                 'at the session start (lower is better).'),
+            _tip('Δ mean radius vs q1 (norm)',
+                 'Average change in mean radius (group size about the quiver\'s '
+                 'own centroid) from each session\'s first quiver. Negative = '
+                 'tighter than the session start.'),
         ],
         'rows': rows_out,
     }
@@ -14405,10 +14449,10 @@ def _report_accuracy_precision_traces(user_id, date_from=None, date_to=None,
     # precision from purple), so up to four subjects stay distinct. A legend
     # names the traces; the two palest ramp shades are held back for the
     # third and fourth head-to-head subjects.
-    ACC_RAMP = ['#21A4C8', '#217376', '#6AA0AF', '#B9D8E4']
-    PREC_RAMP = ['#8E43FE', '#2B0D5F', '#976BBD', '#C9B9E4']
-    TREND_GOLD = '#FFC30E'   # per-session trend lines
-    TREND_DARK = '#000000'   # all-time-rolling trend lines
+    ACC_RAMP = _ANALYZE_ACC_RAMP
+    PREC_RAMP = _ANALYZE_PREC_RAMP
+    TREND_GOLD = _ANALYZE_TREND_GOLD   # per-session trend lines
+    TREND_DARK = _ANALYZE_TREND_DARK   # all-time-rolling trend lines
     ACC_SHADES = {'session': ACC_RAMP[0], 'alltime': ACC_RAMP[1]}
     PREC_SHADES = {'session': PREC_RAMP[0], 'alltime': PREC_RAMP[1]}
 
@@ -14684,18 +14728,18 @@ def _report_precision_consistency(user_id):
         band_lo.append(max(0.0, m - s))  # R95 can't be negative
         band_hi.append(m + s)
 
-    GREEN = '#2f8f4e'
+    PREC = _ANALYZE_PREC_RAMP[0]   # precision (R95) family, matching the traces
     fig, ax = plt.subplots(figsize=(10, 5.4))
     # Raw per-day R95 as faint context, so the smoothing reads against the
     # noise it's cancelling.
     ax.plot(dates, raw, linestyle='none', marker='o', markersize=3.2,
             color='#9aa0a6', alpha=0.55, zorder=2, label='Per-day R95')
     # Consistency band: ±1σ of R95 within each trailing window.
-    ax.fill_between(dates, band_lo, band_hi, color=GREEN, alpha=0.16,
+    ax.fill_between(dates, band_lo, band_hi, color=PREC, alpha=0.16,
                     linewidth=0, zorder=1,
                     label=f'±1σ over trailing {win} days')
     # The smoothed precision trend itself.
-    ax.plot(dates, ma, color=GREEN, linewidth=2.2, marker='o', markersize=3,
+    ax.plot(dates, ma, color=PREC, linewidth=2.2, marker='o', markersize=3,
             markeredgewidth=0, zorder=3,
             label=f'{win}-day moving average')
     # Faint straight trend fit through the raw points (house style) so the
@@ -14705,7 +14749,8 @@ def _report_precision_consistency(user_id):
         slope, intercept = np.polyfit(xnum, raw, 1)
         ax.plot([dates[0], dates[-1]],
                 [slope * xnum[0] + intercept, slope * xnum[-1] + intercept],
-                color=GREEN, linewidth=1.0, linestyle='--', alpha=0.45, zorder=2)
+                color=_ANALYZE_TREND_GOLD, linewidth=1.2, linestyle='--',
+                alpha=0.7, zorder=2)
 
     ax.set_xlabel('Date')
     ax.set_ylabel('R95 — % of target half-width\n(lower = tighter group)')
@@ -14819,8 +14864,8 @@ def _report_cold_bore_vs_warmed(user_id):
     import matplotlib.pyplot as plt
     from matplotlib.patches import Patch
 
-    COLOR_A = '#4d6da6'
-    COLOR_B = '#fcba03'
+    COLOR_A = _ANALYZE_ACC_RAMP[0]   # first subject — teal (accuracy family)
+    COLOR_B = _ANALYZE_PREC_RAMP[0]  # second subject — purple (precision family)
     EDGE = '#1a3a5c'
     fig, axes = plt.subplots(1, 3, figsize=(11, 4))
     titles = [
@@ -15251,6 +15296,11 @@ def _report_expected_score(user_id):
     N_SAMPLES = 20000  # Monte-Carlo budget per target
     END_LENGTHS = (3, 6, 10)
 
+    # The archer's global Fuzzy Factor (same calibration /predict applies), so
+    # each panel can pair its raw geometry projection with what they actually
+    # tend to score. None → too little scored history; only raw rows render.
+    ff, ff_meta = _user_fuzzy_factor(user_id)
+
     def _panel_for_group(zones, target_cfg, shots, title, key):
         """Build one expected-score panel — a bar chart of the ring hit
         distribution plus a metrics table — for a group of shots, or None
@@ -15299,12 +15349,22 @@ def _report_expected_score(user_id):
         rows_out.append(['Expected score (points / arrow)',
                          f'{expected_score:.3f}',
                          f'(max {max_ring_points})'])
+        if ff is not None:
+            rows_out.append(['Expected score — calibrated',
+                             f'{expected_score * ff:.3f}',
+                             f'(Fuzzy Factor ×{ff:.2f})'])
         rows_out.append([Markup('<em>— Expected per end —</em>'), '', ''])
         for n, exp, max_n in end_table:
             pct = (exp / max_n * 100) if max_n else 0.0
             rows_out.append([f'{n}-arrow end (expected)',
                              f'{exp:.1f}',
                              f'(max {max_n}, {pct:.1f}% of max)'])
+            if ff is not None:
+                cal_exp = exp * ff
+                cal_pct = (cal_exp / max_n * 100) if max_n else 0.0
+                rows_out.append([f'{n}-arrow end — calibrated',
+                                 f'{cal_exp:.1f}',
+                                 f'(max {max_n}, {cal_pct:.1f}% of max)'])
         rows_out.append([Markup('<em>— Ring breakdown —</em>'), '', ''])
         for lab, p, pts in zip(labels[:-1], p_per_ring, ring_points):
             rows_out.append([lab, f'{p * 100:.2f}%',
@@ -15368,6 +15428,17 @@ def _report_expected_score(user_id):
     if not panels:
         return None
 
+    if ff is not None:
+        cal_note = (f' Each table also pairs the raw geometry projection with a '
+                    f'<em>calibrated</em> row — scaled by your Fuzzy Factor '
+                    f'(×{ff:.2f}, from {ff_meta["n_obs"]} scored '
+                    f'session{"s" if ff_meta["n_obs"] != 1 else ""}), the same '
+                    f'real-vs-model correction /predict applies — so you see '
+                    f'both the ideal and what you actually tend to score.')
+    else:
+        cal_note = (' Log at least two scored sessions and a calibrated row '
+                    '(your Fuzzy Factor — what you actually tend to score) will '
+                    'appear beside each projection.')
     intro = Markup(
         '<p class="report-intro">'
         '<strong>What this answers:</strong> if your current group held, '
@@ -15378,6 +15449,7 @@ def _report_expected_score(user_id):
         'and projects an expected score per arrow and per end. Empirical '
         'miss rate is blended in so total-flyers count against the '
         'projection.'
+        + cal_note +
         '</p>'
     )
 
@@ -15463,37 +15535,63 @@ def _report_expected_score_vs_distance(user_id):
                             'so shots can be placed on the range axis.',
         }
 
-    # ── Chart: one line per face, a marker at each shot distance ─────────
+    # The archer's global real-vs-model calibration (same Fuzzy Factor /predict
+    # uses), so we can show what they'd actually score next to the raw geometry.
+    # None when there isn't enough scored history — then only the raw line draws.
+    ff, ff_meta = _user_fuzzy_factor(user_id)
+
+    # ── Chart: one line per face — raw expected PPA from the teal ramp, and
+    # (when the fuzzy factor is available) a dashed calibrated companion from the
+    # purple ramp, matching the Accuracy & precision traces palette. ─────────
     fig, ax = plt.subplots(figsize=(7.5, 4.5))
-    cmap = plt.get_cmap('tab10')
     for i, s in enumerate(series):
-        color = cmap(i % 10)
+        raw_color = _ANALYZE_ACC_RAMP[i % len(_ANALYZE_ACC_RAMP)]
         xs = [p[0] for p in s['points']]
         ys = [p[1] for p in s['points']]
-        ax.plot(xs, ys, '-o', color=color, label=s['name'],
+        ax.plot(xs, ys, '-o', color=raw_color, label=s['name'],
                 linewidth=2, markersize=6, markeredgecolor='#1a3a5c')
         for d, eps, _mx, _n in s['points']:
             ax.annotate(f'{eps:.2f}', (d, eps),
                         textcoords='offset points', xytext=(0, 7),
                         ha='center', fontsize=8, color='#1a3a5c')
+        if ff is not None:
+            cal_color = _ANALYZE_PREC_RAMP[i % len(_ANALYZE_PREC_RAMP)]
+            ax.plot(xs, [y * ff for y in ys], '--o', color=cal_color,
+                    label=f'{s["name"]} · calibrated', linewidth=1.8,
+                    markersize=4, markeredgecolor='#1a3a5c', alpha=0.9)
     ax.set_xlabel('Distance (m)')
     ax.set_ylabel('Expected points per arrow')
-    ax.set_title('Expected points per arrow vs distance')
+    title = 'Expected points per arrow vs distance'
+    if ff is not None:
+        title += f'  (calibrated ×{ff:.2f})'
+    ax.set_title(title)
     ax.grid(True, linestyle='--', alpha=0.4)
     ax.set_ylim(bottom=0)
     ax.legend(fontsize=8, framealpha=0.9)
     svg_b64 = _render_matplotlib_svg(fig)
 
-    # ── Table: face × distance → expected pts/arrow ─────────────────────
+    # ── Table: face × distance → expected pts/arrow (raw + calibrated) ────
     columns = ['Target', 'Distance', 'Expected pts/arrow',
-               'Max', '% of max', 'Hits']
+               'Calibrated pts/arrow', 'Max', '% of max', 'Hits']
     rows_out = []
     for s in series:
         for d, eps, mx, n in s['points']:
             pct = (eps / mx * 100) if mx else 0.0
+            cal = f'{eps * ff:.3f}' if ff is not None else '—'
             rows_out.append([s['name'], _distance_group_label(d),
-                             f'{eps:.3f}', str(mx), f'{pct:.1f}%', str(n)])
+                             f'{eps:.3f}', cal, str(mx), f'{pct:.1f}%', str(n)])
 
+    if ff is not None:
+        cal_note = (f' A dashed purple companion per face is that line '
+                    f'<em>calibrated</em> by your Fuzzy Factor (×{ff:.2f}, '
+                    f'learned from {ff_meta["n_obs"]} scored '
+                    f'session{"s" if ff_meta["n_obs"] != 1 else ""}) — what '
+                    f'you actually tend to score, not just the geometry.')
+    else:
+        cal_note = (' Log at least two scored sessions and a calibrated '
+                    '(Fuzzy Factor) companion line will appear alongside each '
+                    'face — what you actually tend to score, not just the '
+                    'geometry.')
     intro = Markup(
         '<p class="report-intro">'
         '<strong>What this answers:</strong> how fast does your expected '
@@ -15503,6 +15601,7 @@ def _report_expected_score_vs_distance(user_id):
         'drop-off is obvious. A steep line means distance costs you '
         'disproportionately; a flat one means your form holds. Only shots '
         'with a recorded distance are placed on the axis.'
+        + cal_note +
         '</p>'
     )
 
@@ -15565,7 +15664,7 @@ def _report_calendar_heatmap(user_id):
     years = list(range(first_d.year, last_d.year + 1))
     cmap = LinearSegmentedColormap.from_list(
         'apollo_volume',
-        ['#eef3fa', '#a8c4e8', '#4d6da6', '#c79b5a'],
+        ['#eef3fa', '#B9D8E4', '#6AA0AF', '#21A4C8', '#217376'],
     )
     max_shots = max(per_day.values())
     norm = Normalize(vmin=0, vmax=max(1, max_shots))
@@ -15950,8 +16049,8 @@ def _report_handicap_trend(user_id):
     fig, ax = plt.subplots(figsize=(9, 4.5))
     xs = [p['date'] for p in points]
     ys = [p['handicap'] for p in points]
-    ax.plot(xs, ys, '-', color='#9bb0d0', linewidth=1.0, zorder=1)
-    ax.scatter(xs, ys, s=36, color='#4d6da6', edgecolor='#1a3a5c',
+    ax.plot(xs, ys, '-', color=_ANALYZE_ACC_RAMP[3], linewidth=1.0, zorder=1)
+    ax.scatter(xs, ys, s=36, color=_ANALYZE_ACC_RAMP[0], edgecolor='#1a3a5c',
                zorder=3, label='Completed round')
 
     # Least-squares trend line (improvement direction). Fit on ordinal days so
@@ -15961,13 +16060,13 @@ def _report_handicap_trend(user_id):
         t0 = xs[0]
         days = np.array([(x - t0).total_seconds() / 86400.0 for x in xs])
         slope, intercept = np.polyfit(days, np.array(ys, dtype=float), 1)
-        ax.plot(xs, intercept + slope * days, '--', color='#c0504d',
+        ax.plot(xs, intercept + slope * days, '--', color=_ANALYZE_TREND_GOLD,
                 linewidth=1.4, zorder=2,
                 label=f'Trend ({slope * 365.0:+.1f} / yr)')
 
     # AGB official figure as a reference line.
     if summary['agb'] is not None:
-        ax.axhline(summary['agb'], color='#3f7d3f', linewidth=1.2,
+        ax.axhline(summary['agb'], color='#5a6b8a', linewidth=1.2,
                    linestyle=':', zorder=2,
                    label=f"AGB handicap {summary['agb']}")
 
@@ -16230,9 +16329,9 @@ def _report_conditions(user_id, date_from=None, date_to=None):
             xpos = np.arange(len(labels))
             bw = 0.38
             ax.bar(xpos - bw / 2, accs, bw, label='Mean miss (accuracy)',
-                   color='#c0504d')
+                   color=_ANALYZE_ACC_RAMP[0])
             ax.bar(xpos + bw / 2, r95s, bw, label='R95 (precision)',
-                   color='#3f7d3f')
+                   color=_ANALYZE_PREC_RAMP[0])
             for i, s in enumerate(nonempty):
                 ax.annotate(f"n={s['n']}", (i, max(accs[i], r95s[i])),
                             textcoords='offset points', xytext=(0, 3),
@@ -16570,13 +16669,13 @@ def _report_quiver_spread(user_id, date_from=None, date_to=None,
     # line with subtle date dots and a golden linear trend line, identified by
     # a legend. The shaded band between them is a quiet backdrop for the
     # within-quiver gap (a pale blend of the two families' lightest tones).
-    TREND_GOLD = '#FFC30E'
+    TREND_GOLD = _ANALYZE_TREND_GOLD
     ax.fill_between(xs, smallest, biggest, color='#C1C8E4', alpha=0.45,
                     zorder=1)
     traces = [
-        {'y': biggest,  'color': '#21A4C8',
+        {'y': biggest,  'color': _ANALYZE_ACC_RAMP[0],
          'label': 'Biggest spread (max pair)'},
-        {'y': smallest, 'color': '#8E43FE',
+        {'y': smallest, 'color': _ANALYZE_PREC_RAMP[0],
          'label': 'Smallest spread (min pair)'},
     ]
     for t in traces:
@@ -16672,10 +16771,10 @@ def _report_spread_violins(user_id, date_from=None, date_to=None,
     buckets (one violin per session, or per calendar month once there are
     many sessions) and draw the distribution as a violin:
 
-      * Top row: horizontal spread. Time on the x-axis, offset (cm) on the
-        y-axis — upright violins, centred on 0.
-      * Bottom row: vertical spread, with the axes transposed. Offset (cm)
-        on the x-axis, time running down the y-axis — sideways violins.
+      * Top row: horizontal (left/right) spread. Offset (cm) on the x-axis so
+        the scatter runs left/right, time down the y-axis — sideways violins.
+      * Bottom row: vertical (up/down) spread. Offset (cm) on the y-axis so the
+        scatter runs up/down, time along the x-axis — upright violins.
 
     Measuring the offset from each quiver's own centroid strips out
     between-quiver aim bias, so a violin narrows purely as the archer's
@@ -16904,41 +17003,43 @@ def _report_spread_violins(user_id, date_from=None, date_to=None,
         return tp
 
     fig, (ax_h, ax_v) = plt.subplots(2, 1, figsize=(9, 9))
-
-    # ── Top: horizontal spread — upright violins, time on x, cm on y ──
-    vp_h = ax_h.violinplot(data_dx, positions=positions, showmedians=True,
-                           widths=0.8)
-    _style(vp_h, '#2f74c0')
-    ax_h.axhline(0, color='#8a97ac', linewidth=0.8, linestyle='--', zorder=1)
-    # Faint ±1σ envelope so the tightening (or drift) reads at a glance.
+    tp = _tick_positions(len(ordered))
+    # Faint ±1σ envelopes so the tightening (or drift) reads at a glance.
     sd_dx = [float(np.std(b['dx'])) for b in ordered]
-    ax_h.plot(positions, sd_dx, color='#c0392b', linewidth=1.0, alpha=0.5)
-    ax_h.plot(positions, [-v for v in sd_dx], color='#c0392b',
+    sd_dy = [float(np.std(b['dy'])) for b in ordered]
+
+    # ── Top: horizontal spread — sideways violins so left/right scatter runs
+    #    left/right on the plot; time runs down the y-axis. ──
+    vp_h = ax_h.violinplot(data_dx, positions=positions, showmedians=True,
+                           widths=0.8, vert=False)
+    _style(vp_h, _ANALYZE_ACC_RAMP[0])
+    ax_h.axvline(0, color='#8a97ac', linewidth=0.8, linestyle='--', zorder=1)
+    ax_h.plot(sd_dx, positions, color='#c0392b', linewidth=1.0, alpha=0.5)
+    ax_h.plot([-v for v in sd_dx], positions, color='#c0392b',
               linewidth=1.0, alpha=0.5)
     ax_h.set_title('Horizontal spread over time (left / right)')
-    ax_h.set_xlabel(time_label)
-    ax_h.set_ylabel('Horizontal offset from group centre (cm)')
-    ax_h.grid(True, axis='y', linestyle='--', alpha=0.35)
-    tp = _tick_positions(len(ordered))
-    ax_h.set_xticks(tp)
-    ax_h.set_xticklabels([labels[p - 1] for p in tp], rotation=35, ha='right')
+    ax_h.set_xlabel('Horizontal offset from group centre (cm)')
+    ax_h.set_ylabel(time_label)
+    ax_h.grid(True, axis='x', linestyle='--', alpha=0.35)
+    ax_h.set_yticks(tp)
+    ax_h.set_yticklabels([labels[p - 1] for p in tp])
+    ax_h.invert_yaxis()  # earliest bucket at the top; time reads downward
 
-    # ── Bottom: vertical spread — sideways violins, cm on x, time on y ──
+    # ── Bottom: vertical spread — upright violins so up/down scatter runs
+    #    up/down on the plot; time runs along the x-axis. ──
     vp_v = ax_v.violinplot(data_dy, positions=positions, showmedians=True,
-                           widths=0.8, vert=False)
-    _style(vp_v, '#37a866')
-    ax_v.axvline(0, color='#8a97ac', linewidth=0.8, linestyle='--', zorder=1)
-    sd_dy = [float(np.std(b['dy'])) for b in ordered]
-    ax_v.plot(sd_dy, positions, color='#c0392b', linewidth=1.0, alpha=0.5)
-    ax_v.plot([-v for v in sd_dy], positions, color='#c0392b',
+                           widths=0.8)
+    _style(vp_v, _ANALYZE_PREC_RAMP[0])
+    ax_v.axhline(0, color='#8a97ac', linewidth=0.8, linestyle='--', zorder=1)
+    ax_v.plot(positions, sd_dy, color='#c0392b', linewidth=1.0, alpha=0.5)
+    ax_v.plot(positions, [-v for v in sd_dy], color='#c0392b',
               linewidth=1.0, alpha=0.5)
     ax_v.set_title('Vertical spread over time (up / down)')
-    ax_v.set_xlabel('Vertical offset from group centre (cm)')
-    ax_v.set_ylabel(time_label)
-    ax_v.grid(True, axis='x', linestyle='--', alpha=0.35)
-    ax_v.set_yticks(tp)
-    ax_v.set_yticklabels([labels[p - 1] for p in tp])
-    ax_v.invert_yaxis()  # earliest bucket at the top; time reads downward
+    ax_v.set_xlabel(time_label)
+    ax_v.set_ylabel('Vertical offset from group centre (cm)')
+    ax_v.grid(True, axis='y', linestyle='--', alpha=0.35)
+    ax_v.set_xticks(tp)
+    ax_v.set_xticklabels([labels[p - 1] for p in tp], rotation=35, ha='right')
 
     fig.tight_layout()
     svg_b64 = _render_matplotlib_svg(fig)
@@ -16990,6 +17091,7 @@ REPORTS = {
                        'so gaps are visible). Table lists the underlying '
                        'per-session counts.',
         'fn': _report_arrows_vs_time,
+        'stacked': True,
     },
     'all_shots_per_target': {
         'label': 'Shots per target (date range)',
@@ -17022,6 +17124,7 @@ REPORTS = {
                        'half-width so mixed-target histories are '
                        'comparable. Misses excluded.',
         'fn': _report_accuracy_precision_traces,
+        'stacked': True,
         'accepts_date_range': True,
         # Trace toggles — which of the six (granularity × metric) series to
         # draw. The route defaults to "all" when none are ticked, so the
@@ -17046,6 +17149,7 @@ REPORTS = {
                        'Normalized by target half-width; misses excluded, '
                        'days need 6+ hits.',
         'fn': _report_precision_consistency,
+        'stacked': True,
     },
     'equipment_head_to_head': {
         'label': 'Head-to-head comparisons',
@@ -17088,6 +17192,7 @@ REPORTS = {
                        'the session-type pills, equipment picker, date '
                        'range, or tag picker.',
         'fn': _report_quiver_spread,
+        'stacked': True,
         'accepts_date_range': True,
         'tag_picker': True,
         'equipment_picker': True,
@@ -17110,6 +17215,7 @@ REPORTS = {
                        'with the axes flipped. Narrow with the session-type '
                        'pills, equipment picker, date range, or tag picker.',
         'fn': _report_spread_violins,
+        'stacked': True,
         'accepts_date_range': True,
         'tag_picker': True,
         'equipment_picker': True,
@@ -17125,6 +17231,7 @@ REPORTS = {
                        'position across all your sessions. Reveals warm-up '
                        'gains and late-session fatigue.',
         'fn': _report_within_session_drift,
+        'stacked': True,
     },
     'cold_bore_vs_warmed': {
         'label': 'Cold bore vs warmed up',
@@ -18035,6 +18142,37 @@ def _fuzzy_global(user_id, fit):
             predicted_total, len(sessions))
 
 
+def _apply_fuzzy_shrink(ff_raw, n_obs):
+    """Shrink a raw fuzzy ratio toward 1.0 by how many scored sessions back it,
+    then clamp — the finished coefficient the forecast (and the analyze
+    expected-score reports) multiply by. Returns None when there isn't enough
+    scored history to trust the factor (``n_obs < _FUZZY_MIN_OBS``) or the ratio
+    is missing, so callers fall back to the raw model."""
+    if ff_raw is None or n_obs < _FUZZY_MIN_OBS:
+        return None
+    w = n_obs / (n_obs + _FUZZY_SHRINK_C)
+    ff = 1.0 + (ff_raw - 1.0) * w
+    return max(_FUZZY_MIN, min(_FUZZY_MAX, ff))
+
+
+def _user_fuzzy_factor(user_id):
+    """The archer's finished Fuzzy Factor over ALL their scored history, ready to
+    multiply an expected points-per-arrow by.
+
+    Mirrors what /predict applies — fit the global angular dispersion, take the
+    real-vs-model ratio, shrink + clamp — but with no filters, so it's the same
+    single scale-free coefficient at any face/distance. Returns ``(ff, meta)``
+    where ``ff`` is the clamped coefficient or ``None`` when the history is too
+    thin, and ``meta`` carries ``ff_raw`` / ``n_obs`` for a caption.
+    """
+    fit = _fit_shot_distribution(user_id)
+    if not fit or not fit.get('ok'):
+        return (None, {'ff_raw': None, 'n_obs': 0})
+    ff_raw, _act, _pred, n_obs = _fuzzy_global(user_id, fit)
+    return (_apply_fuzzy_shrink(ff_raw, n_obs),
+            {'ff_raw': ff_raw, 'n_obs': n_obs})
+
+
 def _predict_real_world_benchmarks(round_key, gender, max_score):
     """Published WA / USA Archery reference scores to overlay on the predict
     histogram, so the simulated distribution can be read against real archers.
@@ -18229,10 +18367,8 @@ def predict():
     fuzzy = {'enabled': False}
     if ctx['form']['use_fuzzy']:
         ff_raw, act_total, pred_total, n_obs = _fuzzy_global(user_id, fit)
-        if ff_raw is not None and n_obs >= _FUZZY_MIN_OBS:
-            w = n_obs / (n_obs + _FUZZY_SHRINK_C)
-            ff = 1.0 + (ff_raw - 1.0) * w
-            ff = max(_FUZZY_MIN, min(_FUZZY_MAX, ff))
+        ff = _apply_fuzzy_shrink(ff_raw, n_obs)
+        if ff is not None:
             fuzzy = {
                 'enabled': True,
                 'ff': ff,
@@ -18320,7 +18456,11 @@ def _run_report(user_id, key, *, date_ranges=None, categories=None,
     # each item gets the same post-processing.
     results = []
     items = out if isinstance(out, list) else [out]
+    stacked = spec.get('stacked', False)
     for item in items:
+        # Layout hint for the report card: stacked reports draw the chart
+        # full-width above a collapse-by-default data table (see _report_card).
+        item['stacked'] = stacked
         if item.get('empty'):
             # Report ran but found nothing worth rendering and supplied its own
             # diagnostic message — pass it through with sensible defaults.

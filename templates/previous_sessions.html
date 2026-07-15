@@ -494,7 +494,8 @@
               {% else %}
                 {% set header_duration = stats['hours'] ~ ' hours, ' ~ stats['minutes'] ~ ' minutes' %}
               {% endif %}
-              {{ stats['session_date'] }} &mdash; {{ header_duration }}
+              {{ stats['session_date'] }} {{ stats['session_time'] }} &mdash; {{ header_duration }}
+              {%- if replay_target %} &middot; {{ replay_target['name'] }}{% endif %}
               {% if is_tournament.v and is_practice.v %}
                 <span class="practice-badge" title="Tournament round flagged as practice — not counted as a real competition.">Competition practice</span>
               {% elif is_tournament.v %}
