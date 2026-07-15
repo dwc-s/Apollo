@@ -234,12 +234,16 @@ an empirical R95 percentile and the table flags them.
   **per distance** (one panel each, `{face} @ {n} m`) — how tightly you
   group grows with range, so pooling 18 m and 70 m would describe
   neither. The Monte-Carlo is fixed-seed, so repeat renders are identical.
+  Draws both the raw geometric projection and a **Fuzzy-Factor-calibrated**
+  trace (your real-vs-model scoring ratio, as `/predict` uses) once there's
+  enough scored history to trust it.
 - **Expected points/arrow vs distance** — lays every face's per-distance
   projection on one axis (one line per face, a marker at each range) so
   the score's drop-off with distance reads at a glance: a steep line
   means distance costs you disproportionately, a flat one means your form
-  holds. Same per-distance fit as the report above. Needs shots logged
-  with a distance.
+  holds. Same per-distance fit as the report above, and the same raw +
+  **Fuzzy-Factor-calibrated** pair of traces. Needs shots logged with a
+  distance.
 
 **Trends over time**
 
@@ -273,11 +277,16 @@ an empirical R95 percentile and the table flags them.
   on a shared chronological axis. The band between them is your
   within-quiver consistency; a trend line runs through each. Narrow by
   session type, equipment, date, or tag.
-- **Within-session drift** — pools shots by *quiver index in session*
-  (1st quiver, 2nd, …) across all sessions, then plots MPI and R95
-  against quiver index. Reveals warm-up gains and late-session fatigue.
-  Twin-axis grey bars show how many sessions contribute to each bucket
-  so you know where confidence drops.
+- **Within-session drift** — do you warm up or fatigue within a session?
+  Each session is its own control: quiver 1 is the baseline and every
+  later quiver is measured as a *delta* from that session's own start
+  (mean miss for accuracy, mean radius for precision), then those deltas
+  are averaged across every session reaching each quiver position. This
+  paired baseline cancels between-session differences — including the
+  pooled-centroid inflation that made an earlier pool-by-index version
+  appear to improve late in a session purely as fewer sessions reached
+  the higher quiver numbers. A position needs ≥2 sessions to plot; twin-
+  axis grey bars show how many contribute to each.
 - **Cold bore vs warmed up** — pool 1 = first quiver of every session;
   pool 2 = quivers 2+. Side-by-side bars on MPI / R95 / pool size, then
   independent **Hotelling T²** (accuracy diff) and **Brown-Forsythe**
@@ -293,6 +302,43 @@ an empirical R95 percentile and the table flags them.
   fallback, labelled provisional below three rounds). Every completed
   round counts — Apollo has no record-status notion — so it's a personal
   tracking number, not one to submit to a records officer.
+
+**Interactive & 3D** *(client-rendered — drag to rotate, press play, or scrub)*
+
+These eight charts are drawn in your browser from raw coordinate data the
+server ships (rather than a static image), via a self-hosted Plotly bundle
+(3D) or SVG (animation) — so nothing leaves your machine and the app stays
+offline-capable. See `documentation/FORMULAS.md` §5.1–5.2 for the math.
+
+- **Shot-density mountain** — the hexbin heatmap lifted into a rotatable
+  KDE surface, one peak per target: height is how densely arrows cluster
+  there, so the summit is your true point of impact and a broad or twin-
+  peaked mountain exposes a loose or stringing group. Needs ≥25 on-face hits.
+- **Dispersion cone vs distance** — your 95% group footprint drawn as a
+  ring at each distance and stacked into a cone; because dispersion is
+  angular the ring grows with range, so the cone widens. This is the
+  geometry the performance forecast integrates over. A fainter reference
+  cone shows an archer at your current handicap.
+- **History core-sample** — every hit at (left/right, up/down, time), so
+  each session is a horizontal disc and reading up the column shows your
+  whole history drift and tighten. Colour runs teal (early) → purple (recent).
+- **Score landscape** — expected points/arrow across distance *and*
+  handicap for your most-shot face, rendered as terrain, with a gold marker
+  for where you stand now.
+- **Group evolution** *(animated)* — steps through your sessions: the group
+  appears, its centre drifts, the 95% ring breathes, and a trail traces
+  where your point of impact has wandered. Normalized, so mixed targets
+  share one face.
+- **Within-session playback** *(animated)* — replays your latest session
+  arrow by arrow: shots land one at a time, the running score climbs, and
+  the group tightens then loosens per end.
+- **Predict arrow-drop** *(on `/predict`)* — the Monte-Carlo's simulated
+  arrows rain onto the endpoint face as the run plays, so the score
+  histogram has a picture of the group it describes.
+- **Animated handicap tile** *(on the home dashboard)* — the handicap line
+  sweeps itself on (y-inverted, so improvement rises) past dashed AGB
+  class-threshold lines, with a gold ping the first time it crosses into
+  each class you've earned.
 
 **Equipment comparison**
 

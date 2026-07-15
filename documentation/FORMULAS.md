@@ -365,16 +365,50 @@ Every `/analyze` report below feeds shot clouds (raw mm or normalized) into
 | Precision consistency (trend) | `_report_precision_consistency` | per-**day** R95 (`_ap_series(..., by='day')` pools every shot on a calendar day) smoothed by a trailing `_PREC_CONSISTENCY_WINDOW`-day (=5) moving average; shaded band = ±1 within-window sample stdev (ddof=1), clamped ≥ 0; faint raw dots + a straight least-squares trend over the raw points. Responsive counterpart to the *cumulative* all-time R95 trace. |
 | Biggest vs smallest spread per quiver | `_report_quiver_spread` | per quiver, max & min pairwise arrow distance (half-width normalized) with a trend line through each. |
 | Horizontal & vertical spread violins | `_report_spread_violins` | per time bucket (session, or month once there are many), pool each arrow's offset from its quiver's centroid in cm; two-row violin — horizontal spread with time on x, vertical spread with the axes transposed. |
-| Within-session drift | `_report_within_session_drift` | pool shots by quiver index across sessions → mean miss, R95. |
+| Within-session drift | `_report_within_session_drift` | **paired within-session baseline**: per session compute each quiver's own mean miss + MR (its own centroid; ≥2 hits), re-base to quiver 1 (Δ from that session's start), then average the Δ's across every session reaching each quiver index (needs ≥2 sessions). MR not R95 — a 3–6-arrow quiver is too small for a stable R95. Cancels between-session level differences (incl. the pooled-centroid inflation that made the old pool-by-index version trend down purely as the sample thinned). |
 | Cold bore vs warmed | `_report_cold_bore_vs_warmed` | first-shot vs rest; Mann-Whitney U on distances. |
 | Draw-weight traces | `_report_draw_weight_traces` | MPI/R95 vs draw weight, split rated vs effective. |
 | Shot-density heatmap | `_report_shot_density_heatmap` | hexbin (gridsize 22) + quadrant %; needs ≥ 25 hits. |
 | Calendar heatmap | `_report_calendar_heatmap` | shots per day → colour intensity. |
-| Expected score | `_report_expected_score` | §4.1 (one panel per face × distance). |
-| Expected points/arrow vs distance | `_report_expected_score_vs_distance` | §4.4. |
+| Expected score | `_report_expected_score` | §4.1 (one panel per face × distance); draws both the raw geometric projection and a **Fuzzy-Factor-calibrated** trace (§4.5) once there's enough scored history. |
+| Expected points/arrow vs distance | `_report_expected_score_vs_distance` | §4.4; same raw + Fuzzy-calibrated (§4.5) pair of traces. |
 | Performance vs conditions | `_report_conditions` | §7.7. |
 | Equipment head-to-head | `_report_equipment_head_to_head` | §3. |
 | Handicap over time | `_report_handicap_trend` + `_handicap_summary` | per-round AGB handicap (§7) vs date; least-squares trend line; best-three average (§7.4). |
+
+### 5.1 Interactive & 3D charts (client-rendered, §5.2 math)
+
+Added in v1.5. These reports ship raw coordinate **arrays** (a `chart3d` or
+`anim` payload) to the browser instead of a server-rendered SVG; the client
+draws them with a self-hosted Plotly bundle (3D) or SVG (animation). The server
+still does all the numeric work — listed here — and `_run_report` passes the
+extra payload key through untouched.
+
+| Report | Function | Aggregation |
+|---|---|---|
+| Shot-density mountain | `_report_shot_density_mountain` | Gaussian-KDE height grid (44×44) per target (§5.2); Plotly `surface`. Needs ≥ 25 on-face hits. |
+| Dispersion cone vs distance | `_report_dispersion_cone` | distance-trend fit (§4.3) → R95 footprint ellipse at each of 10–70 m (§5.2), stacked into `scatter3d` rings; faint reference cone from `sigma_r` (§7.1) at your latest handicap. |
+| History core-sample | `_report_history_coresample` | every hit at `(x/half, y/half, days-since-first)`; `scatter3d` coloured by time. Down-sampled to ≤ 4000 points. |
+| Score landscape | `_report_score_landscape` | `expected_arrow_score` (§7.2) over a distance × handicap grid for your most-shot scoring face; `surface` + a "you" marker at (mean distance, latest handicap). |
+| Group evolution | `_report_group_evolution` | `_archery_stats` (§2) per session, half-width-normalized onto a generic face; animation frames carry centroid, R95 and mean miss. |
+| Within-session playback | `_report_session_playback` | latest session replayed end-by-end: cumulative `_archery_stats` + a running score (§1.4) per arrow. |
+
+### 5.2 New geometry for the 3D charts
+
+- **KDE height (mountain).** An isotropic Gaussian kernel-density estimate on
+  the on-face hits `(x_i, y_i)` in mm. Bandwidth `bw = max(0.04·half, s·n^(−1/6))`
+  where `s = sqrt((var_x + var_y)/2)` (a Scott/Silverman-style rule with a floor
+  of 4 % of the face half-width so a tiny group can't produce a needle). The grid
+  value is `z(gx, gy) = Σ_i exp(−((gx−x_i)² + (gy−y_i)²)/(2·bw²))`, then scaled by
+  `cell_area / (2π·bw²)` so height reads in ~shots-per-cell rather than raw
+  density.
+- **Cone R95 footprint.** At distance `d` the group's 95 % footprint is an
+  ellipse with semi-axes `K95·σ_x·d` and `K95·σ_y·d`, where the per-axis angular
+  σ's come from the distance-trend fit (§4.3, growing as `exp(growth_k·(d−d_ref))`)
+  and `K95 = 2.4477` is the Rayleigh 95 % radius in standard deviations
+  (`sqrt(−2·ln(0.05))`). Stacking the ellipse at each distance up a distance axis
+  gives the widening cone; the reference archer's cone uses `sigma_r` (§7.1) at
+  the same handicap.
 
 ---
 

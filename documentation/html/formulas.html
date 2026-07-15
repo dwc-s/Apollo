@@ -509,7 +509,7 @@ happens, so a second "Calibrated" histogram grows in real time beside the raw on
 <tr>
 <td>Accuracy/precision traces</td>
 <td><code>_report_accuracy_precision_traces</code></td>
-<td>mean miss &amp; R95 per session / all-time rolling; optional per-bow/arrow/tag overlay; each trace carries a faint same-colour linear trend line.</td>
+<td>mean miss &amp; R95 per session / all-time rolling; optional per-bow/arrow/tag overlay; each trace carries a faint same-colour linear trend line. In overlay (head-to-head) mode each subject's per-session trace also gets a dashed same-colour <strong>skill-adjusted</strong> companion: <code>y_adj(d) = y_raw(d) − m·(d − d_ref)</code> where <code>m</code> is the slope of a least-squares fit of the <em>all-shots</em> per-session series (accuracy or R95 respectively) and <code>d_ref</code> is the latest such date — i.e. the archer's overall progression removed and the trace re-based to current form, so subjects used in different periods compare fairly (needs ≥2 dated sessions; clamped ≥ 0).</td>
 </tr>
 <tr>
 <td>Precision consistency (trend)</td>
@@ -529,7 +529,7 @@ happens, so a second "Calibrated" histogram grows in real time beside the raw on
 <tr>
 <td>Within-session drift</td>
 <td><code>_report_within_session_drift</code></td>
-<td>pool shots by quiver index across sessions → mean miss, R95.</td>
+<td><strong>paired within-session baseline</strong>: per session compute each quiver's own mean miss + MR (its own centroid; ≥2 hits), re-base to quiver 1 (Δ from that session's start), then average the Δ's across every session reaching each quiver index (needs ≥2 sessions). MR not R95 — a 3–6-arrow quiver is too small for a stable R95. Cancels between-session level differences (incl. the pooled-centroid inflation that made the old pool-by-index version trend down purely as the sample thinned).</td>
 </tr>
 <tr>
 <td>Cold bore vs warmed</td>
@@ -554,12 +554,12 @@ happens, so a second "Calibrated" histogram grows in real time beside the raw on
 <tr>
 <td>Expected score</td>
 <td><code>_report_expected_score</code></td>
-<td>§4.1 (one panel per face × distance).</td>
+<td>§4.1 (one panel per face × distance); draws both the raw geometric projection and a <strong>Fuzzy-Factor-calibrated</strong> trace (§4.5) once there's enough scored history.</td>
 </tr>
 <tr>
 <td>Expected points/arrow vs distance</td>
 <td><code>_report_expected_score_vs_distance</code></td>
-<td>§4.4.</td>
+<td>§4.4; same raw + Fuzzy-calibrated (§4.5) pair of traces.</td>
 </tr>
 <tr>
 <td>Performance vs conditions</td>
@@ -578,6 +578,70 @@ happens, so a second "Calibrated" histogram grows in real time beside the raw on
 </tr>
 </tbody>
 </table>
+<h3 id="51-interactive-3d-charts-client-rendered-52-math">5.1 Interactive &amp; 3D charts (client-rendered, §5.2 math)</h3>
+<p>Added in v1.5. These reports ship raw coordinate <strong>arrays</strong> (a <code>chart3d</code> or
+<code>anim</code> payload) to the browser instead of a server-rendered SVG; the client
+draws them with a self-hosted Plotly bundle (3D) or SVG (animation). The server
+still does all the numeric work — listed here — and <code>_run_report</code> passes the
+extra payload key through untouched.</p>
+<table>
+<thead>
+<tr>
+<th>Report</th>
+<th>Function</th>
+<th>Aggregation</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Shot-density mountain</td>
+<td><code>_report_shot_density_mountain</code></td>
+<td>Gaussian-KDE height grid (44×44) per target (§5.2); Plotly <code>surface</code>. Needs ≥ 25 on-face hits.</td>
+</tr>
+<tr>
+<td>Dispersion cone vs distance</td>
+<td><code>_report_dispersion_cone</code></td>
+<td>distance-trend fit (§4.3) → R95 footprint ellipse at each of 10–70 m (§5.2), stacked into <code>scatter3d</code> rings; faint reference cone from <code>sigma_r</code> (§7.1) at your latest handicap.</td>
+</tr>
+<tr>
+<td>History core-sample</td>
+<td><code>_report_history_coresample</code></td>
+<td>every hit at <code>(x/half, y/half, days-since-first)</code>; <code>scatter3d</code> coloured by time. Down-sampled to ≤ 4000 points.</td>
+</tr>
+<tr>
+<td>Score landscape</td>
+<td><code>_report_score_landscape</code></td>
+<td><code>expected_arrow_score</code> (§7.2) over a distance × handicap grid for your most-shot scoring face; <code>surface</code> + a "you" marker at (mean distance, latest handicap).</td>
+</tr>
+<tr>
+<td>Group evolution</td>
+<td><code>_report_group_evolution</code></td>
+<td><code>_archery_stats</code> (§2) per session, half-width-normalized onto a generic face; animation frames carry centroid, R95 and mean miss.</td>
+</tr>
+<tr>
+<td>Within-session playback</td>
+<td><code>_report_session_playback</code></td>
+<td>latest session replayed end-by-end: cumulative <code>_archery_stats</code> + a running score (§1.4) per arrow.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="52-new-geometry-for-the-3d-charts">5.2 New geometry for the 3D charts</h3>
+<ul>
+<li><strong>KDE height (mountain).</strong> An isotropic Gaussian kernel-density estimate on
+  the on-face hits <code>(x_i, y_i)</code> in mm. Bandwidth <code>bw = max(0.04·half, s·n^(−1/6))</code>
+  where <code>s = sqrt((var_x + var_y)/2)</code> (a Scott/Silverman-style rule with a floor
+  of 4 % of the face half-width so a tiny group can't produce a needle). The grid
+  value is <code>z(gx, gy) = Σ_i exp(−((gx−x_i)² + (gy−y_i)²)/(2·bw²))</code>, then scaled by
+  <code>cell_area / (2π·bw²)</code> so height reads in ~shots-per-cell rather than raw
+  density.</li>
+<li><strong>Cone R95 footprint.</strong> At distance <code>d</code> the group's 95 % footprint is an
+  ellipse with semi-axes <code>K95·σ_x·d</code> and <code>K95·σ_y·d</code>, where the per-axis angular
+  σ's come from the distance-trend fit (§4.3, growing as <code>exp(growth_k·(d−d_ref))</code>)
+  and <code>K95 = 2.4477</code> is the Rayleigh 95 % radius in standard deviations
+  (<code>sqrt(−2·ln(0.05))</code>). Stacking the ellipse at each distance up a distance axis
+  gives the widening cone; the reference archer's cone uses <code>sigma_r</code> (§7.1) at
+  the same handicap.</li>
+</ul>
 <hr />
 <h2 id="6-time-dates-units">6. Time, dates &amp; units</h2>
 <ul>
@@ -689,11 +753,23 @@ week/month (from the shot calendar) to the target, paced by the fraction of the
 period elapsed.</p>
 <h3 id="77-performance-vs-conditions-_report_conditions">7.7 Performance vs conditions — <code>_report_conditions</code></h3>
 <p>Each hit whose session captured weather is normalized by target half-width (as
-in the other reports) and bucketed by <strong>wind band</strong> (calm <code>&lt; 8</code>, light <code>8–19</code>,
-moderate <code>19–30</code>, strong <code>≥ 30</code> km/h — roughly Beaufort 0-2 / 3-4 / 5 / 6+) and
-by <strong>temperature band</strong> (<code>&lt; 8</code>, <code>8–18</code>, <code>18–26</code>, <code>≥ 26 °C</code>). <code>_archery_stats</code>
-runs per bucket; MPI and R95 are reported as a percentage of the target
-half-width. Buckets below five hits are flagged as thin.</p>
+in the other reports) and bucketed, per weather element, into fixed bands.
+<code>_archery_stats</code> runs per bucket; mean miss (accuracy) and R95 (precision) are
+reported as a percentage of the target half-width. Buckets below five hits are
+flagged as thin. <strong>Each element is its own chart panel</strong> (the report returns the
+<code>panels</code> shape); an element no session captured is skipped. The bands:</p>
+<ul>
+<li><strong>Wind</strong> (km/h): calm <code>&lt; 8</code>, light <code>8–19</code>, moderate <code>19–30</code>, strong <code>≥ 30</code>
+  — roughly Beaufort 0-2 / 3-4 / 5 / 6+ (<code>_WIND_BANDS</code>).</li>
+<li><strong>Temperature</strong> (°C): <code>&lt; 8</code>, <code>8–18</code>, <code>18–26</code>, <code>≥ 26</code> (<code>_TEMP_BANDS</code>).</li>
+<li><strong>Gust</strong> (km/h): <code>&lt; 12</code>, <code>12–28</code>, <code>28–45</code>, <code>≥ 45</code> — a step above wind
+  (<code>_GUST_BANDS</code>).</li>
+<li><strong>Humidity</strong> (% RH): <code>&lt; 40</code>, <code>40–60</code>, <code>60–80</code>, <code>≥ 80</code> (<code>_HUMIDITY_BANDS</code>).</li>
+<li><strong>Pressure</strong> (hPa): <code>&lt; 1005</code>, <code>1005–1020</code>, <code>≥ 1020</code> (<code>_PRESSURE_BANDS</code>).</li>
+</ul>
+<p><strong>Wind direction is deliberately excluded</strong> — it's circular (0–360°) and Apollo
+stores no shooting direction to turn it into head/tail/cross-wind. Band edges
+are tunable constants; keep them in sync with this list.</p>
 <hr />
 <h2 id="8-trigonometry-tools-tools">8. Trigonometry tools (<code>/tools</code>)</h2>
 <p>The geometry helpers on the Tools page are pure client-side calculators in
