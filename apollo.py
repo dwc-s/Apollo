@@ -12162,6 +12162,13 @@ _ANALYZE_ACC_RAMP = ['#21A4C8', '#217376', '#6AA0AF', '#B9D8E4']   # teal  = acc
 _ANALYZE_PREC_RAMP = ['#8E43FE', '#2B0D5F', '#976BBD', '#C9B9E4']  # purple = precision
 _ANALYZE_TREND_GOLD = '#FFC30E'   # per-session trend lines / emphasis
 _ANALYZE_TREND_DARK = '#000000'   # all-time-rolling trend lines
+# Categorical palette for the per-(face × distance) precision-consistency
+# traces — anchored on the teal/purple house hues but spread far enough apart
+# to tell a dozen overlaid lines apart. Cycled modulo its length.
+_ANALYZE_COMBO_COLORS = [
+    '#8E43FE', '#21A4C8', '#E4572E', '#F3A712', '#2A9D8F', '#5D3FD3',
+    '#C81D77', '#457B9D', '#588157', '#B5179E', '#E07A5F', '#3D5A80',
+]
 
 
 def _render_matplotlib_svg(fig):
@@ -14708,9 +14715,92 @@ def _report_accuracy_precision_traces(user_id, date_from=None, date_to=None,
     }
 
 
-def _report_precision_consistency(user_id):
+def _precision_consistency_multi(combos, win, capped):
+    """Overlay one smoothed-R95 line per (face × distance) combo on a shared
+    date axis — the multi-trace form of the precision-consistency report.
+
+    Each combo carries ``{name, dval, label, series}`` (its own per-day R95
+    series). Drawn as clean moving-average lines (no per-line ±1σ band — a
+    dozen overlapping bands would be unreadable; the band is kept only in the
+    single-series form). A compact table summarizes each combo. ``capped`` flags
+    that more combos existed than the display cap.
+    """
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+
+    def _ma(vals):
+        out = []
+        for i in range(len(vals)):
+            w = vals[max(0, i - (win - 1)):i + 1]
+            out.append(sum(w) / len(w))
+        return out
+
+    fig, ax = plt.subplots(figsize=(10, 5.6))
+    rows = []
+    for i, c in enumerate(combos):
+        dates = [p['date'] for p in c['series']]
+        ma = _ma([p['value'] for p in c['series']])
+        color = _ANALYZE_COMBO_COLORS[i % len(_ANALYZE_COMBO_COLORS)]
+        ax.plot(dates, ma, color=color, linewidth=2.0, marker='o',
+                markersize=2.6, markeredgewidth=0, label=c['label'], zorder=3)
+        rows.append([c['name'], _distance_group_label(c['dval']),
+                     len(c['series']), f'{ma[-1]:.1f}', f'{ma[-1] - ma[0]:+.1f}'])
+    ax.set_xlabel('Date')
+    ax.set_ylabel('R95 — % of target half-width\n(lower = tighter group)')
+    ax.set_title(f'Precision consistency by face × distance '
+                 f'— {win}-day moving average of R95')
+    ax.grid(True, axis='y', linestyle='--', alpha=0.4)
+    ax.set_ylim(bottom=0)
+    ax.legend(loc='best', fontsize=7.5, framealpha=0.85)
+    fig.autofmt_xdate()
+    svg_b64 = _render_matplotlib_svg(fig)
+
+    cap_note = (f' Showing the {len(combos)} combinations with the most shooting '
+                'days; use the face / distance filters to focus.') if capped else ''
+    intro = Markup(
+        '<p class="report-intro"><strong>What this answers:</strong> which way '
+        'each face &times; distance combination&rsquo;s precision (group '
+        'tightness) is trending. Every line is one combo, smoothed by a trailing '
+        f'{win}-day moving average of R95 (as a % of target half-width, lower = '
+        'tighter). Splitting by combo keeps each trend honest &mdash; pooling an '
+        '18&#8201;m group with a 70&#8201;m one, or two different faces, would '
+        'mix genuinely different precision. Days need 6+ hits; a combo needs 3+ '
+        'such days to draw.' + cap_note + '</p>')
+
+    columns = ['Face', 'Distance',
+               _tip('Days', 'Days with 6+ scored hits on this combo that fed '
+                            'its R95 line.'),
+               _tip('Latest R95 (MA)',
+                    "This combo's most recent moving-average value, as a % of "
+                    'target half-width (lower = tighter).'),
+               _tip('Δ since first',
+                    "Change from the combo's first moving-average point to its "
+                    'latest — negative means the group tightened.')]
+    return {
+        'key': 'precision_consistency',
+        'title': 'Precision consistency (trend)',
+        'intro_html': intro,
+        'svg_b64': svg_b64,
+        'columns': columns,
+        'rows': rows,
+    }
+
+
+def _report_precision_consistency(user_id, face_filter=None, distance_filter=None):
     """Precision (R95) over time, smoothed by a trailing moving average with a
     consistency band — "how is my precision trending, and how steady is it?"
+
+    Each present (face × distance) combination is drawn as its own trace:
+    pooling a 70 m group with an 18 m one, or two different faces, mixes
+    genuinely different precision (R95 is size-normalized but not
+    distance-normalized), so combos are split rather than averaged. When two or
+    more combos have enough history (3+ qualifying days each) the report renders
+    a multi-line overlay via ``_precision_consistency_multi``; when only one
+    does — or the per-combo history is too thin — it falls back to the classic
+    single smoothed line with its ±1σ consistency band. ``face_filter`` /
+    ``distance_filter`` are the raw multiselect lists from the analyze picker
+    (target-id strings and metre strings); empty/absent = every combo.
 
     Each point is one day of shooting (every shot that day, across all its
     sessions, pooled into a single group). The raw per-day R95 is noisy, and
@@ -14728,10 +14818,17 @@ def _report_precision_consistency(user_id):
     fewer than 6 scored hits are skipped (too few to fit a group).
     """
     win = _PREC_CONSISTENCY_WINDOW
-    # by='day' pools every shot on a calendar day into one point, so the window
-    # is a true trailing N-day span (not N sessions — you can shoot twice a day).
-    series = _ap_series(user_id, 'r95', by='day')  # [{date, value(%hw), n}] asc
-    if len(series) < 3:
+    # Normalize the picker's raw string lists to a target-id set / metre-float
+    # set (None when nothing is ticked → no filter on that dimension).
+    face_set = None
+    if face_filter:
+        face_set = {int(f) for f in face_filter
+                    if str(f).strip().lstrip('-').isdigit()} or None
+    dist_set = None
+    if distance_filter:
+        dist_set = {d for d in (_parse_shot_distance(v) for v in distance_filter)
+                    if d is not None} or None
+    def _empty():
         return {
             'key': 'precision_consistency',
             'title': 'Precision consistency (trend)',
@@ -14740,6 +14837,59 @@ def _report_precision_consistency(user_id):
                              'plot a precision trend — keep logging sessions.'),
             'svg_b64': None, 'columns': [], 'rows': [],
         }
+
+    # Enumerate the (face, distance) combinations actually present in the shot
+    # log, restricted to the picker's selections (empty = all). Each becomes a
+    # candidate trace; by='day' pools a combo's shots per calendar day so the
+    # window stays a true trailing N-day span.
+    with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
+        crows = cur.execute(
+            "SELECT DISTINCT a.target_id, a.distance, t.name "
+            "FROM apollo a "
+            "JOIN targets t ON t.id = a.target_id AND t.user_id = a.user_id "
+            "WHERE a.user_id = %s AND a.target_id IS NOT NULL",
+            (user_id,)
+        ).fetchall()
+    combo_names = {}
+    for r in crows:
+        fid = int(r['target_id'])
+        dval = _parse_shot_distance(r['distance'])
+        if dval is None:
+            continue
+        if face_set is not None and fid not in face_set:
+            continue
+        if dist_set is not None and dval not in dist_set:
+            continue
+        combo_names[(fid, dval)] = _display_target_name(r['name']) or f'Target {fid}'
+
+    COMBO_CAP = 12
+    qualifying = []
+    for (fid, dval), name in combo_names.items():
+        cs = _ap_series(user_id, 'r95', by='day',
+                        face_filter={fid}, distance_filter={dval})
+        if len(cs) >= 3:      # same 3-day bar the whole report uses
+            qualifying.append({'fid': fid, 'dval': dval, 'name': name,
+                               'label': f'{name} @ {_distance_group_label(dval)}',
+                               'series': cs})
+    qualifying.sort(key=lambda c: len(c['series']), reverse=True)
+    capped = len(qualifying) > COMBO_CAP
+    qualifying = qualifying[:COMBO_CAP]
+
+    # ≥2 rich combos → the multi-line overlay. Exactly one → that combo as the
+    # classic single band line (caption names it). None rich enough → fall back
+    # to the pooled series over the selection (keeps the original single line
+    # for aggregated / thin histories), else typed-empty.
+    if len(qualifying) >= 2:
+        return _precision_consistency_multi(qualifying, win, capped)
+    if len(qualifying) == 1:
+        c = qualifying[0]
+        series = c['series']
+        face_set, dist_set = {c['fid']}, {c['dval']}   # so the caption names it
+    else:
+        series = _ap_series(user_id, 'r95', by='day',
+                            face_filter=face_set, distance_filter=dist_set)
+        if len(series) < 3:
+            return _empty()
 
     import numpy as np
     import matplotlib
@@ -14796,6 +14946,23 @@ def _report_precision_consistency(user_id):
     fig.autofmt_xdate()
     svg_b64 = _render_matplotlib_svg(fig)
 
+    # Caption the active filter, if any. Face names are user-entered → escape
+    # them before they go into the Markup intro; distance labels are numeric.
+    filt_bits = []
+    if face_set:
+        fnames = []
+        for fid in sorted(face_set):
+            trow = get_target(fid, user_id)
+            if trow is not None:
+                fnames.append(str(Markup.escape(target_to_config(trow)['name'])))
+        if fnames:
+            filt_bits.append('faces ' + ', '.join(fnames))
+    if dist_set:
+        filt_bits.append('distances ' + ', '.join(
+            _distance_group_label(d) for d in sorted(dist_set)))
+    filt_html = (' <br><strong>Filtered to:</strong> ' + '; '.join(filt_bits)
+                 + '.') if filt_bits else ''
+
     intro = Markup(
         '<p class="report-intro">'
         '<strong>What this answers:</strong> which way is your precision '
@@ -14810,6 +14977,7 @@ def _report_precision_consistency(user_id):
         'precision itself is becoming more consistent, even if its level '
         'hasn&rsquo;t changed. R95 is normalized by target half-width so mixed '
         'targets are comparable; misses are excluded and days need 6+ hits.'
+        + filt_html +
         '</p>'
     )
 
@@ -17667,9 +17835,15 @@ REPORTS = {
                        'more consistent. More responsive to recent change than '
                        'the cumulative all-time line in the traces report. '
                        'Normalized by target half-width; misses excluded, '
-                       'days need 6+ hits.',
+                       'days need 6+ hits. Each face × distance combination '
+                       'draws its own trace (pooling different distances would '
+                       'mix genuinely different precision); filter to focus on '
+                       'specific faces or distances.',
         'fn': _report_precision_consistency,
         'stacked': True,
+        # Face + distance multiselects (bundled under one flag, like the
+        # equipment picker's bows + arrows). Empty = every shot.
+        'face_distance_picker': True,
     },
     'equipment_head_to_head': {
         'label': 'Head-to-head comparisons',
@@ -18077,6 +18251,52 @@ def _predict_user_targets(user_id):
             'physical_size_mm': float(r['physical_size_mm'] or 0),
         })
     return out
+
+
+def _analyze_user_faces(user_id):
+    """Distinct targets the user has actually shot, for the analyze face filter.
+
+    Unlike _predict_user_targets (which lists only scoring-zone faces for the
+    forecast), this lists every face that appears in the shot log — precision
+    is computed from raw coordinates, so a face without scoring zones is still
+    valid to filter on. Returns ``[{id, name}]`` sorted by display name.
+    """
+    try:
+        with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
+            rows = cur.execute(
+                "SELECT DISTINCT a.target_id, t.name "
+                "FROM apollo a "
+                "JOIN targets t ON t.id = a.target_id AND t.user_id = a.user_id "
+                "WHERE a.user_id = %s AND a.target_id IS NOT NULL "
+                "ORDER BY t.name",
+                (user_id,)
+            ).fetchall()
+    except SQLAlchemyError:
+        return []
+    return [{'id': int(r['target_id']),
+             'name': _display_target_name(r['name']) or f'Target {r["target_id"]}'}
+            for r in rows]
+
+
+def _analyze_user_distances(user_id):
+    """Distinct distances (metres) the user has shot, for the analyze distance
+    filter. Raw stored strings are normalized through _parse_shot_distance so
+    '18' and '18.0' collapse to one option; unrecorded / unparseable distances
+    are dropped. Returns ``[{value, label}]`` ascending, where ``value`` is the
+    metre float (the checkbox value) and ``label`` is e.g. '18 m'.
+    """
+    try:
+        with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
+            rows = cur.execute(
+                "SELECT DISTINCT distance FROM apollo WHERE user_id = %s",
+                (user_id,)
+            ).fetchall()
+    except SQLAlchemyError:
+        return []
+    metres = {d for d in (_parse_shot_distance(r[0]) for r in rows)
+              if d is not None}
+    return [{'value': d, 'label': _distance_group_label(d)}
+            for d in sorted(metres)]
 
 
 def _predict_row_is_scorecard(tags_raw):
@@ -19016,7 +19236,8 @@ _MPL_RENDER_LOCK = threading.Lock()
 
 def _run_report(user_id, key, *, date_ranges=None, categories=None,
                 tag_selections=None, bow_selections=None,
-                arrow_selections=None):
+                arrow_selections=None, face_selections=None,
+                distance_selections=None):
     """Build one analyze report → its normalized list of result-dicts.
 
     Extracted from the old POST loop and now the single place a report runs;
@@ -19032,6 +19253,8 @@ def _run_report(user_id, key, *, date_ranges=None, categories=None,
     tag_selections = tag_selections or {}
     bow_selections = bow_selections or {}
     arrow_selections = arrow_selections or {}
+    face_selections = face_selections or {}
+    distance_selections = distance_selections or {}
     spec = REPORTS[key]
     kwargs = {}
     if spec.get('accepts_date_range'):
@@ -19049,6 +19272,10 @@ def _run_report(user_id, key, *, date_ranges=None, categories=None,
         # "empty = no filter, include every bow / arrow."
         kwargs['bow_filter'] = bow_selections.get(key, [])
         kwargs['arrow_filter'] = arrow_selections.get(key, [])
+    if spec.get('face_distance_picker'):
+        # Same "empty = include all" contract for the face + distance filters.
+        kwargs['face_filter'] = face_selections.get(key, [])
+        kwargs['distance_filter'] = distance_selections.get(key, [])
     with _MPL_RENDER_LOCK:
         try:
             out = spec['fn'](user_id, **kwargs)
@@ -19117,6 +19344,10 @@ def analyze():
     # Empty list ≡ no filter applied (include every bow / arrow).
     bow_selections = {}
     arrow_selections = {}
+    # Per-report face / distance selections for reports with
+    # face_distance_picker. Empty list ≡ no filter (include every face / dist).
+    face_selections = {}
+    distance_selections = {}
     if request.method == 'POST':
         selected = [k for k in request.form.getlist('reports') if k in REPORTS]
         for k, spec in REPORTS.items():
@@ -19139,6 +19370,9 @@ def analyze():
             if spec.get('equipment_picker'):
                 bow_selections[k] = request.form.getlist(f'{k}_bows')
                 arrow_selections[k] = request.form.getlist(f'{k}_arrows')
+            if spec.get('face_distance_picker'):
+                face_selections[k] = request.form.getlist(f'{k}_faces')
+                distance_selections[k] = request.form.getlist(f'{k}_distances')
         # Remember the whole selection so the next visit replays it. The
         # template renders entirely from these six structures, so reloading
         # them on GET reproduces the last report exactly. Only persist when
@@ -19152,6 +19386,8 @@ def analyze():
                 'tag_selections':   tag_selections,
                 'bow_selections':   bow_selections,
                 'arrow_selections': arrow_selections,
+                'face_selections':     face_selections,
+                'distance_selections': distance_selections,
             })
         if not selected:
             error = 'Pick at least one report to generate.'
@@ -19175,6 +19411,8 @@ def analyze():
             tag_selections = prefs.get('tag_selections', {}) or {}
             bow_selections = prefs.get('bow_selections', {}) or {}
             arrow_selections = prefs.get('arrow_selections', {}) or {}
+            face_selections = prefs.get('face_selections', {}) or {}
+            distance_selections = prefs.get('distance_selections', {}) or {}
     catalog = [
         {
             'key': k,
@@ -19185,6 +19423,7 @@ def analyze():
             'category_label': v.get('category_label', 'Compare:'),
             'tag_picker': v.get('tag_picker', False),
             'equipment_picker': v.get('equipment_picker', False),
+            'face_distance_picker': v.get('face_distance_picker', False),
         }
         for k, v in REPORTS.items()
     ]
@@ -19207,6 +19446,14 @@ def analyze():
     else:
         bow_inventory = []
         arrow_inventory = []
+    # Face + distance inventory for reports with face_distance_picker: the
+    # distinct faces and distances this user has actually shot.
+    if any(v.get('face_distance_picker') for v in REPORTS.values()):
+        face_inventory = _analyze_user_faces(current_user_id())
+        distance_inventory = _analyze_user_distances(current_user_id())
+    else:
+        face_inventory = []
+        distance_inventory = []
     return render_template('analyze.html',
                            catalog=catalog,
                            selected=selected,
@@ -19219,6 +19466,10 @@ def analyze():
                            arrow_selections=arrow_selections,
                            bow_inventory=bow_inventory,
                            arrow_inventory=arrow_inventory,
+                           face_selections=face_selections,
+                           distance_selections=distance_selections,
+                           face_inventory=face_inventory,
+                           distance_inventory=distance_inventory,
                            numeric_options={},
                            report_labels={k: v['label']
                                           for k, v in REPORTS.items()},
@@ -19247,12 +19498,16 @@ def analyze_report(key):
     tag_selections = prefs.get('tag_selections', {}) or {}
     bow_selections = prefs.get('bow_selections', {}) or {}
     arrow_selections = prefs.get('arrow_selections', {}) or {}
+    face_selections = prefs.get('face_selections', {}) or {}
+    distance_selections = prefs.get('distance_selections', {}) or {}
     try:
         results = _run_report(
             user_id, key,
             date_ranges=date_ranges, categories=categories,
             tag_selections=tag_selections, bow_selections=bow_selections,
-            arrow_selections=arrow_selections)
+            arrow_selections=arrow_selections,
+            face_selections=face_selections,
+            distance_selections=distance_selections)
     except ImportError as e:
         print(f"❌ Analyze missing dependency: {e}")
         results = [{'key': key, 'title': REPORTS[key]['label'], 'svg_b64': None,
@@ -19281,6 +19536,8 @@ def analyze_report(key):
                            tag_selections=tag_selections,
                            bow_selections=bow_selections,
                            arrow_selections=arrow_selections,
+                           face_selections=face_selections,
+                           distance_selections=distance_selections,
                            numeric_options={})
 
 
@@ -19431,6 +19688,10 @@ def analyze_export():
             # Same shape as tags — empty list ≡ no filter ≡ include all.
             kwargs['bow_filter'] = request.args.getlist('bows')
             kwargs['arrow_filter'] = request.args.getlist('arrows')
+        if spec.get('face_distance_picker'):
+            # Same shape — empty list ≡ no filter ≡ include all.
+            kwargs['face_filter'] = request.args.getlist('faces')
+            kwargs['distance_filter'] = request.args.getlist('distances')
         out = spec['fn'](current_user_id(), **kwargs)
     except ImportError:
         return "matplotlib is not installed on the server.", 500
@@ -19878,7 +20139,8 @@ def _volume_progress(user_id, goal):
     }
 
 
-def _ap_series(user_id, metric, min_hits=6, by='session'):
+def _ap_series(user_id, metric, min_hits=6, by='session',
+               face_filter=None, distance_filter=None):
     """Per-session (or per-day) accuracy (mean miss) or precision (R95) over
     time, as a percentage of the target's half-width (the normalized unit
     /analyze uses).
@@ -19891,11 +20153,18 @@ def _ap_series(user_id, metric, min_hits=6, by='session'):
     fit a meaningful group). Returns ``[{date, value, n}]`` ascending; value is
     the metric × 100 (so ~30 means 30% of half-width) and ``n`` is the group's
     contributing hit count.
+
+    ``face_filter`` (a set of target_ids) and ``distance_filter`` (a set of
+    metre floats, matched via ``_parse_shot_distance``) each narrow the shot
+    pool when given; ``None`` means "no filter on that dimension". They're
+    AND-combined. Because R95 is size-normalized but not distance-normalized,
+    restricting to one face and/or one distance makes the per-day metric
+    apples-to-apples. Callers that omit both get the original unfiltered series.
     """
     with closing(get_db_connection()) as con, closing(con.cursor()) as cur:
         rows = cur.execute(
             "SELECT a.session_id, st.session_begin_time, a.x_coord, a.y_coord, "
-            "       t.physical_size_mm "
+            "       t.physical_size_mm, a.distance, a.target_id "
             "FROM apollo a "
             "JOIN session_times st ON st.session_id = a.session_id "
             "                      AND st.user_id = a.user_id "
@@ -19907,6 +20176,14 @@ def _ap_series(user_id, metric, min_hits=6, by='session'):
     sess = {}
     sess_dt_cache = {}
     for r in rows:
+        # Optional face / distance narrowing (cheap, so gate before any parse).
+        # A shot with no target_id — or an unparseable distance — is dropped
+        # whenever that dimension is being filtered.
+        if face_filter is not None and r['target_id'] not in face_filter:
+            continue
+        if (distance_filter is not None
+                and _parse_shot_distance(r['distance']) not in distance_filter):
+            continue
         try:
             half_mm = float(r['physical_size_mm']) / 2.0
         except (TypeError, ValueError):

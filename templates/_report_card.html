@@ -152,6 +152,8 @@
         {% set tags = tag_selections.get(r.key) %}
         {% set bows = bow_selections.get(r.key) %}
         {% set arrows = arrow_selections.get(r.key) %}
+        {% set faces = (face_selections|default({})).get(r.key) %}
+        {% set distances = (distance_selections|default({})).get(r.key) %}
         {% set nums = numeric_options.get(r.key) or {} %}
         {# Only one numeric option exists today (rolling_window). When
            adding more, prefer precomputing the URL in the view than
@@ -164,6 +166,8 @@
                                  tags=tags or none,
                                  bows=bows or none,
                                  arrows=arrows or none,
+                                 faces=faces or none,
+                                 distances=distances or none,
                                  rolling_window=nums.get('rolling_window') or none) }}">
                 ⬇ Download CSV
             </a>
@@ -174,6 +178,8 @@
                                  tags=tags or none,
                                  bows=bows or none,
                                  arrows=arrows or none,
+                                 faces=faces or none,
+                                 distances=distances or none,
                                  rolling_window=nums.get('rolling_window') or none) }}">
                 ⬇ Download Excel
             </a>
@@ -185,6 +191,8 @@
         {% set tags = tag_selections.get(r.key) %}
         {% set bows = bow_selections.get(r.key) %}
         {% set arrows = arrow_selections.get(r.key) %}
+        {% set faces = (face_selections|default({})).get(r.key) %}
+        {% set distances = (distance_selections|default({})).get(r.key) %}
         {% set nums = numeric_options.get(r.key) or {} %}
         {# Only one numeric option exists today (rolling_window). When
            adding more, prefer precomputing the URL in the view than
@@ -197,6 +205,8 @@
                                  tags=tags or none,
                                  bows=bows or none,
                                  arrows=arrows or none,
+                                 faces=faces or none,
+                                 distances=distances or none,
                                  rolling_window=nums.get('rolling_window') or none) }}">
                 ⬇ Download CSV
             </a>
@@ -207,6 +217,8 @@
                                  tags=tags or none,
                                  bows=bows or none,
                                  arrows=arrows or none,
+                                 faces=faces or none,
+                                 distances=distances or none,
                                  rolling_window=nums.get('rolling_window') or none) }}">
                 ⬇ Download Excel
             </a>

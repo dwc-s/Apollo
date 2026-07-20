@@ -513,8 +513,8 @@ happens, so a second "Calibrated" histogram grows in real time beside the raw on
 </tr>
 <tr>
 <td>Precision consistency (trend)</td>
-<td><code>_report_precision_consistency</code></td>
-<td>per-<strong>day</strong> R95 (<code>_ap_series(..., by='day')</code> pools every shot on a calendar day) smoothed by a trailing <code>_PREC_CONSISTENCY_WINDOW</code>-day (=5) moving average; shaded band = ±1 within-window sample stdev (ddof=1), clamped ≥ 0; faint raw dots + a straight least-squares trend over the raw points. Responsive counterpart to the <em>cumulative</em> all-time R95 trace.</td>
+<td><code>_report_precision_consistency</code> (+ <code>_precision_consistency_multi</code>)</td>
+<td>per-<strong>day</strong> R95 (<code>_ap_series(..., by='day')</code>) computed <strong>per (face × distance) combination</strong> — R95 is size-normalized but not distance-normalized, so pooling different distances/faces mixes genuinely different precision. ≥2 combos with 3+ qualifying days → a multi-line overlay, one smoothed (<code>_PREC_CONSISTENCY_WINDOW</code>=5-day MA) trace each; exactly one → the classic single line + ±1 within-window-stdev band (ddof=1, clamped ≥0) + raw dots + least-squares trend; none rich enough → a pooled fallback over the (optionally face/distance-filtered) selection. <code>_ap_series</code> takes optional <code>face_filter</code> / <code>distance_filter</code> sets (empty = all). Responsive counterpart to the <em>cumulative</em> all-time R95 trace.</td>
 </tr>
 <tr>
 <td>Biggest vs smallest spread per quiver</td>

@@ -272,6 +272,12 @@ an empirical R95 percentile and the table flags them.
   *narrowing* band means your precision itself is getting more consistent,
   even if its level hasn't moved. Faint dots show the raw per-day R95
   behind the smoothing; normalized by target half-width, misses excluded.
+  Each **face × distance** combination draws its own trace — pooling
+  different distances or faces would mix genuinely different precision
+  (R95 is size- but not distance-normalized) — so with several combinations
+  you get a colour-coded multi-line overlay with a per-combo summary table;
+  with a single combination it stays the classic one-line-plus-band view.
+  A **face / distance filter** (empty = all) narrows which combinations show.
 - **Biggest vs smallest spread per quiver** — per completed quiver, the
   widest and tightest pairwise arrow distance (normalized by face width),
   on a shared chronological axis. The band between them is your

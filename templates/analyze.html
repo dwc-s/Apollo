@@ -359,19 +359,23 @@
         }
         /* Equipment picker — same visual family as the tag picker, but
            two pill-grids side-by-side (bows, arrows) with a small hint. */
-        .equipment-picker {
+        .equipment-picker,
+        .face-distance-picker {
             margin-top: 10px;
             padding-top: 10px;
             border-top: 1px dashed #95abcf;
             font-family: "Quantico", sans-serif;
             color: #1a3a5c;
         }
-        .equipment-picker[hidden] { display: none; }
-        .equipment-picker .category-row-label {
+        .equipment-picker[hidden],
+        .face-distance-picker[hidden] { display: none; }
+        .equipment-picker .category-row-label,
+        .face-distance-picker .category-row-label {
             display: block;
             margin-bottom: 6px;
         }
-        .equipment-picker .tag-pill-grid {
+        .equipment-picker .tag-pill-grid,
+        .face-distance-picker .tag-pill-grid {
             max-height: 140px;
             margin-bottom: 6px;
         }
@@ -1112,6 +1116,52 @@
                 </div>
             </div>
             {% endif %}
+
+            {% if item.face_distance_picker %}
+            {# Face + distance picker — independent multiselects. Empty
+               selection = no filter (include every face / distance). Mirrors
+               the equipment picker; values round-trip as strings so a reload
+               re-checks them. #}
+            {% set chosen_faces = face_selections.get(item.key, []) %}
+            {% set chosen_distances = distance_selections.get(item.key, []) %}
+            <div class="face-distance-picker" {% if not is_checked %}hidden{% endif %}>
+                <span class="category-row-label">Faces:</span>
+                <div class="tag-pill-grid">
+                    {% for f in face_inventory %}
+                    <label class="tag-pill" data-tag-name="{{ f.name | lower }}">
+                        <input type="checkbox"
+                               name="{{ item.key }}_faces"
+                               value="{{ f.id }}"
+                               {% if f.id|string in chosen_faces %}checked{% endif %}>
+                        {{ f.name }}
+                    </label>
+                    {% else %}
+                    <span class="tag-picker-empty">
+                        No faces shot yet.
+                    </span>
+                    {% endfor %}
+                </div>
+                <span class="category-row-label" style="margin-top:10px;">Distances:</span>
+                <div class="tag-pill-grid">
+                    {% for d in distance_inventory %}
+                    <label class="tag-pill" data-tag-name="{{ d.label | lower }}">
+                        <input type="checkbox"
+                               name="{{ item.key }}_distances"
+                               value="{{ d.value }}"
+                               {% if d.value|string in chosen_distances %}checked{% endif %}>
+                        {{ d.label }}
+                    </label>
+                    {% else %}
+                    <span class="tag-picker-empty">
+                        No distances recorded yet.
+                    </span>
+                    {% endfor %}
+                </div>
+                <div class="equipment-picker-hint">
+                    Leave both empty to include every face / distance.
+                </div>
+            </div>
+            {% endif %}
         </div>
         {% endfor %}
     </div>
@@ -1382,6 +1432,15 @@ document.querySelectorAll('.report-option-block').forEach(block => {
         const syncEq = () => { eqPicker.hidden = !main.checked; };
         main.addEventListener('change', syncEq);
         syncEq();
+    }
+
+    // Face + distance picker: same deal as the equipment picker — always
+    // available when the report is on, no category gate.
+    const fdPicker = block.querySelector('.face-distance-picker');
+    if (main && fdPicker) {
+        const syncFd = () => { fdPicker.hidden = !main.checked; };
+        main.addEventListener('change', syncFd);
+        syncFd();
     }
 
     // Tag picker: visible only when the report is ticked AND the Tags
