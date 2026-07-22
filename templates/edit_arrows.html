@@ -37,7 +37,6 @@
     <a href="/admin" class="side-nav-link"><span class="nav-badge">★</span>Admin</a>
     <hr class="side-nav-divider">
     {% endif %}
-    <button type="button" id="units-toggle" class="side-nav-units-btn">⇄ Imperial</button>
     <div class="side-nav-spacer"></div>
     {% if current_user %}
     <div class="side-nav-user">
@@ -84,8 +83,8 @@
             <span class="form-label">Arrow<span class="required-marker">*</span></span>
             <input type="text" name="arrow" value="{{ arrow_data[i][0]['arrow'] }}" required>
 
-            <span class="form-label length-label">Length</span>
-            <input type="text" name="length" value="{{ arrow_data[i][0]['length'] }}" inputmode="decimal">
+            <span class="form-label">Length</span>
+            <input type="text" name="length" value="{{ arrow_data[i][0]['length'] }}" inputmode="decimal" data-unit="length">
 
             <span class="form-label">Spine</span>
             {# Spine is an intrinsic property of the shaft — locked once
@@ -96,23 +95,23 @@
                    readonly disabled
                    style="background:#f5f5f5;color:#666;cursor:not-allowed;">
 
-            <span class="form-label">Shaft weight (grams)</span>
-            <input type="text" name="shaft_weight" value="{{ arrow_data[i][0]['shaft_weight'] }}" inputmode="decimal">
+            <span class="form-label">Shaft weight</span>
+            <input type="text" name="shaft_weight" value="{{ arrow_data[i][0]['shaft_weight'] }}" inputmode="decimal" data-unit="mass">
 
-            <span class="form-label">Shaft diameter (mm)</span>
-            <input type="text" name="shaft_diameter" value="{{ arrow_data[i][0]['shaft_diameter'] }}" inputmode="decimal">
+            <span class="form-label">Shaft diameter</span>
+            <input type="text" name="shaft_diameter" value="{{ arrow_data[i][0]['shaft_diameter'] }}" inputmode="decimal" data-unit="diameter">
 
             <span class="form-label">Shaft material</span>
             <input type="text" name="shaft_material" value="{{ arrow_data[i][0]['shaft_material'] }}">
 
-            <span class="form-label">Nock weight (grams)</span>
-            <input type="text" name="nock_weight" value="{{ arrow_data[i][0]['nock_weight'] }}" inputmode="decimal">
+            <span class="form-label">Nock weight</span>
+            <input type="text" name="nock_weight" value="{{ arrow_data[i][0]['nock_weight'] }}" inputmode="decimal" data-unit="mass">
 
             <span class="form-label">Tip</span>
             <input type="text" name="tip" value="{{ arrow_data[i][0]['tip'] }}">
 
-            <span class="form-label">Tip weight (grams)</span>
-            <input type="text" name="tip_weight" value="{{ arrow_data[i][0]['tip_weight'] }}" inputmode="decimal">
+            <span class="form-label">Tip weight</span>
+            <input type="text" name="tip_weight" value="{{ arrow_data[i][0]['tip_weight'] }}" inputmode="decimal" data-unit="mass">
 
             {% set m = arrow_meta[arrow_data[i][0]['rowid']] %}
             <div style="margin-top:10px;padding-top:8px;border-top:1px dashed #6b80a8;">
@@ -142,67 +141,6 @@
 </form>
 {% endfor %}
     </div>
-<script>
-const UNITS_KEY = 'apollo_units';
-const CM_PER_IN = 2.54;
-
-function applyUnits() {
-    const imperial   = localStorage.getItem(UNITS_KEY) === 'imperial';
-    const unitLabel  = imperial ? 'inches' : 'cm';
-    const toggleText = imperial ? '⇄ Metric' : '⇄ Imperial';
-
-    document.getElementById('units-toggle').textContent = toggleText;
-    document.querySelectorAll('.length-label').forEach(el => {
-        el.textContent = `Length (${unitLabel})`;
-    });
-
-    document.querySelectorAll('input[name="length"]').forEach(field => {
-        if (field.dataset.inches === undefined) {
-            field.dataset.inches = field.value;
-        }
-        const inches = parseFloat(field.dataset.inches);
-        if (!isNaN(inches)) {
-            field.value = imperial
-                ? field.dataset.inches
-                : Math.round(inches * CM_PER_IN * 10) / 10;
-        }
-    });
-}
-
-// Keep dataset.inches in sync with the user's typed value so toggling
-// units mid-edit doesn't blow away their input. dataset.inches is the
-// canonical inches form; converted on the fly based on current unit.
-document.querySelectorAll('input[name="length"]').forEach(field => {
-    field.addEventListener('input', () => {
-        const imperial = localStorage.getItem(UNITS_KEY) === 'imperial';
-        const v = parseFloat(field.value);
-        if (isNaN(v)) {
-            field.dataset.inches = '';
-        } else {
-            field.dataset.inches = imperial ? String(v) : String(v / CM_PER_IN);
-        }
-    });
-});
-
-document.getElementById('units-toggle').addEventListener('click', () => {
-    const current = localStorage.getItem(UNITS_KEY) || 'metric';
-    localStorage.setItem(UNITS_KEY, current === 'metric' ? 'imperial' : 'metric');
-    applyUnits();
-});
-
-document.querySelectorAll('form').forEach(form => {
-    form.addEventListener('submit', () => {
-        if (localStorage.getItem(UNITS_KEY) !== 'imperial') {
-            const field = form.querySelector('input[name="length"]');
-            if (field) {
-                const cmVal = parseFloat(field.value);
-                if (!isNaN(cmVal)) field.value = Math.round(cmVal / CM_PER_IN * 100) / 100;
-            }
-        }
-    });
-});
-
-applyUnits();
-</script>
+<script src="{{ url_for('static', filename='apollo-fieldunits.js') }}"></script>
 </body>
 </html>

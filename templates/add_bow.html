@@ -37,7 +37,6 @@
     <a href="/admin" class="side-nav-link"><span class="nav-badge">★</span>Admin</a>
     <hr class="side-nav-divider">
     {% endif %}
-    <button type="button" id="units-toggle" class="side-nav-units-btn">⇄ Imperial</button>
     <div class="side-nav-spacer"></div>
     {% if current_user %}
     <div class="side-nav-user">
@@ -87,14 +86,14 @@
         </select>
 
         <span class="form-label">Bow draw weight</span>
-        <input type="text" name="new_bow_draw_weight" id="new_bow_draw_weight" inputmode="decimal">
+        <input type="text" name="new_bow_draw_weight" id="new_bow_draw_weight" inputmode="decimal" data-unit="drawweight">
 
         <span class="form-label has-tooltip"
-              data-tooltip="Actual draw weight as opposed to rated draw weight. Re-measure whenever the string is put back on the bow. Effective draw weight can be measured or estimated (add or subtract 2.5 lbs for each inch of draw length over or below the standard 28 inches).">Effective draw weight (lbs)</span>
-        <input type="text" name="new_effective_draw_weight" id="new_effective_draw_weight" inputmode="decimal">
+              data-tooltip="Actual draw weight as opposed to rated draw weight. Re-measure whenever the string is put back on the bow. Effective draw weight can be measured or estimated (add or subtract 2.5 lbs for each inch of draw length over or below the standard 28 inches).">Effective draw weight</span>
+        <input type="text" name="new_effective_draw_weight" id="new_effective_draw_weight" inputmode="decimal" data-unit="drawweight">
 
-        <span class="form-label" id="amo-label">Bow length (AMO) in inches</span>
-        <input type="text" name="new_bow_amo" id="new_bow_amo" inputmode="decimal">
+        <span class="form-label">Bow length (AMO)</span>
+        <input type="text" name="new_bow_amo" id="new_bow_amo" inputmode="decimal" data-unit="length">
 
         <div class="submit-row">
             <input type="submit" value="Submit">
@@ -102,33 +101,6 @@
 
     </div>
 </form>
-<script>
-const UNITS_KEY = 'apollo_units';
-const CM_PER_IN = 2.54;
-
-function applyUnits() {
-    const imperial = localStorage.getItem(UNITS_KEY) === 'imperial';
-    document.getElementById('amo-label').textContent =
-        imperial ? 'Bow length (AMO) in inches' : 'Bow length (AMO) in cm';
-    document.getElementById('units-toggle').textContent =
-        imperial ? '⇄ Metric' : '⇄ Imperial';
-}
-
-document.getElementById('units-toggle').addEventListener('click', () => {
-    const current = localStorage.getItem(UNITS_KEY) || 'metric';
-    localStorage.setItem(UNITS_KEY, current === 'metric' ? 'imperial' : 'metric');
-    applyUnits();
-});
-
-document.querySelector('form').addEventListener('submit', () => {
-    if (localStorage.getItem(UNITS_KEY) !== 'imperial') {
-        const field = document.getElementById('new_bow_amo');
-        const val   = parseFloat(field.value);
-        if (!isNaN(val)) field.value = Math.round(val / CM_PER_IN * 100) / 100;
-    }
-});
-
-applyUnits();
-</script>
+<script src="{{ url_for('static', filename='apollo-fieldunits.js') }}"></script>
 </body>
 </html>

@@ -37,7 +37,6 @@
     <a href="/admin" class="side-nav-link"><span class="nav-badge">★</span>Admin</a>
     <hr class="side-nav-divider">
     {% endif %}
-    <button type="button" id="units-toggle" class="side-nav-units-btn">⇄ Imperial</button>
     <div class="side-nav-spacer"></div>
     {% if current_user %}
     <div class="side-nav-user">
@@ -93,15 +92,15 @@
                    readonly disabled
                    style="background:#f5f5f5;color:#666;cursor:not-allowed;">
 
-            <span class="form-label">Bow draw weight (lbs)</span>
-            <input type="text" name="bow_draw_weight" value="{{ bow_data[i][0]['bow_draw_weight'] }}" inputmode="decimal">
+            <span class="form-label">Bow draw weight</span>
+            <input type="text" name="bow_draw_weight" value="{{ bow_data[i][0]['bow_draw_weight'] }}" inputmode="decimal" data-unit="drawweight">
 
             <span class="form-label has-tooltip"
-                  data-tooltip="Actual draw weight as opposed to rated draw weight. Re-measure whenever the string is put back on the bow. Effective draw weight can be measured or estimated (add or subtract 2.5 lbs for each inch of draw length over or below the standard 28 inches).">Effective draw weight (lbs)</span>
-            <input type="text" name="effective_draw_weight" value="{{ bow_data[i][0]['effective_draw_weight'] or '' }}" inputmode="decimal">
+                  data-tooltip="Actual draw weight as opposed to rated draw weight. Re-measure whenever the string is put back on the bow. Effective draw weight can be measured or estimated (add or subtract 2.5 lbs for each inch of draw length over or below the standard 28 inches).">Effective draw weight</span>
+            <input type="text" name="effective_draw_weight" value="{{ bow_data[i][0]['effective_draw_weight'] or '' }}" inputmode="decimal" data-unit="drawweight">
 
-            <span class="form-label amo-label">Bow length (AMO, inches)</span>
-            <input type="text" name="bow_amo" value="{{ bow_data[i][0]['amo'] }}" inputmode="decimal">
+            <span class="form-label">Bow length (AMO)</span>
+            <input type="text" name="bow_amo" value="{{ bow_data[i][0]['amo'] }}" inputmode="decimal" data-unit="length">
 
             {% set m = bow_meta[bow_data[i][0]['rowid']] %}
             <div style="margin-top:10px;padding-top:8px;border-top:1px dashed #6b80a8;">
@@ -137,52 +136,6 @@
 </form>
 {% endfor %}
     </div>
-<script>
-const UNITS_KEY = 'apollo_units';
-const CM_PER_IN = 2.54;
-
-function applyUnits() {
-    const imperial   = localStorage.getItem(UNITS_KEY) === 'imperial';
-    const unitLabel  = imperial ? 'inches' : 'cm';
-    const toggleText = imperial ? '⇄ Metric' : '⇄ Imperial';
-
-    document.getElementById('units-toggle').textContent = toggleText;
-    document.querySelectorAll('.amo-label').forEach(el => {
-        el.textContent = `Bow length (AMO, ${unitLabel})`;
-    });
-
-    document.querySelectorAll('input[name="bow_amo"]').forEach(field => {
-        if (field.dataset.inches === undefined) {
-            field.dataset.inches = field.value;
-        }
-        const inches = parseFloat(field.dataset.inches);
-        if (!isNaN(inches)) {
-            field.value = imperial
-                ? field.dataset.inches
-                : Math.round(inches * CM_PER_IN * 10) / 10;
-        }
-    });
-}
-
-document.getElementById('units-toggle').addEventListener('click', () => {
-    const current = localStorage.getItem(UNITS_KEY) || 'metric';
-    localStorage.setItem(UNITS_KEY, current === 'metric' ? 'imperial' : 'metric');
-    applyUnits();
-});
-
-document.querySelectorAll('form').forEach(form => {
-    form.addEventListener('submit', () => {
-        if (localStorage.getItem(UNITS_KEY) !== 'imperial') {
-            const field = form.querySelector('input[name="bow_amo"]');
-            if (field) {
-                const cmVal = parseFloat(field.value);
-                if (!isNaN(cmVal)) field.value = Math.round(cmVal / CM_PER_IN * 100) / 100;
-            }
-        }
-    });
-});
-
-applyUnits();
-</script>
+<script src="{{ url_for('static', filename='apollo-fieldunits.js') }}"></script>
 </body>
 </html>

@@ -1486,3 +1486,31 @@ h4 {
     .dash-palette-list { grid-template-columns: 1fr; }
     .dash-toolbar { justify-content: center; flex-wrap: wrap; }
 }
+
+/* Per-field unit toggle (static/apollo-fieldunits.js). The engine wraps each
+   [data-unit] input in .unit-field and appends a .unit-btn that both shows the
+   current unit and switches it. */
+.unit-field {
+    display: flex;
+    align-items: stretch;
+    gap: 6px;
+}
+.unit-field > input {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+.unit-btn {
+    flex: 0 0 auto;
+    font-family: "Quantico", sans-serif;
+    font-weight: 700;
+    font-size: 0.8rem;
+    color: #1a3a5c;
+    background: #eef3fa;
+    border: 1px solid #95abcf;
+    border-radius: 6px;
+    padding: 0 10px;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background-color 0.15s;
+}
+.unit-btn:hover { background: #dbe6f5; }

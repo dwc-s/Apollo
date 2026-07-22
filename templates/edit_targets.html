@@ -37,7 +37,6 @@
     <a href="/admin" class="side-nav-link"><span class="nav-badge">★</span>Admin</a>
     <hr class="side-nav-divider">
     {% endif %}
-    <button type="button" id="units-toggle" class="side-nav-units-btn">⇄ Imperial</button>
     <div class="side-nav-spacer"></div>
     {% if current_user %}
     <div class="side-nav-user">
@@ -84,8 +83,8 @@
         <span class="form-label">Name</span>
         <input type="text" name="name" value="{{ t['name'] }}">
 
-        <span class="form-label size-label">Physical size (mm)</span>
-        <input type="text" name="physical_size_mm" value="{{ t['physical_size_mm'] }}" inputmode="decimal">
+        <span class="form-label">Physical size</span>
+        <input type="text" name="physical_size_mm" value="{{ t['physical_size_mm'] }}" inputmode="decimal" data-unit="targetsize">
 
         <span class="form-label">Image size (px)</span>
         <pre>{{ t['image_size_px'] }} × {{ t['image_size_px'] }}</pre>
@@ -112,51 +111,6 @@
 </form>
 {% endfor %}
 </div>
-<script>
-const UNITS_KEY = 'apollo_units';
-const MM_PER_IN = 25.4;
-
-function applyUnits() {
-    const imperial   = localStorage.getItem(UNITS_KEY) === 'imperial';
-    const unitLabel  = imperial ? 'inches' : 'mm';
-    document.getElementById('units-toggle').textContent =
-        imperial ? '⇄ Metric' : '⇄ Imperial';
-    document.querySelectorAll('.size-label').forEach(el => {
-        el.textContent = `Physical size (${unitLabel})`;
-    });
-    document.querySelectorAll('input[name="physical_size_mm"]').forEach(field => {
-        if (field.dataset.mm === undefined) {
-            field.dataset.mm = field.value;
-        }
-        const mm = parseFloat(field.dataset.mm);
-        if (!isNaN(mm)) {
-            field.value = imperial
-                ? Math.round(mm / MM_PER_IN * 100) / 100
-                : field.dataset.mm;
-        }
-    });
-}
-
-document.getElementById('units-toggle').addEventListener('click', () => {
-    const current = localStorage.getItem(UNITS_KEY) || 'metric';
-    localStorage.setItem(UNITS_KEY, current === 'metric' ? 'imperial' : 'metric');
-    applyUnits();
-});
-
-// Convert inches → mm on submit so the DB always stores mm.
-document.querySelectorAll('form').forEach(form => {
-    form.addEventListener('submit', () => {
-        if (localStorage.getItem(UNITS_KEY) === 'imperial') {
-            const field = form.querySelector('input[name="physical_size_mm"]');
-            if (field) {
-                const inVal = parseFloat(field.value);
-                if (!isNaN(inVal)) field.value = Math.round(inVal * MM_PER_IN * 100) / 100;
-            }
-        }
-    });
-});
-
-applyUnits();
-</script>
+<script src="{{ url_for('static', filename='apollo-fieldunits.js') }}"></script>
 </body>
 </html>
